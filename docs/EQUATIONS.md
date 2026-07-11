@@ -1,0 +1,344 @@
+# Equations used in this app, and their sources
+
+This file lists every formula implemented in `core/`, where it came from, and
+the caveats that matter for getting a correct (not just a computed) number.
+It exists so results from this app can be defended/checked against the
+literature rather than trusted blindly.
+
+I am not a peer reviewer of these source papers -- I extracted the equations
+as printed and cross-checked the internal consistency of the energy-density
+derivation against two independent sources (they agree). If you need this
+for a publication, verify the printed equations against the original PDFs
+yourself; OCR/extraction errors are possible even when I've tried to avoid
+them.
+
+**Consensus (Google-Scholar-style literature search) cross-checks performed:**
+- GCD linear-vs-integral capacitance formula choice: searched and found
+  consistent with the broader supercapacitor-testing literature (e.g.
+  Helseth, *J. Energy Storage* 2021, "Comparison of methods for finding the
+  capacitance of a supercapacitor"; Zhang et al., *J. Energy Storage* 2024)
+  -- no contradictions found with the normal/integral distinction used here.
+- Dunn's method / b-value: searched and found both are indeed the standard,
+  widely-used metrics in the field (numerous 2020-2024 papers use them as
+  implemented here), AND found a specific peer-reviewed critique of their
+  limitations (Pervez & Stallard, *Small*, 2023) -- that critique is
+  reflected as a caveat in the relevant sections below rather than silently
+  omitted.
+- Trasatti's method and ionic conductivity (sigma = L/(R*A)): consistent
+  with how they're reported across the broader literature searched.
+
+---
+
+## 1. GCD (galvanostatic charge/discharge) capacitance
+
+### 1a. Normal / linear form
+```
+C_s = (I * dt) / (m * dV)
+```
+Valid ONLY for a (near-)linear (triangular) discharge V(t) curve -- the
+signature of an ideal or near-ideal EDLC. Source: this is "Eqn (9)" in
+Bonet, Loupias, Béguin et al.-style integral-capacitance papers, and is
+described in Zhang & Pan Zhao's *Advanced Energy Materials* reviews as
+"the most widely used expression ... in the scientific literature" for
+symmetric EDLCs (Zhang et al., *Adv. Energy Mater.* 2015, 5, 1401401,
+eqn 4-9; equivalent form in the desktop-app-builder skill reference).
+
+### 1b. Integral form (non-linear discharge)
+```
+C_s = (2 * I * ∫V dt) / (m * dV**2)
+```
+Required when the discharge curve is non-linear (pseudocapacitive,
+battery-type, or asymmetric-hybrid materials with sloping/plateaued
+discharge). Source: explicitly given as "eqn (1)" in a hydrogel-electrolyte
+supercapacitor paper in this project's source PDFs (citing Mathis et al.),
+stated there as superior for pseudocapacitive materials "because it
+accurately reflects the complex charge storage mechanisms ... thereby
+minimizing miscalculations." The same functional form (as specific
+capacity, Q_s, without the /dV) appears as "Eq. (2)" in a MOF/PANI battery-
+grade electrode paper in the source PDFs.
+
+### How this app decides which one to use
+`core/gcd_analysis.classify_discharge_linearity()` fits V = a*t + b to the
+discharge segment and checks R². If R² >= threshold (default 0.98, user-
+adjustable), the discharge is treated as linear and the normal formula is
+used; otherwise the integral formula is used. **The 0.98 threshold is a
+practical heuristic, not a value taken from any of the source papers** --
+none of them specify a numeric linearity cutoff; they only describe
+qualitatively "nearly perfect triangular shape" vs "non-linear discharge
+profiles." Always check the plotted curve and the reported R² for
+borderline cases (R² between ~0.9 and 0.98) rather than trusting the
+automatic classification alone.
+
+## 2. IR drop / ESR
+
+```
+ESR = IR_drop / I
+```
+This is a simple single-step convention. The source PDFs describe more
+rigorous approaches (e.g. extrapolating the steady-state linear region of
+the discharge back to t=0, "Advanced Energy Materials 2020, Zhao et al.");
+this app implements only the simple two-point IR-drop estimate
+(`estimate_ir_drop`) followed by ESR = IR_drop / I, and documents in-code
+that some labs instead use IR_drop / (2I) for a full-cycle convention. This
+is exactly the kind of convention choice the app cannot silently resolve
+for you -- state which convention you used when reporting ESR.
+
+## 3. Energy density / power density
+
+```
+E (Wh/kg) = C_s * dV**2 / 7.2
+P (W/kg)  = E * 3600 / dt
+```
+Derived from E (J/g) = 0.5 * C_s * dV**2 (standard capacitor energy
+formula), converted to Wh/kg. Cross-checked against two independent source
+PDFs that both state numerically equivalent forms: "ED = ΔV²·Cs / 7.2" and
+"PD = E·3600/Δt" (RSC hydrogel-electrolyte paper, eqns 2-3), and the
+underlying 1/2·C·V² derivation in Zhang et al., *Adv. Energy Mater.* 2015,
+eqns 26-28.
+
+## 4. Two-electrode / three-electrode conversions
+
+```
+C_spec,electrode = 4 * C_spec,cell          (symmetric 2-electrode cell)
+C_spec,cell(2e)   = C_spec,electrode(3e) / 4  (inverse estimate)
+```
+Source: Zhang et al., *Adv. Energy Mater.* 2015, 5, 1401401, eqns 10-13 --
+derived for a SYMMETRIC two-electrode cell where both electrodes have
+equal mass and equal individual capacitance. The paper explicitly shows
+`C_Sa = 4 * C_Sb` (three-electrode single-electrode capacitance = 4x the
+symmetric two-electrode cell capacitance) and states this "has been
+validated experimentally by Béguin et al." This factor is NOT valid for
+asymmetric/hybrid cells -- use the mass-balance and series-capacitance
+functions instead for those.
+
+```
+m+ / m- = (C_spec,neg * dV_neg) / (C_spec,pos * dV_pos)      (mass balance)
+1/C_cell = 1/C_pos + 1/C_neg                                  (series capacitance)
+```
+Source: integral-capacitance PCCP paper (10.1039/C4CP05124F), eqns 4-5,12,
+and Zhang et al. 2015 eqns 14-18 for the general asymmetric case.
+
+**Caveat repeated from the PCCP source paper**: these relationships assume
+the charge stored by each electrode is proportional to its potential swing
+and its own specific capacitance. The same paper explicitly warns that in
+some real systems (e.g. dissimilar ion sizes causing unequal potential
+splitting) "the application of eqn (9) [the simple factor-of-4 relation]
+to this system would be meaningless and would lead to totally wrong
+capacitance results" -- always check the individual electrode potential
+profiles (via a 2-3 synchronous/three-electrode experiment) before applying
+the symmetric-cell shortcut.
+
+## 5. CV (cyclic voltammetry) capacitance
+
+```
+C_s = (∮ I dV) / (2 * m * scan_rate * dV)        (integral form -- non-rectangular / pseudocapacitive CV)
+Q_s = (∮ I dV) / (2 * m * scan_rate)              (specific capacity, C/g, battery-type)
+C_s = I / (m * scan_rate)                          (direct form -- near-ideal rectangular EDLC CV)
+```
+Source: the integral form appears (in equivalent forms) in two independent
+source PDFs -- "Journal of Energy Chemistry" review (eqn 2) and "Results
+in Chemistry" review (eqn 12), and the specific-capacity form as eqn
+(10)/(1)-(2) in a MOF/PANI battery-electrode paper and a Solid State
+Ionics paper. Computed numerically here via trapezoidal integration of
+I dV over one closed CV cycle.
+
+The **direct form** (`C_s = I / (m * scan_rate)`) is derived from the
+basic capacitor relation I = C * (dV/dt) = C * scan_rate for a linear
+voltage ramp -- i.e. for an ideal capacitor, CV current is constant and
+directly proportional to scan rate. This is standard capacitor physics
+rather than a formula pinned to one specific paper's equation number; it
+is only valid for a near-rectangular CV curve (flat current, no redox
+humps) -- use the integral form for anything else. This directly answers
+the "integral vs. direct/normal form" distinction requested for this app:
+the direct form is the CV analog of the linear GCD formula, and the
+integral form is the CV analog of the integral GCD formula, with the same
+underlying reasoning (use direct/normal only when the curve is close to
+the ideal shape; use integral otherwise). `core/cv_analysis.assess_cv_rectangularity`
+provides a practical (not literature-sourced) heuristic score to help
+judge which regime applies; always inspect the plotted curve too.
+
+```
+b = slope of log(peak current) vs log(scan rate)     (Dunn's method, power-law exponent)
+```
+b ≈ 1 indicates capacitive behavior; b ≈ 0.5 indicates diffusion-controlled
+(battery-like) behavior. Source: "Results in Chemistry" review, eqn 11,
+citing Dunn et al.; also eqn (15) "I = a*v^b" in Suganya et al., *J. Energy
+Storage* 109 (2025) 115181.
+
+## 5a. Dunn's method: capacitive vs. diffusion-controlled current split
+
+```
+I(V) = k1*v + k2*v^0.5                    (total current at potential V, across scan rates v)
+I(V)/v^0.5 = k1*v^0.5 + k2                 (rearranged for linear fitting)
+```
+`k1*v` is the capacitive contribution, `k2*v^0.5` is the diffusion-
+controlled (faradaic) contribution, at each potential point. Source:
+eqns (16)-(17), Suganya et al., *J. Energy Storage* 109 (2025) 115181,
+present verbatim in this project's source PDFs, citing Dunn's method.
+`core/dunn_method.capacitive_diffusive_split` fits k1, k2 at each
+potential point across a supplied scan-rate series (2+ scan rates, 3+
+recommended), then integrates |i_cap| and |i_diff| over the potential
+window to report a capacitive/diffusive charge percentage split.
+
+**Important caveat**: a 2023 peer-reviewed critique (Pervez & Stallard,
+*"Capacitive and Diffusive Contributions in Supercapacitors and Batteries:
+A Critique of b-Value and the v-v^1/2 Model,"* Small, 2023, found via
+Consensus search) documents that both the b-value metric and the Dunn
+k1*v + k2*v^0.5 model have known flaws: sensitivity to the chosen
+scan-rate range, electrode mass loading, and potential for
+misinterpretation. This app implements the classic/most commonly reported
+Dunn's method because that is what every source paper in this project
+uses, but the resulting percentages should be reported as a widely-used,
+not a definitively validated, decomposition.
+
+## 5b. Trasatti's method: outer / inner / total capacitance
+
+```
+Q*(v) = k1 * v^-0.5 + Q*_outer               (extrapolate v -> infinity for outer capacitance)
+1/Q*(v) = k * v^0.5 + 1/Q*_total              (extrapolate v -> 0 for total capacitance)
+Q*_total = Q*_inner + Q*_outer
+Q*_inner(%) = 100 * Q*_inner / Q*_total
+Q*_outer(%) = 100 * Q*_outer / Q*_total
+```
+Source: eqns (18)-(22), Suganya et al., *J. Energy Storage* 109 (2025)
+115181, present verbatim in this project's source PDFs. `Q*(v)` here is
+the specific capacitance (F/g) measured at scan rate v via the standard CV
+integral formula (not a literal charge in coulombs, despite the "Q*"
+notation -- this matches how the source paper's own worked numbers are
+reported, in F/g). `core/trasatti_method.trasatti_analysis` implements
+this directly; needs 3+ scan rates spanning a wide range (e.g. at least
+one order of magnitude) for the extrapolation to be meaningful.
+
+## 6. EIS capacitance, ESR, and ionic conductivity
+
+```
+C = -1 / (2 * pi * f * Z'')
+```
+Standard low-frequency EIS capacitance extraction, evaluated at the lowest
+measured frequency to approximate near-DC behavior. This is a well-known,
+widely-used formula in the field; the source PDFs describe the underlying
+impedance formalism (Z = Z_re + j*Z_im, phase angle relationships) but I
+do not have one single canonical citation pinned to this exact rearranged
+form -- treat it as a standard-but-not-individually-cited formula.
+
+```
+sigma = L / (R * A)
+```
+Ionic conductivity (S/cm) from a two-electrode ion-blocking-cell EIS
+measurement, where L is electrolyte thickness (cm), R is the bulk/high-
+frequency resistance (ohm, the real-axis Nyquist intercept), and A is
+electrode contact area (cm²). Source: present verbatim (as eqn 4 / eqn 10
+respectively) in two independent source PDFs in this project (RSC gel-
+electrolyte paper; Chemical Engineering Journal gel-electrolyte paper),
+both citing the same two-electrode ion-blocking-cell convention.
+
+`core/eis_analysis.high_frequency_intercept_from_nyquist` estimates the
+high-frequency real-axis intercept (used for both ESR and the ionic-
+conductivity bulk resistance) by restricting the "closest to Z''=0" search
+to the highest-frequency fraction of the spectrum. This matters: a
+spectrum that traces a full closed semicircle (no low-frequency capacitive
+tail) touches the real axis at BOTH ends (Rs at high frequency, Rs+Rct at
+low frequency) -- searching the whole spectrum for the global minimum
+|Z''| can silently pick the wrong (low-frequency) intercept. This was
+caught and fixed during testing of this app using a synthetic Randles-
+circuit dataset with a known true Rs.
+
+## 6a. Equivalent circuit fitting
+
+```
+Z_CPE = 1 / (Q * (j*omega)^n)                       (constant phase element, n=1 -> ideal capacitor)
+Z_Warburg = W / sqrt(j*omega)                         (semi-infinite Warburg diffusion element)
+Randles:          Z = Rs + (Rct || Z_CPE)                            [4 params: Rs, Rct, Q, n]
+Randles+Warburg:  Z = Rs + ((Rct + Z_Warburg) || Z_CPE)               [5 params: Rs, Rct, Q, n, W]
+```
+Standard textbook equivalent-circuit impedance formulas (not tied to a
+single citable paper -- same "standard-but-uncited" caveat as the base EIS
+capacitance formula). `core/eis_analysis.fit_equivalent_circuit` fits
+these via `scipy.optimize.least_squares` on the stacked real+imaginary
+residuals, reporting fitted parameters, approximate 1-sigma standard
+errors (from a linearized covariance estimate), and reduced chi-squared.
+Nonlinear least squares can converge to a local minimum, especially for
+noisy or sparse spectra -- this implementation does not attempt multi-
+start global optimization, so always inspect the fit-overlay plot, not
+just chi-squared, before trusting a fitted value. Verified against a
+synthetic noisy dataset with known true parameters during testing -- the
+fit recovered Rs, Rct, Q, n to within noise level.
+
+## 7. GCD/CV rate capability and retention
+
+```
+current_density (A/g) = I / m
+retention (%) = 100 * C_i / C_1
+```
+Standard normalizations used throughout the rate-capability and cycling-
+stability literature: current density is simply current divided by active
+mass; retention expresses each capacitance value as a percentage of the
+first value in a series (vs. increasing current density, or vs. cycle
+number). `core/gcd_analysis.rate_capability_series` and
+`capacitance_retention_percent` implement these directly, running
+`capacitance_gcd_auto` (with its normal/integral auto-detection) across
+each discharge segment in the series.
+
+## 8. DSC water-type classification (free / freezable-bound / non-freezable-bound)
+
+```
+W_t   = m_w / m_d
+W_f   = A_f / (334 * m_d)
+W_nb  = W_t - W_f
+W_fb  = W_f * (area_symmetric_peak / total_peak_area)
+W_b   = W_nb + W_fb
+W_free= W_f - W_fb
+```
+Source: Yousef et al., "Anti-freezing gel electrolyte...", *Chemical
+Engineering Journal* 526 (2025) 171441, Section 2.4 "Water content
+analysis", eqns 1-6, present in this project's source PDFs verbatim
+(including the 334 J/g heat-of-fusion value used there). Note: 334 J/g is
+the value used in that specific paper's equation set; other sources cite
+values in the ~333.5-334 J/g range for the heat of fusion of bulk water --
+verify which figure is appropriate for your reference method if precision
+matters. The heat-of-fusion value is exposed as an adjustable parameter in
+the app (default 334 J/g) rather than hard-coded, for exactly this reason.
+
+## 9. DSC enthalpy from raw heat-flow data
+
+```
+dH (J/g) = peak_area_J / sample_mass_g
+```
+Standard mass-normalized DSC transition enthalpy. Peak area is obtained by
+integrating heat flow (mW) over time (s) after subtracting a baseline
+(this app implements a simple linear baseline between the user-selected
+peak start/end points -- more sophisticated curved/sigmoidal baselines
+exist in commercial DSC software but there is no single standard algorithm
+to cite, so only the linear case is implemented here).
+
+---
+
+## What this app deliberately does NOT do
+
+- It does not implement its own parser for EC-Lab's binary `.mpr` format
+  from scratch. There is no public, verifiable specification (BioLogic has
+  never published one), and hand-rolling a guess at the byte layout risks
+  silently wrong numbers that look identical to correct ones. Instead,
+  `.mpr` files are read through the third-party `galvani` package -- a
+  maintained, widely-used reverse-engineered parser in the battery/
+  electrochemistry Python community, a materially different risk profile
+  from an in-house guess but still not an officially verified spec.
+  Cross-check a few values against EC-Lab's own display, or re-export as
+  `.mpt` (text) or Excel from EC-Lab, before trusting `.mpr`-derived
+  numbers for a publication.
+- It does not invent a citation for formulas that are standard-but-
+  uncited in the source material (EIS capacitance, ESR/IR-drop convention,
+  equivalent-circuit element impedances) -- see notes above.
+- It does not silently pick a mass-normalization convention (single
+  electrode vs. total cell mass) -- the GCD tab requires you to choose a
+  cell configuration and states which mass basis is expected.
+- It does not silently pick normal vs. integral GCD/CV formula without
+  telling you which one was used and why (R²/rectangularity always shown
+  or requested).
+- It does not present the b-value or Dunn's-method capacitive/diffusive
+  split as definitive -- both carry an explicit literature-critique caveat
+  (Pervez & Stallard, *Small*, 2023) in the UI and in this document.
+- It does not attempt multi-start/global optimization for equivalent-
+  circuit fitting -- a single nonlinear-least-squares run from heuristic
+  initial guesses can converge to a local minimum; always check the
+  fit-overlay plot.

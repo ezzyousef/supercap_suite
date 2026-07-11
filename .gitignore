@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Build artifacts (regenerate via `pyinstaller SupercapSuite.spec` /
+# build_installer.ps1 -- the built .exe files exceed GitHub's 100MB
+# per-file limit anyway, so they don't belong in the repo)
+build/
+dist/
+installer/output/
+
+# Editors / OS
+.vscode/
+.DS_Store
+Thumbs.db

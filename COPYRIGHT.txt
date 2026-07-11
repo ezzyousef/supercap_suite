@@ -1,0 +1,6 @@
+Supercapacitor & DSC Electrochemical Analysis Suite
+
+Copyright (C) 2026 Ezzeldien Yousef. All rights reserved.
+
+Created by: Ezzeldien Yousef
+Contact:    ezzyousef2@aucegypt.edu
