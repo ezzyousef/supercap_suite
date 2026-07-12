@@ -64,6 +64,32 @@ integration of I&middot;dV over one closed CV cycle.<br><br>
 <code>Q_s = (&oint;I dV) / (2 &times; m &times; &nu;)</code>
 """
 
+CV_PEAK_SEPARATION = """
+<code>&Delta;Ep = E_pa &minus; E_pc</code><br>
+Anodic peak potential minus cathodic peak potential, from the single
+largest current maximum/minimum in the cycle. Redox-reversibility
+indicator: a fully reversible one-electron couple gives &Delta;Ep &asymp;
+59 mV (room temperature), independent of scan rate (standard Randles-
+Sevcik/Nicholson electrochemistry). A larger or scan-rate-dependent
+&Delta;Ep indicates quasi-reversible or irreversible electron-transfer
+kinetics -- this app reports the numbers only; the reversibility judgment
+is a domain interpretation left to you. Not meaningful for a curve with
+no resolvable redox peaks (e.g. an ideal EDLC).
+"""
+
+RANDLES_SEVCIK = """
+<code>I_p = 0.4463 &times; n &times; F &times; A &times; C &times;
+&radic;(n &times; F &times; v &times; D / (R &times; T))</code><br>
+Source: standard Randles-Sevcik equation (Bard &amp; Faulkner eqn 6.2.19),
+verified against an independent source before implementing. Fit as the
+slope of peak current vs. &radic;(scan rate) across 3+ scan rates,
+rearranged for D. This temperature-EXPLICIT form is used (not the common
+298 K-only simplified constant, 2.69&times;10&#8309;) so your entered
+temperature is actually honored. Valid only for a REVERSIBLE electron
+transfer at a diffusion-limited redox peak -- not applicable to an ideal
+EDLC (no faradaic peak) or to quasi-reversible/irreversible kinetics.
+"""
+
 BVALUE = """
 <code>b = slope of log(peak current) vs log(scan rate)</code><br>
 b &asymp; 1 &rarr; capacitive; b &asymp; 0.5 &rarr; diffusion-controlled
@@ -122,6 +148,28 @@ RATE_CAPABILITY = """
 Standard normalizations from the rate-capability/cycling-stability
 literature. Each discharge segment is analyzed with the same normal/
 integral auto-detection as the main GCD tab.
+"""
+
+CYCLING_STABILITY = """
+<code>retention (%) = 100 &times; C_i / C_1</code> -- each cycle's
+capacitance as a percentage of the FIRST successfully-analyzed cycle in
+the series. Standard normalization used throughout the cycling-stability
+literature.<br><br>
+<code>CE (%) = 100 &times; discharge_time / charge_time</code><br>
+Coulombic efficiency, in its simplified time-ratio form -- valid ONLY
+when the charge and discharge current MAGNITUDES are equal (the standard
+constant-current cycling protocol this tab assumes, using one entered
+current value for both legs). If your protocol uses different charge/
+discharge currents, this simplified form is not applicable; the
+literature-standard full form is
+<code>CE (%) = 100 &times; Q_discharge / Q_charge</code> (charge
+extracted &divide; charge injected, from integrating current over each
+leg individually), which needs per-leg current data this tab does not
+currently take as input.<br><br>
+Cycles are auto-segmented from one continuous multi-cycle trace using the
+same shape-based charge/discharge detector as the main GCD tab's
+"Auto-detect charge/discharge segments" feature (peaks/troughs in V(t),
+not a literature-sourced algorithm -- always check the plotted trace).
 """
 
 DSC_ENTHALPY = """

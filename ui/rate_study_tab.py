@@ -94,7 +94,7 @@ class CvRateTool(QWidget):
         entry_layout.addWidget(add_row_btn)
         left_layout.addWidget(entry_box)
 
-        peak_box = QGroupBox("2) (Optional) Enter scan rate + peak current (A) for b-value")
+        peak_box = QGroupBox("2) (Optional) Enter scan rate + peak current (A) for b-value / Randles-Sevcik")
         peak_layout = QVBoxLayout(peak_box)
         self.peak_table = _EditableTable("Scan rate (V/s)", "Peak current (A)")
         peak_layout.addWidget(self.peak_table)
@@ -102,6 +102,32 @@ class CvRateTool(QWidget):
         add_row_btn2.clicked.connect(self.peak_table.add_row)
         peak_layout.addWidget(add_row_btn2)
         left_layout.addWidget(peak_box)
+
+        rs_box = QGroupBox("3) Randles-Sevcik diffusion coefficient (redox-active/battery-type materials)")
+        rs_grid = QGridLayout(rs_box)
+        self.n_electrons_spin = QDoubleSpinBox(); self.n_electrons_spin.setDecimals(2)
+        self.n_electrons_spin.setRange(0.01, 100); self.n_electrons_spin.setValue(1.0)
+        self.electrode_area_spin = QDoubleSpinBox(); self.electrode_area_spin.setDecimals(4)
+        self.electrode_area_spin.setRange(0.0001, 1000); self.electrode_area_spin.setValue(1.0)
+        self.electrode_area_spin.setSuffix(" cm²")
+        self.concentration_spin = QDoubleSpinBox(); self.concentration_spin.setDecimals(6)
+        self.concentration_spin.setRange(0.000001, 100); self.concentration_spin.setValue(0.001)
+        self.concentration_spin.setSuffix(" mol/L")
+        self.temperature_spin = QDoubleSpinBox(); self.temperature_spin.setDecimals(2)
+        self.temperature_spin.setRange(200, 400); self.temperature_spin.setValue(298.15)
+        self.temperature_spin.setSuffix(" K")
+        rs_grid.addWidget(QLabel("Electrons transferred, n:"), 0, 0)
+        rs_grid.addWidget(self.n_electrons_spin, 0, 1)
+        rs_grid.addWidget(QLabel("Electrode area, A:"), 1, 0)
+        rs_grid.addWidget(self.electrode_area_spin, 1, 1)
+        rs_grid.addWidget(QLabel("Bulk concentration, C:"), 2, 0)
+        rs_grid.addWidget(self.concentration_spin, 2, 1)
+        rs_grid.addWidget(QLabel("Temperature, T:"), 3, 0)
+        rs_grid.addWidget(self.temperature_spin, 3, 1)
+        rs_btn = QPushButton("Compute diffusion coefficient D")
+        rs_btn.clicked.connect(self.on_randles_sevcik)
+        rs_grid.addWidget(rs_btn, 4, 0, 1, 2)
+        left_layout.addWidget(rs_box)
 
         btn_row = QHBoxLayout()
         trasatti_btn = QPushButton("Run Trasatti's method")
@@ -115,6 +141,7 @@ class CvRateTool(QWidget):
         source_row = QHBoxLayout()
         source_row.addWidget(theme.make_source_button(self, "Trasatti's method", formula_sources.TRASATTI))
         source_row.addWidget(theme.make_source_button(self, "b-value analysis", formula_sources.BVALUE))
+        source_row.addWidget(theme.make_source_button(self, "Randles-Sevcik diffusion coefficient", formula_sources.RANDLES_SEVCIK))
         left_layout.addLayout(source_row)
 
         note = QLabel(
@@ -246,6 +273,68 @@ class CvRateTool(QWidget):
         self.last_result = {
             "b-value": result.b_value,
             "Interpretation": interp,
+        }
+        self.last_raw_df = pd.DataFrame({"scan_rate_v_per_s": rates, "peak_current_a": peaks})
+        self.export_btn.setEnabled(True)
+
+    def on_randles_sevcik(self):
+        pairs = self.peak_table.get_pairs()
+        if len(pairs) < 3:
+            QMessageBox.warning(self, "Not enough data", "Enter at least 3 (scan rate, peak current) rows "
+                                 "in the table above.")
+            return
+        rates = np.array([p[0] for p in pairs])
+        peaks = np.array([p[1] for p in pairs])
+        concentration_mol_per_cm3 = self.concentration_spin.value() * 1e-3  # mol/L -> mol/cm^3
+        try:
+            result = cv.randles_sevcik_diffusion_coefficient(
+                rates, peaks,
+                n_electrons=self.n_electrons_spin.value(),
+                electrode_area_cm2=self.electrode_area_spin.value(),
+                concentration_mol_per_cm3=concentration_mol_per_cm3,
+                temperature_k=self.temperature_spin.value(),
+            )
+        except ValueError as e:
+            QMessageBox.critical(self, "Calculation error", str(e))
+            return
+
+        lines = [
+            f"Diffusion coefficient D = {result['diffusion_coefficient_cm2_per_s']:.4g} cm²/s",
+            f"Linear fit R² = {result['r_squared']:.5f}  (I_p vs. √scan rate)",
+            f"Slope = {result['slope_a_per_sqrt_vs']:.4g} A/√(V/s)",
+            "",
+            f"n = {self.n_electrons_spin.value():.3g}, A = {self.electrode_area_spin.value():.4g} cm², "
+            f"C = {self.concentration_spin.value():.4g} mol/L, T = {self.temperature_spin.value():.2f} K",
+            "",
+            "Valid only for a REVERSIBLE, diffusion-limited redox peak -- not "
+            "applicable to an ideal EDLC or to quasi-reversible/irreversible "
+            "kinetics. Check the linear-fit R² and the plotted overlay before "
+            "trusting D.",
+        ]
+        self.results_text.setPlainText("\n".join(lines))
+
+        sqrt_v = np.sqrt(rates)
+        fit_line = result["slope_a_per_sqrt_vs"] * sqrt_v + (np.mean(peaks) - result["slope_a_per_sqrt_vs"] * np.mean(sqrt_v))
+        self.plot.ax.clear()
+        self.plot.ax.scatter(sqrt_v, peaks, color=theme.RAW, s=22, label="I_p vs √v (data)")
+        self.plot.ax.plot(sqrt_v, fit_line, "--", color=theme.FIT, linewidth=1.5,
+                           label=f"fit -> D={result['diffusion_coefficient_cm2_per_s']:.3g} cm²/s")
+        self.plot.ax.set_xlabel("√(scan rate) (√(V/s))")
+        self.plot.ax.set_ylabel("Peak current (A)")
+        self.plot.ax.set_title("Randles-Sevcik diffusion coefficient")
+        self.plot.ax.legend(fontsize=8)
+        theme.apply_plot_style(self.plot.ax)
+        self.plot.fig.tight_layout()
+        self.plot.draw()
+
+        self.last_result = {
+            "Diffusion coefficient D (cm²/s)": result["diffusion_coefficient_cm2_per_s"],
+            "Linear fit R²": result["r_squared"],
+            "Slope (A per √(V/s))": result["slope_a_per_sqrt_vs"],
+            "Electrons transferred, n": self.n_electrons_spin.value(),
+            "Electrode area, A (cm²)": self.electrode_area_spin.value(),
+            "Bulk concentration, C (mol/L)": self.concentration_spin.value(),
+            "Temperature, T (K)": self.temperature_spin.value(),
         }
         self.last_raw_df = pd.DataFrame({"scan_rate_v_per_s": rates, "peak_current_a": peaks})
         self.export_btn.setEnabled(True)

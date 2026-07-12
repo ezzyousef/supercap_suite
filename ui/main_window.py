@@ -8,6 +8,7 @@ from .dsc_tab import DscTab
 from .eis_tab import EisTab
 from .rate_study_tab import RateStudyTab
 from .calculator_tab import CalculatorTab
+from .cycling_stability_tab import CyclingStabilityTab
 from . import theme
 from .resources import asset_path
 
@@ -76,11 +77,28 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon(asset_path("app_icon_256.png")))
         self.resize(1200, 800)
 
+        central = QWidget()
+        central_layout = QVBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        self.setCentralWidget(central)
+
+        # A thin accent strip above the tab content that recolors to match
+        # the active tab's identity color (see theme.TAB_COLORS) -- ties
+        # the tab-dot color-coding into the workspace itself, not just the
+        # tab bar, so the active module's "channel color" stays visible
+        # while you work.
+        self.accent_strip = QWidget()
+        self.accent_strip.setFixedHeight(4)
+        central_layout.addWidget(self.accent_strip)
+
         tabs = QTabWidget()
-        self.setCentralWidget(tabs)
+        central_layout.addWidget(tabs)
+        self._tabs = tabs
 
         tabs.addTab(CalculatorTab(), "Manual Calculator")
         tabs.addTab(GcdTab(), "GCD (Charge/Discharge)")
+        tabs.addTab(CyclingStabilityTab(), "Cycling Stability")
         tabs.addTab(CvTab(), "Cyclic Voltammetry")
         tabs.addTab(RateStudyTab(), "Rate Study (Dunn's / Trasatti's)")
         tabs.addTab(EisTab(), "EIS (Impedance)")
@@ -90,3 +108,10 @@ class MainWindow(QMainWindow):
         tabs.setIconSize(QSize(11, 11))
         for i, color in enumerate(theme.TAB_COLORS[:tabs.count()]):
             tabs.setTabIcon(i, theme.make_color_dot_icon(color))
+
+        tabs.currentChanged.connect(self._on_tab_changed)
+        self._on_tab_changed(tabs.currentIndex())
+
+    def _on_tab_changed(self, index: int) -> None:
+        color = theme.TAB_COLORS[index] if 0 <= index < len(theme.TAB_COLORS) else theme.RAW
+        self.accent_strip.setStyleSheet(f"background-color: {color};")

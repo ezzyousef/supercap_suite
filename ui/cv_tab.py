@@ -110,6 +110,9 @@ class CvTab(QWidget):
         left_layout.addWidget(theme.make_source_button(
             self, "CV specific capacitance / capacity", formula_sources.CV_CAPACITANCE
         ))
+        left_layout.addWidget(theme.make_source_button(
+            self, "Peak-to-peak separation (ΔEp)", formula_sources.CV_PEAK_SEPARATION
+        ))
 
         left_layout.addStretch()
         splitter.addWidget(left)
@@ -256,16 +259,35 @@ class CvTab(QWidget):
             return
 
         dv = float(np.max(v) - np.min(v))
+        sep = cv.peak_to_peak_separation(v, i)
         lines = [
             f"Potential window ΔV = {dv:.4f} V",
             f"Scan rate = {scan_rate:.6g} V/s",
             f"Active mass = {mass_g:.6g} g",
             "",
             f"{label} = {value:.4f} {unit}",
+            "",
+            f"Anodic peak  E_pa = {sep['e_pa_v']:.4f} V  (I_pa = {sep['i_pa_a']:.4g} A)",
+            f"Cathodic peak E_pc = {sep['e_pc_v']:.4f} V  (I_pc = {sep['i_pc_a']:.4g} A)",
+            f"Peak-to-peak separation ΔEp = E_pa − E_pc = {sep['delta_ep_v']:.4f} V "
+            f"({sep['delta_ep_v']*1000:.1f} mV)",
+            "  (redox-reversibility indicator -- ~59 mV for an ideal reversible "
+            "one-electron couple at room temperature; larger/scan-rate-dependent "
+            "ΔEp suggests quasi-reversible or irreversible kinetics. Not "
+            "meaningful for a curve with no resolvable redox peaks.)",
         ]
         self.results_text.setPlainText("\n".join(lines))
-        self.plot.plot_xy(v, i, xlabel="Potential (V)", ylabel="Current (A)",
-                           title=f"{label} = {value:.3f} {unit}")
+        self.plot.ax.clear()
+        self.plot.ax.plot(v, i, "-", color=theme.RAW, linewidth=1.3, label="CV cycle (raw)")
+        self.plot.ax.plot([sep["e_pa_v"]], [sep["i_pa_a"]], "^", color=theme.FIT, markersize=8, label="Anodic peak")
+        self.plot.ax.plot([sep["e_pc_v"]], [sep["i_pc_a"]], "v", color=theme.FIT, markersize=8, label="Cathodic peak")
+        self.plot.ax.set_xlabel("Potential (V)")
+        self.plot.ax.set_ylabel("Current (A)")
+        self.plot.ax.set_title(f"{label} = {value:.3f} {unit},  ΔEp = {sep['delta_ep_v']*1000:.1f} mV")
+        self.plot.ax.legend(fontsize=8)
+        theme.apply_plot_style(self.plot.ax)
+        self.plot.fig.tight_layout()
+        self.plot.draw()
 
         self.last_result = {
             "Potential window ΔV (V)": dv,
@@ -273,6 +295,10 @@ class CvTab(QWidget):
             "Active mass (g)": mass_g,
             "Report form": self.report_combo.currentText(),
             f"{label} ({unit})": value,
+            "Anodic peak potential E_pa (V)": sep["e_pa_v"],
+            "Cathodic peak potential E_pc (V)": sep["e_pc_v"],
+            "Peak-to-peak separation ΔEp (V)": sep["delta_ep_v"],
+            "Peak-to-peak separation ΔEp (mV)": sep["delta_ep_v"] * 1000,
         }
         self.last_raw_df = pd.DataFrame({"potential_v": v, "current_a": i})
         self.export_btn.setEnabled(True)

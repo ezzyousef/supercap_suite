@@ -65,6 +65,19 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## Running the test suite
+
+```bash
+pip install -r requirements-dev.txt
+pytest tests/ -v
+```
+
+Covers every `core/` module's formulas against known worked examples/
+synthetic ground truth (including the EIS circuit library's Warburg-open/
+short asymptotic limits and the de Levie transmission-line "one-third
+rule"), plus Excel export round-trips -- run this after any change to
+`core/` to confirm the math wasn't broken.
+
 ## Project layout
 
 ```

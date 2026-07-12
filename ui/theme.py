@@ -62,7 +62,7 @@ FIT_LIGHT = "#DC7B2E"
 # instrument channel at a glance, the same "channel color" idea as RAW/FIT
 # in the plots, extended to wayfinding. WARN red is deliberately excluded
 # here (reserved for actual out-of-spec/error states, not tab identity).
-TAB_COLORS = [RAW, FIT, GOOD, "#7A52A6", "#0E8A8A", "#B0407A", INK_DIM]
+TAB_COLORS = [RAW, FIT, "#B8860B", GOOD, "#7A52A6", "#0E8A8A", "#B0407A", INK_DIM]
 
 
 def make_color_dot_icon(hex_color: str, size: int = 11) -> QIcon:
@@ -96,7 +96,8 @@ QWidget {{
     background-color: {PANEL};
 }}
 QMainWindow, QTabWidget::pane {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FBFCFD, stop:1 {PANEL});
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #EAF2FA, stop:0.45 {PANEL}, stop:1 #FBF4EC);
     border: none;
 }}
 QTabBar::tab {{
@@ -125,9 +126,11 @@ QTabBar::tab:selected {{
 QGroupBox {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {SURFACE}, stop:1 #F6F7F8);
     border: 1px solid {BORDER};
+    border-left: 4px solid {RAW};
     border-radius: 4px;
     margin-top: 10px;
     padding-top: 12px;
+    padding-left: 4px;
     font-weight: 600;
     color: {INK_DIM};
 }}
@@ -213,7 +216,8 @@ QComboBox, QDoubleSpinBox, QSpinBox, QLineEdit {{
     selection-background-color: {RAW};
 }}
 QComboBox:focus, QDoubleSpinBox:focus, QSpinBox:focus, QLineEdit:focus {{
-    border-color: {RAW};
+    border: 2px solid {RAW};
+    padding: 2px 5px;
 }}
 QComboBox QAbstractItemView {{
     background-color: {SURFACE};
@@ -243,6 +247,7 @@ QHeaderView::section {{
     color: {INK_DIM};
     padding: 4px;
     border: 1px solid {BORDER};
+    border-bottom: 2px solid {RAW};
     font-family: "{UI_FONT_FAMILY}";
 }}
 QTableWidget {{
@@ -258,6 +263,9 @@ QListWidget {{
 QSplitter::handle {{
     background-color: {BORDER};
 }}
+QSplitter::handle:hover {{
+    background-color: {RAW};
+}}
 QScrollBar:vertical, QScrollBar:horizontal {{
     background: {SURFACE};
     border: none;
@@ -265,6 +273,9 @@ QScrollBar:vertical, QScrollBar:horizontal {{
 QScrollBar::handle {{
     background: {BORDER};
     border-radius: 3px;
+}}
+QScrollBar::handle:hover {{
+    background: {RAW};
 }}
 QRadioButton, QCheckBox {{
     background: transparent;

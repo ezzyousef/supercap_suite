@@ -422,3 +422,171 @@ def capacitance_retention_percent(capacitance_f_per_g_series: np.ndarray) -> np.
     if c[0] == 0:
         raise ValueError("First capacitance value is zero -- cannot normalize retention")
     return 100.0 * c / c[0]
+
+
+# ---------------------------------------------------------------------------
+# Cycling stability (long-term capacitance retention & coulombic efficiency)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CycleResult:
+    cycle_number: int
+    charge_start: int
+    charge_end: int
+    discharge_start: int
+    discharge_end: int
+    charge_time_s: float
+    discharge_time_s: float
+    capacitance_f_per_g: float
+    method: str
+    coulombic_efficiency_percent: float
+    retention_percent: float
+
+
+def segments_from_cycle_column(t_s: np.ndarray, v_v: np.ndarray,
+                                cycle_numbers: np.ndarray) -> list[Segment]:
+    """Split a GCD trace into charge/discharge segments using an ACTUAL
+    'cycle number' column (e.g. from an EC-Lab export) instead of the
+    peak/trough shape heuristic in `detect_charge_discharge_segments` --
+    preferred whenever such a column is available, since it removes any
+    ambiguity about where one cycle ends and the next begins (the shape
+    heuristic can mis-segment noisy or asymmetric charge/discharge
+    profiles; an explicit cycle-number column is authoritative).
+
+    Within each cycle-number group, the charge vs. discharge split is
+    still found from the shape of V(t) (`detect_charge_discharge_segments`
+    run LOCALLY within that group's row range) -- a cycle-number column
+    typically marks whole charge+discharge cycles, not the half-cycle
+    charge/discharge boundary itself, so this step is still needed, just
+    made far more robust by only ever searching within one already-known-
+    correct cycle's rows instead of the whole trace at once.
+    """
+    t_s = np.asarray(t_s, dtype=float)
+    v_v = np.asarray(v_v, dtype=float)
+    cycle_numbers = np.asarray(cycle_numbers)
+    if not (len(t_s) == len(v_v) == len(cycle_numbers)):
+        raise ValueError("t_s, v_v, and cycle_numbers must be the same length")
+
+    unique_cycles = np.unique(cycle_numbers)
+    if len(unique_cycles) < 1:
+        raise ValueError("No cycle numbers found")
+
+    all_segments: list[Segment] = []
+    for cyc_val in unique_cycles:
+        idx = np.where(cycle_numbers == cyc_val)[0]
+        if len(idx) < 6:
+            continue  # too few points in this cycle group to split meaningfully
+        start, end = int(idx[0]), int(idx[-1])
+        local_t = t_s[start:end + 1]
+        local_v = v_v[start:end + 1]
+        try:
+            local_segments = detect_charge_discharge_segments(
+                local_t, local_v, min_segment_points=max(3, len(idx) // 6)
+            )
+        except ValueError:
+            continue
+        for seg in local_segments:
+            all_segments.append(Segment(
+                kind=seg.kind, start=seg.start + start, end=seg.end + start,
+                duration_s=seg.duration_s, voltage_window_v=seg.voltage_window_v,
+            ))
+    return all_segments
+
+
+def analyze_cycling_stability(t_s: np.ndarray, v_v: np.ndarray, current_a: float,
+                               mass_g: float, r2_threshold: float = 0.98,
+                               cycle_numbers: np.ndarray | None = None) -> list[CycleResult]:
+    """Auto-segment ONE long, continuous multi-cycle GCD trace (a file with
+    no separate cycle-number column, just alternating charge/discharge
+    half-cycles back to back) into individual cycles, via the same shape-
+    based segment detector used elsewhere in this app
+    (`detect_charge_discharge_segments`), and compute per cycle:
+
+    - Specific capacitance (auto normal/integral form, same as the main
+      GCD tab) from each discharge segment.
+    - Capacitance retention (%) relative to the FIRST successfully-
+      analyzed cycle in the series (`capacitance_retention_percent`).
+    - Coulombic efficiency (%):
+
+          CE (%) = 100 * discharge_time / charge_time
+
+      This time-ratio form is only valid when the charge and discharge
+      CURRENT MAGNITUDES are equal (the standard constant-current cycling
+      protocol this app assumes throughout -- a single `current_a` is
+      used for both legs). If your protocol uses different charge and
+      discharge currents, this simplified form is not applicable; the
+      literature-standard full form is CE = 100 * Q_discharge / Q_charge
+      (charge extracted / charge injected, from integrating current over
+      each leg), which needs a current column for both legs individually
+      -- not implemented here since this app currently works from a
+      single manually-entered current value.
+
+    Only charge-then-discharge pairs are counted as a "cycle" (a leading
+    discharge with no preceding charge, or a trailing charge with no
+    following discharge, is dropped rather than guessed at).
+
+    If `cycle_numbers` is supplied (an array the same length as t_s/v_v,
+    e.g. an EC-Lab "cycle number" column), segmentation uses
+    `segments_from_cycle_column` (authoritative cycle boundaries) instead
+    of the peak/trough shape heuristic -- preferred whenever available.
+    """
+    t_s = np.asarray(t_s, dtype=float)
+    v_v = np.asarray(v_v, dtype=float)
+    if cycle_numbers is not None:
+        segments = segments_from_cycle_column(t_s, v_v, cycle_numbers)
+    else:
+        segments = detect_charge_discharge_segments(t_s, v_v)
+
+    raw_cycles = []  # (charge_seg, discharge_seg)
+    i = 0
+    while i < len(segments) - 1:
+        a, b = segments[i], segments[i + 1]
+        if a.kind == "charge" and b.kind == "discharge":
+            raw_cycles.append((a, b))
+            i += 2
+        else:
+            i += 1
+
+    if not raw_cycles:
+        raise ValueError(
+            "Could not find any charge-then-discharge cycle pairs in this trace. "
+            "Cycling-stability analysis needs a continuous multi-cycle trace with "
+            "alternating charge/discharge segments -- check the time/voltage "
+            "column selection, or that this file actually contains multiple cycles."
+        )
+
+    results: list[CycleResult] = []
+    caps = []
+    for charge_seg, discharge_seg in raw_cycles:
+        dis_t = t_s[discharge_seg.start:discharge_seg.end + 1]
+        dis_v = v_v[discharge_seg.start:discharge_seg.end + 1]
+        dis_t = dis_t - dis_t[0]
+        try:
+            auto = capacitance_gcd_auto(dis_t, dis_v, current_a, mass_g, r2_threshold=r2_threshold)
+            cap = auto["capacitance_f_per_g"]
+            method = auto["method"]
+        except ValueError:
+            cap, method = float("nan"), "could not be analyzed"
+        caps.append(cap)
+
+        ce = (100.0 * discharge_seg.duration_s / charge_seg.duration_s
+              if charge_seg.duration_s > 0 else float("nan"))
+
+        results.append(CycleResult(
+            cycle_number=len(results) + 1,
+            charge_start=charge_seg.start, charge_end=charge_seg.end,
+            discharge_start=discharge_seg.start, discharge_end=discharge_seg.end,
+            charge_time_s=charge_seg.duration_s, discharge_time_s=discharge_seg.duration_s,
+            capacitance_f_per_g=cap, method=method,
+            coulombic_efficiency_percent=ce, retention_percent=float("nan"),
+        ))
+
+    caps_arr = np.array(caps, dtype=float)
+    valid = ~np.isnan(caps_arr)
+    if np.any(valid):
+        first_valid = caps_arr[valid][0]
+        retention = np.where(valid, 100.0 * caps_arr / first_valid, np.nan)
+        for r, ret in zip(results, retention):
+            r.retention_percent = float(ret)
+
+    return results
