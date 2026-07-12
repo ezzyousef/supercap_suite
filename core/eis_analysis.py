@@ -169,6 +169,11 @@ class EquivalentCircuitFitResult:
     reduced_chi_squared: float
     z_fit_re: np.ndarray
     z_fit_im: np.ndarray
+    warnings: list = None   # human-readable per-parameter warnings, e.g. a parameter pinned at its search bound
+
+    def __post_init__(self):
+        if self.warnings is None:
+            self.warnings = []
 
     @property
     def display_name(self) -> str:
@@ -177,13 +182,14 @@ class EquivalentCircuitFitResult:
 
 def fit_equivalent_circuit(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.ndarray,
                             model: str = "randles1_Q_none",
-                            max_nfev: int | None = None) -> EquivalentCircuitFitResult:
+                            max_nfev: int | None = None,
+                            multistart: bool = False) -> EquivalentCircuitFitResult:
     """Fit a Nyquist spectrum to one circuit from the core.circuit_library
     preset library via complex nonlinear least squares (scipy.optimize.
     least_squares on the STACKED real+imaginary residuals simultaneously --
     not two independent real/imaginary fits).
 
-    `model`: any name in CIRCUIT_MODELS (~100 circuits; see
+    `model`: any name in CIRCUIT_MODELS (~110 circuits; see
     core/circuit_library.py for the full library and its categories). Use
     `auto_fit_equivalent_circuit` to try many of them and keep the best fit
     instead of picking one by hand.
@@ -192,12 +198,23 @@ def fit_equivalent_circuit(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_
     (commonly negative for capacitive systems) -- this function does not
     flip signs for you; check your data's convention first.
 
+    `multistart`: when True, also tries the heuristic guess with its
+    Y0/B/C-kind parameters (CPE admittance, Warburg length, capacitance --
+    the parameters most prone to landing an order of magnitude off, since
+    several of them can independently produce "capacitive-like" behavior
+    toward low frequency and are easily confused for each other from a
+    single cold start) scaled by a few different multipliers, and keeps
+    whichever converges to the lowest residual. Off by default (used for
+    single-circuit fits, i.e. the EIS tab's "Fit this circuit" button and
+    auto_fit_equivalent_circuit's final polish of its winner) because it
+    costs several extra fits -- too slow to also apply to auto-fit's ~110
+    -circuit screening pass, which instead approximates multi-start by
+    trying many circuit TOPOLOGIES.
+
     Requires scipy. Initial parameter guesses are constructed heuristically
     from the data (see circuit_library.initial_guess_and_bounds) -- for
     difficult/noisy spectra a single run can still converge to a local
-    minimum; this function does not attempt multi-start global optimization
-    on its own (auto_fit_equivalent_circuit approximates that by trying
-    several circuit topologies instead).
+    minimum; `multistart=True` mitigates but does not eliminate this.
     """
     if not _HAVE_SCIPY:
         raise ImportError("scipy is required for equivalent circuit fitting "
@@ -219,6 +236,7 @@ def fit_equivalent_circuit(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_
 
     omega = 2 * np.pi * f
     param_names = spec.param_order
+    param_kinds = spec.param_kinds
     x0, bounds_lo, bounds_hi = _cl.initial_guess_and_bounds(spec, f, zr)
     if len(f) * 2 < len(param_names):
         raise ValueError(
@@ -231,7 +249,22 @@ def fit_equivalent_circuit(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_
         z_model = _cl.evaluate_circuit(spec.tree, omega, params)
         return np.concatenate([(z_model.real - zr), (z_model.imag - zi)])
 
-    result = least_squares(residuals, x0, bounds=(bounds_lo, bounds_hi), max_nfev=max_nfev)
+    candidate_x0s = [x0]
+    if multistart:
+        rescale_kinds = ("Y0", "B", "C")
+        for factor in (0.1, 10.0, 0.01, 100.0):
+            candidate = [
+                float(np.clip(v * factor, lo, hi)) if param_kinds[name] in rescale_kinds else v
+                for name, v, lo, hi in zip(param_names, x0, bounds_lo, bounds_hi)
+            ]
+            candidate_x0s.append(candidate)
+
+    best_result = None
+    for candidate in candidate_x0s:
+        r = least_squares(residuals, candidate, bounds=(bounds_lo, bounds_hi), max_nfev=max_nfev)
+        if best_result is None or float(np.sum(r.fun ** 2)) < float(np.sum(best_result.fun ** 2)):
+            best_result = r
+    result = best_result
 
     params = dict(zip(param_names, result.x))
 
@@ -260,10 +293,38 @@ def fit_equivalent_circuit(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_
 
     z_fit = _cl.evaluate_circuit(spec.tree, omega, params)
 
+    # Bound-pinning diagnostic: scipy's least_squares reports which bounds
+    # are actually ACTIVE at the solution (result.active_mask: -1 = pinned
+    # at lower bound, 1 = pinned at upper bound, 0 = free). A parameter
+    # pinned at its lower bound almost always means the optimizer is
+    # trying to SUPPRESS an element the model can't actually use to
+    # explain the data -- most commonly a Warburg element fit against
+    # data whose low-frequency shape it cannot represent (see the "which
+    # Warburg element for a supercapacitor" note in circuit_library.py) --
+    # not a successful measurement of a genuinely tiny quantity. Surfacing
+    # this explicitly means a "vanished" Warburg is reported as a modeling
+    # mismatch instead of silently showing a small/strange fitted number.
+    warnings_list = []
+    active_mask = getattr(result, "active_mask", np.zeros(len(param_names)))
+    for name, val, active in zip(param_names, result.x, active_mask):
+        if active < 0:
+            warnings_list.append(
+                f"'{name}' is pinned at its lower search bound ({val:.4g}) -- this usually "
+                f"means the model doesn't actually need this element to explain the data "
+                f"(common for a Warburg element fit against data whose shape it can't "
+                f"represent), not that you've precisely measured a tiny value."
+            )
+        elif active > 0:
+            warnings_list.append(
+                f"'{name}' is pinned at its upper search bound ({val:.4g}) -- the optimizer "
+                f"hit an artificial ceiling rather than a true optimum; treat this value with "
+                f"caution."
+            )
+
     return EquivalentCircuitFitResult(
         model=model, params=params, param_errors=param_errors,
         chi_squared=chi_sq, reduced_chi_squared=reduced_chi_sq,
-        z_fit_re=z_fit.real, z_fit_im=z_fit.imag,
+        z_fit_re=z_fit.real, z_fit_im=z_fit.imag, warnings=warnings_list,
     )
 
 
@@ -320,8 +381,11 @@ def auto_fit_equivalent_circuit(
         raise ValueError(f"No circuit model could be fit to this data. Attempts failed: {errs}")
 
     best_screen = min(successful, key=lambda r: r.reduced_chi_squared)
-    # Final polish: re-fit the winner to full convergence (no nfev cap).
-    best = fit_equivalent_circuit(frequency_hz, z_re_ohm, z_im_ohm, model=best_screen.model)
+    # Final polish: re-fit the winner to full convergence (no nfev cap),
+    # with multistart -- affordable here since it's only ONE circuit, not
+    # the whole screening pass, and this is the result actually reported.
+    best = fit_equivalent_circuit(frequency_hz, z_re_ohm, z_im_ohm, model=best_screen.model,
+                                   multistart=True)
     attempts = [(m, best, err) if m == best_screen.model and r is not None else (m, r, err)
                 for m, r, err in attempts]
     return best, attempts

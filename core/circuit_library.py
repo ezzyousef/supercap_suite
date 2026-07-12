@@ -94,6 +94,22 @@ formalism rather than tied to one single citable paper for the base
 element forms -- treat it with the same "standard-but-not-individually-
 cited" caveat already documented for the simpler Randles/CPE formulas in
 core/eis_analysis.py and docs/EQUATIONS.md.
+
+Which Warburg-family element to use for a SUPERCAPACITOR specifically:
+use the bounded/finite-length forms (Wo/Ws), never the plain semi-
+infinite "W", for a full-spectrum fit -- W has a fixed 45-degree phase
+angle all the way to omega->0 and cannot reproduce a supercapacitor's
+characteristic near-vertical low-frequency capacitive turn, so fitting it
+against full-spectrum data typically drives it toward its lower search
+bound as the optimizer tries to suppress an element the model can't
+represent (see Cruz-Manzo & Greenwood, J. Electrochem. Soc. 167 (2020),
+on the frequency transition from diffusion-like to capacitive response in
+a blocked/bounded-diffusion Warburg -- the same low-frequency-divergent
+coth-type behavior as this module's "Wo"). The "Supercapacitor
+(recommended)" category below builds the standard extended-Randles
+topology for this: Rs-(Rct||C or Q)-Wo/Ws[-tail C or Q], with the bounded
+Warburg and an optional bare low-frequency tail capacitance appended
+DOWNSTREAM of the semicircle stage rather than nested inside it.
 """
 from dataclasses import dataclass, field
 import numpy as np
@@ -268,13 +284,70 @@ def initial_guess_and_bounds(spec: CircuitSpec, frequency_hz: np.ndarray,
     - a parameter ending "_Rp" (transmission-line pore resistance) is
       seeded from the full real-axis span (pore resistance is typically
       comparable in scale to the other charge-transfer resistances);
-    - any other resistor is seeded from half the real-axis span (a rough
-      charge-transfer-resistance scale);
-    - all other kinds (C, L, Y0/CPE-admittance, n, Warburg B, Gerischer
-      tau) use fixed generic defaults in `_GUESS_DEFAULTS`.
+    - any other resistor (e.g. Rct) is seeded from half the real-axis span
+      of the HIGH-to-MID frequency portion of the spectrum only (the top
+      60% by frequency), not the full sweep: a low-frequency Warburg/CPE
+      tail can dominate the full real-axis span (its impedance diverges
+      toward DC), which made the plain full-span estimate badly overshoot
+      Rct for any circuit with such a tail -- confirmed by a self-
+      consistency check (fit a circuit to its own noise-free synthetic
+      data) that only converged once Rct's initial guess stopped being
+      thrown off by that low-frequency divergence;
+    - Y0 (CPE/Warburg admittance) and B (finite-Warburg length parameter)
+      are seeded from the data's OWN impedance and frequency scale (see
+      below) rather than a fixed constant -- a fixed Y0=1e-4/B=1.0 default
+      regardless of whether the spectrum spans milliohms or kilohms, or
+      millihertz or megahertz, was the root cause of finite-Warburg (Wo/
+      Ws) fits landing on wildly wrong B values (self-consistency testing
+      against synthetic data with a known B showed >10x, sometimes
+      >1000x, recovered-vs-true error): the search started and was bounded
+      many orders of magnitude from where the data actually lives.
+    - all other kinds (C, L, n, Gerischer tau) use fixed generic defaults
+      in `_GUESS_DEFAULTS`.
     """
     rs_guess = float(z_re_ohm[np.argmax(frequency_hz)])
     r_span = max(float(np.max(z_re_ohm) - np.min(z_re_ohm)), 1e-6)
+
+    # High-to-mid-frequency-only real-axis span, for the Rct-like guess --
+    # excludes the low-frequency portion where a Warburg/CPE tail's
+    # impedance can diverge and swamp the semicircle's own scale.
+    freq_arr = np.asarray(frequency_hz, dtype=float)
+    hf_order = np.argsort(-freq_arr)
+    n_hf = max(4, int(len(hf_order) * 0.6))
+    hf_idx = hf_order[:n_hf]
+    zre_hf = np.asarray(z_re_ohm, dtype=float)[hf_idx]
+    r_span_hf = max(float(np.max(zre_hf) - np.min(zre_hf)), 1e-6)
+
+    omega_data = 2 * np.pi * np.asarray(frequency_hz, dtype=float)
+    # geometric mean angular frequency -- the natural "center" of a
+    # log-swept EIS spectrum, used to scale Y0, C, and B to the data's own
+    # timescale instead of a fixed constant.
+    omega_mid = float(np.sqrt(np.min(omega_data) * np.max(omega_data)))
+    # Y0/C guesses use r_span_hf (not the full-spectrum r_span) for the
+    # same reason the Rct-like resistor guess above does: a low-frequency
+    # Warburg/CPE tail dominates the FULL real-axis span, which -- for a
+    # circuit with more than one capacitive-ish element (a semicircle
+    # capacitance AND a downstream Warburg, say) -- was seeding every one
+    # of them from the same tail-dominated scale and left the optimizer
+    # unable to tell them apart; self-consistency testing (fitting a
+    # circuit to its own noise-free synthetic data) only converged once
+    # each element's guess used the frequency range where ITS OWN
+    # contribution actually dominates the spectrum shape.
+    # Y0 guess: for Z = 1/(Y0*(jw)^n), |Z| ~ r_span_hf at the mid-frequency
+    # point implies Y0 ~ 1/(r_span_hf * omega_mid^0.5) (n=0.5-0.85 covers
+    # both CPE and Warburg-like elements reasonably as an order-of-
+    # magnitude seed -- exact n is itself a free fit parameter).
+    y0_guess = 1.0 / max(r_span_hf * np.sqrt(omega_mid), 1e-12)
+    # C guess: for Z = 1/(jwC), |Z| ~ r_span_hf at the mid-frequency point
+    # implies C ~ 1/(r_span_hf * omega_mid) -- same reasoning as Y0 above,
+    # with n=1 (ideal capacitor) instead of a general CPE exponent.
+    c_guess = 1.0 / max(r_span_hf * omega_mid, 1e-12)
+    # B guess: the tanh/coth argument is B*sqrt(jw), dimensionless only if
+    # B ~ 1/sqrt(omega) -- seeding B so its crossover lands near the
+    # middle of the measured frequency window puts the search where the
+    # curvature that actually constrains B lives, rather than off the
+    # edge of the measured spectrum entirely.
+    b_guess = 1.0 / np.sqrt(omega_mid)
 
     param_kinds = spec.param_kinds
     x0, lo, hi = [], [], []
@@ -286,9 +359,26 @@ def initial_guess_and_bounds(spec: CircuitSpec, frequency_hz: np.ndarray,
             elif name.endswith("_Rp"):
                 x0.append(r_span)
             else:
-                x0.append(max(r_span / 2, 1e-6))
+                x0.append(max(r_span_hf / 2, 1e-6))
             lo.append(0.0)
             hi.append(np.inf)
+        elif kind == "Y0":
+            x0.append(y0_guess)
+            lo.append(y0_guess * 1e-4)
+            hi.append(y0_guess * 1e4)
+        elif kind == "B":
+            x0.append(b_guess)
+            lo.append(b_guess * 1e-3)
+            hi.append(b_guess * 1e3)
+        elif kind == "C":
+            _, low, high = _GUESS_DEFAULTS[kind]
+            # c_guess can blow past these FIXED bounds for a circuit with
+            # no real-axis variation to scale from (e.g. a bare Rs-C with
+            # no semicircle, where r_span_hf collapses to its floor value)
+            # -- clip rather than let scipy reject an out-of-bounds guess.
+            x0.append(float(np.clip(c_guess, low, high)))
+            lo.append(low)
+            hi.append(high)
         else:
             default, low, high = _GUESS_DEFAULTS[kind]
             x0.append(default)
@@ -432,6 +522,61 @@ def _build_library() -> None:
         tree = _maybe_L(_series(_e("R", "Rs"), _e("T", "TLM1"), _e("T", "TLM2")), with_l)
         disp = f"{'L-' if with_l else ''}Rs-TLM1-TLM2 (symmetric 2-electrode cell, two porous electrodes)"
         _register(CircuitSpec(name, disp, "Transmission line (porous electrode)", tree))
+
+    # --- H. Supercapacitor (recommended): resolvable contact/charge-
+    #        transfer semicircle in series with a BOUNDED (finite-length,
+    #        blocking-boundary) Warburg -- Wo or Ws, never the plain
+    #        semi-infinite "W" -- appended DOWNSTREAM of the semicircle
+    #        stage (not nested inside the Rct-parallel branch the way the
+    #        "One/Two/Three time constant" categories build it). This is
+    #        the standard "modified/extended Randles circuit for
+    #        supercapacitors" reported in the literature, and it was
+    #        previously MISSING from this library: every circuit generated
+    #        by the "One/Two/Three time constant" categories above wraps
+    #        every capacitor/CPE in a parallel resistor, so there was no
+    #        way to express a plain downstream Warburg stage.
+    #
+    #        Plain semi-infinite Warburg "W" is deliberately NOT offered
+    #        here: W has a fixed 45-degree phase angle all the way to
+    #        omega->0 and cannot reproduce a supercapacitor's near-vertical
+    #        low-frequency capacitive turn, so fitting it against full-
+    #        spectrum supercapacitor data typically drives its Y0 toward
+    #        the fit's lower bound as the optimizer tries to suppress an
+    #        element the model can't actually use -- which looks like "the
+    #        Warburg element didn't show up in the fit," but is really a
+    #        modeling-choice mismatch, not a bug. (Consistent with
+    #        Cruz-Manzo & Greenwood, J. Electrochem. Soc. 167 (2020), on
+    #        the frequency transition from diffusion-like to capacitive
+    #        response in a blocked/bounded-diffusion Warburg -- the same
+    #        coth-type low-frequency-divergent behavior as this module's
+    #        "Wo" element, documented above.) eis_analysis.
+    #        fit_equivalent_circuit also now flags a Warburg (or any)
+    #        parameter that lands pinned at its lower/upper search bound,
+    #        so that suppression is reported explicitly rather than left
+    #        for the user to notice as a suspiciously tiny/huge number.
+    #
+    #        A further "-tail" variant (an extra bare capacitor/CPE
+    #        appended after the Warburg, representing a separate low-
+    #        frequency bulk/mass capacitance) was tried and DELIBERATELY
+    #        DROPPED: self-consistency testing (fitting a circuit to its
+    #        own noise-free synthetic data) showed it reliably converges
+    #        to a WRONG local minimum from any realistic starting guess --
+    #        confirmed not a simple bad-initial-guess problem, since
+    #        starting the optimizer exactly at the true parameters DOES
+    #        recover them perfectly (chi2=0); a Warburg element and a
+    #        trailing CPE/capacitor both produce increasingly capacitive-
+    #        like impedance toward low frequency and are too easily
+    #        confused for each other by a single-start least-squares fit.
+    #        Shipping a preset that systematically fits to the wrong
+    #        answer would be worse than not offering it.
+    for cap in cap_opts:
+        for wb in ("Wo", "Ws"):
+            for with_l in (False, True):
+                name = f"supercap_{cap}_{wb}" + ("_L" if with_l else "")
+                semicircle = _parallel(_e("R", "Rct"), _e(cap, "Rct_cap"))
+                tree = _maybe_L(_series(_e("R", "Rs"), semicircle, _e(wb, "Wb")), with_l)
+                disp = f"{'L-' if with_l else ''}Rs(Rct-{cap})-{wb}"
+                _register(CircuitSpec(name, disp, "Supercapacitor (recommended)", tree))
 
     # --- G. Gerischer element (mixed ionic/electronic conduction, battery-
     #        type insertion electrodes with a coupled chemical reaction) ----

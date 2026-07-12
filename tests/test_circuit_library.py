@@ -14,6 +14,112 @@ def test_library_has_over_100_circuits():
     assert len(cl.CIRCUITS) >= 100
 
 
+def test_every_circuit_evaluates_to_finite_impedance_and_has_unique_param_names():
+    """Structural self-consistency sweep across the WHOLE library (not just
+    a handful of hand-picked circuits): every registered circuit must (1)
+    have no duplicate parameter names within itself, (2) have no other
+    circuit with an identical tree (an accidental exact duplicate), and
+    (3) evaluate to a finite (non-NaN, non-inf) impedance across a
+    realistic frequency sweep at a plausible parameter draw. This is the
+    automated version of the manual "check all 100+ circuits" audit."""
+    freq = np.logspace(4, -2, 40)
+    omega = 2 * np.pi * freq
+    true_values = {"R": 50.0, "C": 2e-4, "L": 1e-6, "Y0": 5e-3, "n": 0.9, "B": 2.0, "tau": 0.5}
+
+    seen_trees = {}
+    for name, spec in cl.CIRCUITS.items():
+        param_names = spec.param_order
+        assert len(param_names) == len(set(param_names)), f"{name}: duplicate param names"
+
+        tree_key = repr(spec.tree)
+        assert tree_key not in seen_trees, f"{name}: identical tree to {seen_trees.get(tree_key)}"
+        seen_trees[tree_key] = name
+
+        params = {n: true_values[k] for n, k in spec.param_kinds.items()}
+        z = cl.evaluate_circuit(spec.tree, omega, params)
+        assert np.all(np.isfinite(z.real)) and np.all(np.isfinite(z.imag)), f"{name}: non-finite Z"
+
+
+def test_supercapacitor_category_uses_bounded_warburg_not_semiinfinite():
+    """The dedicated "Supercapacitor (recommended)" category (the standard
+    extended-Randles topology: Rs-(Rct||C or Q)-Wo/Ws, Warburg appended
+    downstream of the semicircle rather than nested inside it) must exist
+    and must only ever use the BOUNDED Warburg elements (Wo/Ws) -- not the
+    plain semi-infinite "W", which cannot reproduce a supercapacitor's
+    near-vertical low-frequency capacitive turn (see circuit_library.py's
+    module docstring)."""
+    supercap_specs = [s for s in cl.CIRCUITS.values() if s.category == "Supercapacitor (recommended)"]
+    assert len(supercap_specs) >= 8
+
+    def element_kinds(node):
+        if node[0] == "elem":
+            return {node[1]}
+        out = set()
+        for child in node[1]:
+            out |= element_kinds(child)
+        return out
+
+    for spec in supercap_specs:
+        kinds = element_kinds(spec.tree)
+        assert "W" not in kinds, f"{spec.name}: uses semi-infinite Warburg, should use Wo/Ws"
+        assert kinds & {"Wo", "Ws"}, f"{spec.name}: missing a bounded Warburg element"
+
+
+def test_multistart_recovers_true_parameters_for_a_previously_hard_case():
+    """Regression test: supercap_C_Ws (semicircle + bounded Warburg) used
+    to converge to a WRONG local minimum from the standard heuristic guess
+    even with zero noise (confirmed not a bad-guess-only issue -- starting
+    the optimizer exactly at the true parameters recovered them exactly).
+    multistart=True must escape that local minimum via alternate starting
+    points."""
+    freq = np.logspace(4, -2, 60)
+    omega = 2 * np.pi * freq
+    spec = cl.get_circuit("supercap_C_Ws")
+    true_params = {"Rs": 50.0, "Rct": 50.0, "Rct_cap": 2e-4, "Wb_Y0": 5e-3, "Wb_B": 2.0}
+    z_true = cl.evaluate_circuit(spec.tree, omega, true_params)
+
+    result = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag,
+                                         model="supercap_C_Ws", multistart=True)
+    assert result.reduced_chi_squared < 1e-6
+    for name, true_val in true_params.items():
+        assert result.params[name] == pytest.approx(true_val, rel=0.01)
+
+
+def test_bare_rs_c_baseline_does_not_crash_multistart():
+    """Regression test: a circuit with no real-axis variation to scale
+    from (baseline_RC has no semicircle at all) previously made the
+    data-scaled C initial guess blow past the fixed C search bounds,
+    raising 'Initial guess is outside of provided bounds' instead of
+    fitting."""
+    freq = np.logspace(4, -2, 40)
+    omega = 2 * np.pi * freq
+    spec = cl.get_circuit("baseline_RC")
+    z_true = cl.evaluate_circuit(spec.tree, omega, {"Rs": 10.0, "C": 1e-4})
+    result = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag,
+                                         model="baseline_RC", multistart=True)
+    assert result.reduced_chi_squared < 1e-6
+
+
+def test_semiinfinite_warburg_is_flagged_when_fit_against_a_capacitive_tail():
+    """The exact user-facing symptom this was built to explain: fitting
+    the plain semi-infinite Warburg "W" against data with a genuine
+    low-frequency CAPACITIVE turn (which W cannot represent) should drive
+    its Y0 toward the search's lower bound -- and fit_equivalent_circuit
+    must say so explicitly via result.warnings, rather than silently
+    reporting a tiny/strange Y0 with no explanation."""
+    freq = np.logspace(4, -3, 60)
+    omega = 2 * np.pi * freq
+    # generate data from the CORRECT bounded-Warburg supercapacitor model
+    # (near-vertical low-frequency turn), then fit the WRONG "W" model to it.
+    true_spec = cl.get_circuit("supercap_Q_Wo")
+    true_params = {"Rs": 20.0, "Rct": 30.0, "Rct_cap_Y0": 5e-3, "Rct_cap_n": 0.9,
+                    "Wb_Y0": 5e-3, "Wb_B": 0.05}
+    z_true = cl.evaluate_circuit(true_spec.tree, omega, true_params)
+
+    result = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag, model="misc_R_W")
+    assert any("lower search bound" in w for w in result.warnings)
+
+
 def test_all_circuits_have_unique_names_and_nonempty_param_lists():
     names = list(cl.CIRCUITS.keys())
     assert len(names) == len(set(names))

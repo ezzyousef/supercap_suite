@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel,
     QComboBox, QDoubleSpinBox, QSpinBox, QFileDialog, QMessageBox, QGroupBox,
     QTextEdit, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QListWidget,
-    QAbstractItemView
+    QAbstractItemView, QDialog, QFormLayout, QDialogButtonBox, QInputDialog
 )
 from PySide6.QtCore import Qt
 
@@ -93,6 +93,85 @@ class _EditableTable(QTableWidget):
     def add_row(self):
         self.insertRow(self.rowCount())
 
+    def load_rows(self, pairs, replace: bool = True):
+        """Fill the table from a list of (x, y) pairs -- e.g. parsed from
+        an imported file -- growing the row count as needed. `replace`
+        clears any existing rows first (the common case for a fresh
+        import); pass False to append after whatever's already entered."""
+        if replace:
+            self.setRowCount(0)
+        start = self.rowCount()
+        self.setRowCount(start + len(pairs))
+        for i, (a, b) in enumerate(pairs):
+            self.setItem(start + i, 0, QTableWidgetItem(f"{a:g}"))
+            self.setItem(start + i, 1, QTableWidgetItem(f"{b:g}"))
+
+
+class _RateColumnMappingDialog(QDialog):
+    """Column-mapping dialog for importing a scan-rate-vs-metric table from
+    a loaded file: pick which column is the scan rate, and which (optional)
+    column(s) are specific capacitance / peak current -- both may be filled
+    from the SAME file at once if it has both, since that's the common case
+    (one CV-summary sheet with several metric columns alongside scan rate).
+    """
+
+    def __init__(self, parent, columns: list[str]):
+        super().__init__(parent)
+        self.setWindowTitle("Import scan-rate data — map columns")
+        layout = QFormLayout(self)
+
+        self.rate_combo = QComboBox()
+        self.rate_combo.addItem("-- select --")
+        self.rate_combo.addItems(columns)
+        layout.addRow("Scan rate column:", self.rate_combo)
+
+        self.cap_combo = QComboBox()
+        self.cap_combo.addItem("-- none --")
+        self.cap_combo.addItems(columns)
+        layout.addRow("Specific capacitance column (optional):", self.cap_combo)
+
+        self.peak_combo = QComboBox()
+        self.peak_combo.addItem("-- none --")
+        self.peak_combo.addItems(columns)
+        layout.addRow("Peak current column (optional):", self.peak_combo)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+
+def _load_file_for_import(parent, title: str) -> pd.DataFrame | None:
+    """Shared "open file, pick a sheet if Excel, load it" flow used by the
+    rate-study import buttons -- returns None (after showing an error, if
+    applicable) if the user cancels or the file can't be read."""
+    path, _ = QFileDialog.getOpenFileName(
+        parent, title, "", "Data files (*.xlsx *.xls *.csv *.txt *.mpt *.mpr);;All files (*)"
+    )
+    if not path:
+        return None
+    sheet_name = 0
+    if path.lower().endswith((".xlsx", ".xls")):
+        try:
+            sheets = list_excel_sheets(path)
+        except DataLoadError as e:
+            QMessageBox.critical(parent, "Error", str(e))
+            return None
+        if len(sheets) > 1:
+            sheet_name, ok = QInputDialog.getItem(parent, "Choose sheet", "Sheet:", sheets, 0, False)
+            if not ok:
+                return None
+        else:
+            sheet_name = sheets[0]
+    try:
+        df = load_data_file(path, sheet_name=sheet_name)
+    except DataLoadError as e:
+        QMessageBox.critical(parent, "Error loading file", str(e))
+        return None
+    if isinstance(df, dict):
+        df = list(df.values())[0]
+    return df
+
 
 class CvRateTool(QWidget):
     def __init__(self):
@@ -109,6 +188,21 @@ class CvRateTool(QWidget):
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
+
+        import_row = QHBoxLayout()
+        import_btn = QPushButton("Import from file…")
+        import_btn.setToolTip(
+            "Load scan rate + specific capacitance and/or peak current "
+            "from a spreadsheet (one CV-summary sheet with several scan "
+            "rates as rows) instead of typing them in by hand below."
+        )
+        import_btn.clicked.connect(self.on_import_file)
+        import_row.addWidget(import_btn)
+        import_row.addWidget(QLabel(
+            "Fills the tables below from a file's columns -- or enter rows manually."
+        ))
+        import_row.addStretch()
+        left_layout.addLayout(import_row)
 
         entry_box = QGroupBox("1) Enter scan rate + specific capacitance "
                                "per scan rate  — from individual CV analyses")
@@ -239,6 +333,61 @@ class CvRateTool(QWidget):
         splitter.addWidget(right)
         splitter.setSizes([420, 700])
         configure_collapsible_main_splitter(splitter)
+
+    def on_import_file(self):
+        df = _load_file_for_import(self, "Import scan-rate data")
+        if df is None:
+            return
+        columns = [str(c) for c in df.columns]
+
+        dlg = _RateColumnMappingDialog(self, columns)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        rate_col = dlg.rate_combo.currentText()
+        cap_col = dlg.cap_combo.currentText()
+        peak_col = dlg.peak_combo.currentText()
+        if rate_col == "-- select --":
+            QMessageBox.warning(self, "Missing column", "Select a scan rate column.")
+            return
+        if cap_col == "-- none --" and peak_col == "-- none --":
+            QMessageBox.warning(self, "Missing column", "Select a capacitance and/or peak current column.")
+            return
+
+        try:
+            rate_vals = df[rate_col].astype(float).tolist()
+        except (ValueError, TypeError):
+            QMessageBox.critical(self, "Data error", f"Column '{rate_col}' is not numeric.")
+            return
+
+        n_filled = 0
+        if cap_col != "-- none --":
+            try:
+                cap_vals = df[cap_col].astype(float).tolist()
+            except (ValueError, TypeError):
+                QMessageBox.critical(self, "Data error", f"Column '{cap_col}' is not numeric.")
+                return
+            pairs = [(r, c) for r, c in zip(rate_vals, cap_vals) if np.isfinite(r) and np.isfinite(c)]
+            self.cap_table.load_rows(pairs)
+            n_filled += 1
+        if peak_col != "-- none --":
+            try:
+                peak_vals = df[peak_col].astype(float).tolist()
+            except (ValueError, TypeError):
+                QMessageBox.critical(self, "Data error", f"Column '{peak_col}' is not numeric.")
+                return
+            pairs = [(r, i) for r, i in zip(rate_vals, peak_vals) if np.isfinite(r) and np.isfinite(i)]
+            self.peak_table.load_rows(pairs)
+            n_filled += 1
+
+        QMessageBox.information(
+            self, "Imported",
+            f"Filled {n_filled} table(s) from '{rate_col}' + "
+            f"{'capacitance' if cap_col != '-- none --' else ''}"
+            f"{' and ' if cap_col != '-- none --' and peak_col != '-- none --' else ''}"
+            f"{'peak current' if peak_col != '-- none --' else ''}.\n\n"
+            "Check that the column-unit dropdowns above each table match "
+            "the units your file actually used before running an analysis."
+        )
 
     def on_trasatti(self):
         pairs = self.cap_table.get_pairs_base(
