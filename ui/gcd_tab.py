@@ -170,6 +170,10 @@ class GcdTab(QWidget):
         analyze_btn = QPushButton("Analyze discharge segment")
         analyze_btn.clicked.connect(self.on_analyze)
         left_layout.addWidget(analyze_btn)
+        clear_btn = QPushButton("Clear results")
+        clear_btn.setToolTip("Resets the results panel, plot, and table so a stale result can't get exported by accident.")
+        clear_btn.clicked.connect(self.on_clear_results)
+        left_layout.addWidget(clear_btn)
         left_layout.addWidget(theme.make_source_button(
             self, "GCD capacitance, ESR, energy/power density",
             formula_sources.GCD_CAPACITANCE + "<hr>" + formula_sources.GCD_ESR
@@ -392,6 +396,15 @@ class GcdTab(QWidget):
             except (ValueError, TypeError):
                 i_arr = None
         return t, v, i_arr
+
+    def on_clear_results(self):
+        # self.table shows the loaded FILE's raw data (unrelated to the
+        # analysis result), so it's intentionally left alone here.
+        self.last_result = None
+        self.last_raw_df = None
+        self.results_text.clear()
+        self.plot.clear_plot()
+        self.export_btn.setEnabled(False)
 
     def on_analyze(self):
         seg = self._get_segment()

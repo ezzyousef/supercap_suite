@@ -358,6 +358,17 @@ def initial_guess_and_bounds(spec: CircuitSpec, frequency_hz: np.ndarray,
                 x0.append(max(rs_guess, 1e-6))
             elif name.endswith("_Rp"):
                 x0.append(r_span)
+            elif name == "Rleak":
+                # A leakage/self-discharge resistance is physically
+                # expected to be LARGE (self-discharge time constants of
+                # hours-to-days imply kOhm-MOhm, orders of magnitude above
+                # the other resistors in the same circuit) -- seeding it
+                # from the same r_span_hf/2 scale as a charge-transfer-like
+                # resistor left the optimizer starting many orders of
+                # magnitude away from realistic leakage values and unable
+                # to converge (confirmed via self-consistency testing with
+                # a physically realistic Rleak >> Rs/R2).
+                x0.append(max(r_span_hf * 100, 1e3))
             else:
                 x0.append(max(r_span_hf / 2, 1e-6))
             lo.append(0.0)
@@ -576,6 +587,39 @@ def _build_library() -> None:
                 semicircle = _parallel(_e("R", "Rct"), _e(cap, "Rct_cap"))
                 tree = _maybe_L(_series(_e("R", "Rs"), semicircle, _e(wb, "Wb")), with_l)
                 disp = f"{'L-' if with_l else ''}Rs(Rct-{cap})-{wb}"
+                _register(CircuitSpec(name, disp, "Supercapacitor (recommended)", tree))
+
+    # --- H2. Two-branch (Zubieta-Bonert) supercapacitor model -------------
+    #        Z = Rs + [C1 || Rleak || (R2-C2 series)]
+    #        Source: L. Zubieta and R. Bonert, "Characterization of
+    #        double-layer capacitors for power electronics applications,"
+    #        IEEE Trans. Ind. Appl., vol. 36, no. 1, pp. 199-205, 2000 --
+    #        the canonical "two-branch" supercapacitor model: a fast/
+    #        immediate branch (C1, the Helmholtz/EDL capacitance) and a
+    #        slow/delayed branch (R2 in series with C2, the diffuse-layer
+    #        capacitance, reached only after charge redistributes through
+    #        R2), both in parallel with a leakage resistance Rleak,
+    #        downstream of the series/solution resistance Rs. Corroborated
+    #        as a standard supercapacitor EIS-equivalent-circuit entry
+    #        (described there as exactly this 5-parameter, 2-capacitor/
+    #        3-resistor structure: ESR + leakage resistance + a diffusion/
+    #        redistribution resistance) by C. Shen, S. Xu, Y. Xie, M.
+    #        Sanghadasa, X. Wang, L. Lin, "A Review of On-Chip Micro
+    #        Supercapacitors for Integrated Self-Powering Systems," J.
+    #        Microelectromech. Syst., vol. 26, pp. 949-965, 2017 (fig. 2e).
+    #        The original Zubieta-Bonert model uses a voltage-dependent
+    #        (nonlinear) C1 for time-domain pulse-response prediction; this
+    #        implementation uses the linearized small-signal form (C1, C2
+    #        each optionally a CPE) appropriate for EIS/CNLS fitting.
+    for c1 in cap_opts:
+        for c2 in cap_opts:
+            for with_l in (False, True):
+                name = f"supercap_twobranch_{c1}{c2}" + ("_L" if with_l else "")
+                fast_branch = _e(c1, "C1")
+                slow_branch = _series(_e("R", "R2"), _e(c2, "C2"))
+                node = _parallel(fast_branch, _e("R", "Rleak"), slow_branch)
+                tree = _maybe_L(_series(_e("R", "Rs"), node), with_l)
+                disp = f"{'L-' if with_l else ''}Rs({c1}||Rleak||(R2-{c2}))  [two-branch]"
                 _register(CircuitSpec(name, disp, "Supercapacitor (recommended)", tree))
 
     # --- G. Gerischer element (mixed ionic/electronic conduction, battery-

@@ -11,7 +11,40 @@ from core import eis_analysis as eis
 
 
 def test_library_has_over_100_circuits():
-    assert len(cl.CIRCUITS) >= 100
+    assert len(cl.CIRCUITS) >= 110
+
+
+def test_two_branch_zubieta_bonert_model_recovers_true_parameters():
+    """The "two-branch" supercapacitor model (Zubieta & Bonert, IEEE Trans.
+    Ind. Appl. 36(1):199-205, 2000; corroborated as a standard EIS-circuit
+    entry by Shen et al., J. Microelectromech. Syst. 26:949-965, 2017):
+    Z = Rs + [C1 || Rleak || (R2-C2 series)] -- a fast/immediate branch
+    (C1) and a slow/delayed branch (R2-C2), both in parallel with a
+    leakage resistance. A physically realistic leakage resistance (kOhm-
+    MOhm range, much larger than Rs/R2) must be recoverable -- this is a
+    regression test for a real convergence failure found during
+    self-consistency testing (Rleak's initial guess was being seeded from
+    the same scale as every other resistor, leaving the optimizer unable
+    to find the correct, much-larger value)."""
+    freq = np.logspace(4, -3, 60)
+    omega = 2 * np.pi * freq
+    spec = cl.get_circuit("supercap_twobranch_CC")
+    true_params = {"Rs": 50.0, "C1": 2e-4, "Rleak": 5000.0, "R2": 50.0, "C2": 2e-4}
+    z_true = cl.evaluate_circuit(spec.tree, omega, true_params)
+
+    result = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag,
+                                         model="supercap_twobranch_CC", multistart=True)
+    assert result.reduced_chi_squared < 1e-6
+    for name, true_val in true_params.items():
+        assert result.params[name] == pytest.approx(true_val, rel=0.01)
+
+
+def test_two_branch_model_all_cpe_variants_registered():
+    for c1 in ("C", "Q"):
+        for c2 in ("C", "Q"):
+            name = f"supercap_twobranch_{c1}{c2}"
+            spec = cl.get_circuit(name)
+            assert spec.category == "Supercapacitor (recommended)"
 
 
 def test_every_circuit_evaluates_to_finite_impedance_and_has_unique_param_names():
@@ -41,15 +74,16 @@ def test_every_circuit_evaluates_to_finite_impedance_and_has_unique_param_names(
 
 
 def test_supercapacitor_category_uses_bounded_warburg_not_semiinfinite():
-    """The dedicated "Supercapacitor (recommended)" category (the standard
-    extended-Randles topology: Rs-(Rct||C or Q)-Wo/Ws, Warburg appended
-    downstream of the semicircle rather than nested inside it) must exist
-    and must only ever use the BOUNDED Warburg elements (Wo/Ws) -- not the
-    plain semi-infinite "W", which cannot reproduce a supercapacitor's
-    near-vertical low-frequency capacitive turn (see circuit_library.py's
-    module docstring)."""
+    """The dedicated "Supercapacitor (recommended)" category holds several
+    distinct standard supercapacitor topologies (the extended-Randles
+    semicircle+Warburg form, and the two-branch Zubieta-Bonert form) --
+    NONE of them may use the plain semi-infinite Warburg "W" (it cannot
+    reproduce a supercapacitor's near-vertical low-frequency capacitive
+    turn, see circuit_library.py's module docstring), though not every
+    entry in the category uses a Warburg element at all (the two-branch
+    model has none)."""
     supercap_specs = [s for s in cl.CIRCUITS.values() if s.category == "Supercapacitor (recommended)"]
-    assert len(supercap_specs) >= 8
+    assert len(supercap_specs) >= 16  # 8 Warburg-based + 8 two-branch
 
     def element_kinds(node):
         if node[0] == "elem":
@@ -59,10 +93,11 @@ def test_supercapacitor_category_uses_bounded_warburg_not_semiinfinite():
             out |= element_kinds(child)
         return out
 
-    for spec in supercap_specs:
-        kinds = element_kinds(spec.tree)
-        assert "W" not in kinds, f"{spec.name}: uses semi-infinite Warburg, should use Wo/Ws"
-        assert kinds & {"Wo", "Ws"}, f"{spec.name}: missing a bounded Warburg element"
+    spec_kinds = {spec.name: element_kinds(spec.tree) for spec in supercap_specs}
+    warburg_based = [name for name, kinds in spec_kinds.items() if kinds & {"Wo", "Ws"}]
+    assert len(warburg_based) >= 8
+    for name, kinds in spec_kinds.items():
+        assert "W" not in kinds, f"{name}: uses semi-infinite Warburg, should use Wo/Ws"
 
 
 def test_multistart_recovers_true_parameters_for_a_previously_hard_case():

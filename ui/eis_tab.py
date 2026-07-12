@@ -172,7 +172,15 @@ class EisTab(QWidget):
         )
         auto_btn.clicked.connect(self.on_auto_fit)
         fit_grid.addWidget(auto_btn, 4, 0, 1, 2)
-        fit_grid.addWidget(theme.make_source_button(self, "Equivalent circuit fit", formula_sources.EIS_CIRCUIT_FIT), 5, 0, 1, 2)
+        clear_btn = QPushButton("Clear results")
+        clear_btn.setToolTip(
+            "Resets the results panel, plot, circuit diagram, and table -- "
+            "so a fresh fit always starts clean and a stale result can't "
+            "get exported or recorded by accident."
+        )
+        clear_btn.clicked.connect(self.on_clear_results)
+        fit_grid.addWidget(clear_btn, 5, 0, 1, 2)
+        fit_grid.addWidget(theme.make_source_button(self, "Equivalent circuit fit", formula_sources.EIS_CIRCUIT_FIT), 6, 0, 1, 2)
         left_layout.addWidget(fit_box)
 
         left_layout.addStretch()
@@ -469,6 +477,21 @@ class EisTab(QWidget):
         idx = self.model_combo.findData(model_name)
         if idx >= 0:
             self.model_combo.setCurrentIndex(idx)
+
+    def on_clear_results(self):
+        # self.table shows the loaded FILE's raw data (unrelated to the fit
+        # result), so it's intentionally left alone here.
+        self.last_result = None
+        self.last_raw_df = None
+        self.results_text.clear()
+        self.plot.clear_plot()
+        self.circuit_diagram.ax.clear()
+        self.circuit_diagram.ax.axis("off")
+        self.circuit_diagram.ax.set_title("Equivalent circuit diagram (fit a circuit to draw it)",
+                                           fontsize=9, color=theme.INK_DIM)
+        self.circuit_diagram.draw()
+        self.export_btn.setEnabled(False)
+        self.export_diagram_btn.setEnabled(False)
 
     def on_fit(self):
         data = self._get_eis_arrays()

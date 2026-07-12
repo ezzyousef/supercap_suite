@@ -245,24 +245,123 @@ circuit dataset with a known true Rs.
 
 ## 6a. Equivalent circuit fitting
 
+`core/circuit_library.py` implements a generic circuit-TREE engine (every
+circuit is a nested `("elem", kind, prefix)` / `("series", [...])` /
+`("parallel", [...])` expression) with ~118 preset circuits across 8
+categories, rather than a fixed handful of named models -- one evaluator
+and one CNLS fitter (`core/eis_analysis.fit_equivalent_circuit`, via
+`scipy.optimize.least_squares` on the stacked real+imaginary residuals)
+works for all of them, which is what lets `auto_fit_equivalent_circuit`
+try every circuit against a spectrum and report a ranked table instead of
+one hand-picked model. Reported per fit: fitted parameters, approximate
+1-sigma standard errors (linearized covariance estimate), reduced
+chi-squared, and explicit warnings when a parameter is pinned at its
+search bound (a strong sign the model doesn't actually need that
+element -- see the Warburg discussion below). Nonlinear least squares can
+still converge to a local minimum; single-circuit fits (not the ~118
+-circuit screening pass) additionally try a few rescaled starting points
+(`multistart=True`) and keep the best, which fixed confirmed local-minimum
+failures in several circuits during self-consistency testing (fitting
+each circuit to its own noise-free synthetic data and checking the true
+parameters are recovered).
+
+Base element impedances (all with per-element sourcing in
+`circuit_library.py`'s own module docstring):
+
 ```
-Z_CPE = 1 / (Q * (j*omega)^n)                       (constant phase element, n=1 -> ideal capacitor)
-Z_Warburg = W / sqrt(j*omega)                         (semi-infinite Warburg diffusion element)
-Randles:          Z = Rs + (Rct || Z_CPE)                            [4 params: Rs, Rct, Q, n]
-Randles+Warburg:  Z = Rs + ((Rct + Z_Warburg) || Z_CPE)               [5 params: Rs, Rct, Q, n, W]
+R:   Z = R
+C:   Z = 1 / (j*omega*C)
+L:   Z = j*omega*L
+Q:   Z = 1 / (Y0*(j*omega)^n)                          CPE, n=1 -> ideal capacitor
+W:   Z = 1 / (Y0*sqrt(j*omega))                        semi-infinite Warburg
+Wo:  Z = coth(B*sqrt(j*omega)) / (Y0*sqrt(j*omega))    bounded Warburg, blocking boundary
+Ws:  Z = tanh(B*sqrt(j*omega)) / (Y0*sqrt(j*omega))    bounded Warburg, transmissive boundary
+T:   de Levie porous-electrode transmission line (single resistance)
+G:   Z = R / sqrt(1 + j*omega*tau)                     Gerischer element
 ```
-Standard textbook equivalent-circuit impedance formulas (not tied to a
-single citable paper -- same "standard-but-uncited" caveat as the base EIS
-capacitance formula). `core/eis_analysis.fit_equivalent_circuit` fits
-these via `scipy.optimize.least_squares` on the stacked real+imaginary
-residuals, reporting fitted parameters, approximate 1-sigma standard
-errors (from a linearized covariance estimate), and reduced chi-squared.
-Nonlinear least squares can converge to a local minimum, especially for
-noisy or sparse spectra -- this implementation does not attempt multi-
-start global optimization, so always inspect the fit-overlay plot, not
-just chi-squared, before trusting a fitted value. Verified against a
-synthetic noisy dataset with known true parameters during testing -- the
-fit recovered Rs, Rct, Q, n to within noise level.
+
+### Named supercapacitor-specific circuits ("Supercapacitor (recommended)" category)
+
+**Simplified Randles cell** -- `Z = Rs + (Rct || CPE)` -- one of the most
+common supercapacitor EIS models (equivalent to this library's
+`randles1_C_none`/`randles1_Q_none`). Sources: Gamry Instruments, "Common
+Equivalent Circuit Models" (gamry.com) explicitly names this the
+"Simplified Randles Cell" and the starting point for more complex models;
+and Nguyen et al., "Modeling supercapacitors with the simplified Randles
+circuit: Analyzing electrochemical behavior through cyclic voltammetry and
+Galvanostatic charge-discharge," J. Energy Storage / ScienceDirect (2024),
+reporting low RMSE fitting real supercapacitor data with exactly this
+model.
+
+**Simple leakage model** -- `Z = Rs + (C || R_EPR)` -- described as "the
+simplest model" (a capacitance with a series ESR and a parallel leakage/
+self-discharge resistance) in C. Shen, S. Xu, Y. Xie, M. Sanghadasa, X.
+Wang, L. Lin, "A Review of On-Chip Micro Supercapacitors for Integrated
+Self-Powering Systems," J. Microelectromech. Syst., vol. 26, pp. 949-965,
+2017 (fig. 2a). Mathematically IDENTICAL to `randles1_C_none` already in
+this library (a resistor in parallel with a capacitor, in series with
+Rs) -- the "R_EPR" (leakage) vs. "Rct" (charge-transfer) naming is a
+difference of PHYSICAL interpretation only, not of the fitted equation, so
+no separate circuit entry was added for it (that would just be the same
+fit under a second name).
+
+**Bounded-Warburg full-spectrum model** -- `Z = Rs + (Rct || C or Q) +
+Wo/Ws` (`supercap_C_Wo`, `supercap_Q_Ws`, etc.) -- the standard extended-
+Randles topology for a supercapacitor's full Nyquist spectrum: a
+resolvable charge-transfer semicircle in series with a BOUNDED Warburg
+appended downstream (not nested inside the semicircle branch). The plain
+semi-infinite Warburg "W" is deliberately not offered in this category: it
+has a fixed 45-degree phase angle all the way to omega->0 and cannot
+reproduce a supercapacitor's near-vertical low-frequency capacitive turn,
+so fitting it against full-spectrum data typically drives it toward its
+lower search bound (reported explicitly via the bound-pinning warning
+above) rather than genuinely fitting. Source: Cruz-Manzo & Greenwood, J.
+Electrochem. Soc., vol. 167, 2020, on the frequency transition from
+diffusion-like to capacitive response in a blocked/bounded-diffusion
+Warburg -- the same low-frequency-divergent behavior as this library's
+"Wo" element.
+
+**Two-branch (Zubieta-Bonert) model** -- `Z = Rs + [C1 || Rleak ||
+(R2-C2 series)]` (`supercap_twobranch_CC`, `_QQ`, `_CQ`, `_QC`) -- a fast/
+immediate branch (C1, the Helmholtz/EDL capacitance) and a slow/delayed
+branch (R2 in series with C2, the diffuse-layer capacitance reached only
+after charge redistributes through R2), both in parallel with a leakage
+resistance Rleak. Source: L. Zubieta and R. Bonert, "Characterization of
+double-layer capacitors for power electronics applications," IEEE Trans.
+Ind. Appl., vol. 36, no. 1, pp. 199-205, 2000 -- the canonical "two-
+branch" supercapacitor model (there, a time-domain model with a
+voltage-dependent C1 for pulse-response prediction; this library uses the
+linearized small-signal form appropriate for EIS/CNLS fitting).
+Corroborated as a standard supercapacitor EIS-circuit entry (described as
+exactly this 5-parameter, 2-capacitor/3-resistor structure) by the same
+Shen et al. 2017 review cited above (fig. 2e). A leakage resistance is
+physically expected to be large (kOhm-MOhm, self-discharge timescales of
+hours-to-days) -- `circuit_library.initial_guess_and_bounds` seeds a
+parameter literally named `Rleak` from a much larger scale than other
+resistors for exactly this reason (confirmed necessary via
+self-consistency testing with a physically realistic Rleak >> Rs/R2).
+
+**Not implemented this pass:**
+- An "EDL capacitance + pseudocapacitance" combined model was investigated
+  (captioned in the same Shen et al. 2017 review, fig. 2c) but the exact
+  branch topology could not be confirmed from the primary source (IEEE
+  Xplore blocked automated access; no accessible mirror had the actual
+  circuit diagram) -- rather than guess at a plausible-looking topology,
+  this was deliberately left out. Revisit if the primary paper's circuit
+  diagram becomes accessible.
+- A two-resistance transmission line (separate electronic resistance Re
+  along the electrode matrix AND ionic resistance Ri along the pore
+  electrolyte, vs. this library's current single-resistance `T` element)
+  is described in the same review's transmission-line panel (fig. 2d) as
+  a more complete de Levie model -- flagged as a possible future
+  enhancement, not implemented (more parameters raises overfitting risk,
+  and the added complexity wasn't clearly justified without the source
+  paper's full derivation).
+- An optional series inductance (attributed to cable inductance,
+  producing a high-frequency inductive loop -- Metrohm/Autolab Application
+  Note AN-EIS-004) is already available as the `with_l` toggle present on
+  essentially every circuit family in this library (not a separate
+  fifth-plus model per topology), so no additional work was needed here.
 
 ## 7. GCD/CV rate capability and retention
 

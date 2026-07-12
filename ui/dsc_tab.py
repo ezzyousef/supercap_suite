@@ -288,9 +288,33 @@ class EnthalpyTool(QWidget):
         if y_guess:
             self.y_combo.setCurrentText(y_guess)
 
+        if self.x_combo.currentIndex() == 0 or self.y_combo.currentIndex() == 0:
+            # Header text didn't match any known alias -- DSC instrument
+            # software (TA, Mettler, Netzsch, ...) all name columns
+            # differently, unlike the fairly standardized EC-Lab exports
+            # the alias list above targets. Fall back to the first two
+            # NUMERIC columns in file order (X, then Y) -- virtually every
+            # DSC export is laid out that way regardless of header text,
+            # so this still gets the user a working plot instead of two
+            # blank "-- select --" combos and a curve that never appears.
+            numeric_cols = [c for c in cols if pd.api.types.is_numeric_dtype(df[c])]
+            if self.x_combo.currentIndex() == 0 and len(numeric_cols) >= 1:
+                self.x_combo.setCurrentText(str(numeric_cols[0]))
+                self.x_type_combo.setCurrentIndex(1 if "temp" in str(numeric_cols[0]).lower() else 0)
+            if self.y_combo.currentIndex() == 0 and len(numeric_cols) >= 2:
+                self.y_combo.setCurrentText(str(numeric_cols[1]))
+
         self.table_model.set_dataframe(df.head(500))
         self.end_spin.setMaximum(max(0, len(df) - 1))
         self.end_spin.setValue(max(0, len(df) - 1))
+
+        # Show the curve immediately, and run auto-peak-detection right
+        # away if columns were resolved (by alias or the fallback above) --
+        # so opening a file visibly "does something" instead of leaving a
+        # blank plot until the user finds and clicks a separate button.
+        if self.x_combo.currentIndex() != 0 and self.y_combo.currentIndex() != 0:
+            self.on_preview()
+            self.on_auto_detect_peak()
 
     def _get_full_time_and_heatflow(self):
         """Time/heat-flow for the WHOLE loaded curve (ignores the peak

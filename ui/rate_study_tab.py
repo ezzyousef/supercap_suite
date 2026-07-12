@@ -173,6 +173,21 @@ def _load_file_for_import(parent, title: str) -> pd.DataFrame | None:
     return df
 
 
+def _guess_scan_rate_from_filename(filename: str) -> float | None:
+    """Best-effort scan-rate parse from a filename like 'cv_10mVs.xlsx' or
+    'sample_0.5V_per_s.csv' -- returns the value in V/s, or None if no
+    recognizable pattern is found. Only ever used as a pre-filled DEFAULT
+    in a dialog the user must confirm/edit, never trusted silently."""
+    import re
+    m = re.search(r"(\d+\.?\d*)\s*m[vV][\s._/-]*s", filename)
+    if m:
+        return float(m.group(1)) / 1000.0
+    m = re.search(r"(\d+\.?\d*)\s*[vV][\s._/-]*s", filename)
+    if m:
+        return float(m.group(1))
+    return None
+
+
 class CvRateTool(QWidget):
     def __init__(self):
         super().__init__()
@@ -190,7 +205,7 @@ class CvRateTool(QWidget):
         left_layout = QVBoxLayout(left)
 
         import_row = QHBoxLayout()
-        import_btn = QPushButton("Import from file…")
+        import_btn = QPushButton("Import from summary file…")
         import_btn.setToolTip(
             "Load scan rate + specific capacitance and/or peak current "
             "from a spreadsheet (one CV-summary sheet with several scan "
@@ -198,11 +213,36 @@ class CvRateTool(QWidget):
         )
         import_btn.clicked.connect(self.on_import_file)
         import_row.addWidget(import_btn)
-        import_row.addWidget(QLabel(
-            "Fills the tables below from a file's columns -- or enter rows manually."
-        ))
-        import_row.addStretch()
         left_layout.addLayout(import_row)
+
+        batch_row = QHBoxLayout()
+        batch_import_btn = QPushButton("Import multiple raw CV files (one per scan rate)…")
+        batch_import_btn.setToolTip(
+            "Select several raw CV data files at once (e.g. one file per "
+            "scan rate). For each file: pick the cycle to use (if it has "
+            "more than one), confirm its scan rate, and this computes "
+            "specific capacitance + peak current directly from the raw "
+            "voltage/current curve and adds one row per file to the "
+            "tables below, labeled by that file's scan rate."
+        )
+        batch_import_btn.clicked.connect(self.on_import_multi_files)
+        batch_row.addWidget(batch_import_btn)
+        left_layout.addLayout(batch_row)
+
+        batch_mass_row = QHBoxLayout()
+        batch_mass_row.addWidget(QLabel("Active mass (for batch raw-file import):"))
+        self.batch_mass_spin = QDoubleSpinBox()
+        self.batch_mass_spin.setDecimals(6)
+        self.batch_mass_spin.setRange(0.000001, 1000)
+        self.batch_mass_spin.setValue(0.005)
+        self.batch_mass_spin.setSuffix(" g")
+        batch_mass_row.addWidget(self.batch_mass_spin)
+        batch_mass_row.addStretch()
+        left_layout.addLayout(batch_mass_row)
+
+        left_layout.addWidget(QLabel(
+            "Fills the tables below from file(s) -- or enter rows manually."
+        ))
 
         entry_box = QGroupBox("1) Enter scan rate + specific capacitance "
                                "per scan rate  — from individual CV analyses")
@@ -388,6 +428,97 @@ class CvRateTool(QWidget):
             "Check that the column-unit dropdowns above each table match "
             "the units your file actually used before running an analysis."
         )
+
+    def on_import_multi_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Import raw CV files (one per scan rate)", "",
+            "Data files (*.xlsx *.xls *.csv *.txt *.mpt *.mpr);;All files (*)"
+        )
+        if not paths:
+            return
+        mass_g = self.batch_mass_spin.value()
+        rate_unit = self.cap_table_rate_unit.currentText()
+
+        cap_rows, peak_rows, failures = [], [], []
+        for path in paths:
+            from pathlib import Path
+            fname = Path(path).name
+            try:
+                df = load_data_file(path, sheet_name=0)
+            except DataLoadError as e:
+                failures.append(f"{fname}: {e}")
+                continue
+            if isinstance(df, dict):
+                df = list(df.values())[0]
+
+            v_col = find_column(df, "ewe_v")
+            a_col = find_column(df, "i_a")
+            i_col = a_col or find_column(df, "i_ma")
+            i_factor = 1.0 if a_col else 1e-3
+            if not v_col or not i_col:
+                failures.append(f"{fname}: could not auto-detect voltage/current columns, skipped")
+                continue
+
+            # Optional per-file cycle selection, for a multi-cycle raw export.
+            sub = df
+            cycle_col = find_column(df, "cycle")
+            if cycle_col:
+                cycle_values = sorted(df[cycle_col].dropna().unique().tolist())
+                if len(cycle_values) > 1:
+                    labels = [f"Cycle {v:g}" if isinstance(v, float) else f"Cycle {v}" for v in cycle_values]
+                    label, ok = QInputDialog.getItem(
+                        self, f"Select cycle — {fname}",
+                        f"'{fname}' has {len(cycle_values)} cycles -- pick one to use:",
+                        labels, 0, False,
+                    )
+                    if not ok:
+                        failures.append(f"{fname}: cycle selection cancelled, skipped")
+                        continue
+                    chosen = cycle_values[labels.index(label)]
+                    sub = df[df[cycle_col] == chosen]
+
+            guessed_rate = _guess_scan_rate_from_filename(fname)
+            default_rate = (unitconv.from_base(guessed_rate, rate_unit, "scan_rate")
+                             if guessed_rate is not None else 10.0)
+            rate_display, ok = QInputDialog.getDouble(
+                self, f"Scan rate — {fname}",
+                f"Scan rate for '{fname}' ({rate_unit}):",
+                default_rate, 0.000001, 1e9, 6,
+            )
+            if not ok:
+                failures.append(f"{fname}: scan rate entry cancelled, skipped")
+                continue
+            rate_base = unitconv.to_base(rate_display, rate_unit, "scan_rate")
+
+            try:
+                v = sub[v_col].astype(float).to_numpy()
+                i_raw = sub[i_col].astype(float).to_numpy()
+            except (ValueError, TypeError):
+                failures.append(f"{fname}: voltage/current columns are not numeric, skipped")
+                continue
+            i_amps = i_raw * i_factor
+
+            try:
+                cap = cv.capacitance_from_cv(v, i_amps, rate_base, mass_g)
+            except ValueError as e:
+                failures.append(f"{fname}: {e}")
+                continue
+            cap_display = unitconv.from_base(cap, self.cap_table_cap_unit.currentText(), "specific_capacitance")
+            cap_rows.append((rate_display, cap_display))
+
+            peak_current_a = float(np.max(np.abs(i_amps)))
+            peak_display = unitconv.from_base(peak_current_a, self.peak_table_current_unit.currentText(), "current")
+            peak_rows.append((rate_display, peak_display))
+
+        if cap_rows:
+            self.cap_table.load_rows(cap_rows, replace=False)
+        if peak_rows:
+            self.peak_table.load_rows(peak_rows, replace=False)
+
+        summary = f"Imported {len(cap_rows)} of {len(paths)} file(s) into the tables below."
+        if failures:
+            summary += "\n\nSkipped:\n" + "\n".join(f"  - {f}" for f in failures)
+        QMessageBox.information(self, "Batch import complete", summary)
 
     def on_trasatti(self):
         pairs = self.cap_table.get_pairs_base(

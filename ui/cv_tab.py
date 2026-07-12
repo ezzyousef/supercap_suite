@@ -108,6 +108,10 @@ class CvTab(QWidget):
         analyze_btn = QPushButton("Analyze CV cycle")
         analyze_btn.clicked.connect(self.on_analyze)
         left_layout.addWidget(analyze_btn)
+        clear_btn = QPushButton("Clear results")
+        clear_btn.setToolTip("Resets the results panel and plot so a stale result can't get exported by accident.")
+        clear_btn.clicked.connect(self.on_clear_results)
+        left_layout.addWidget(clear_btn)
         left_layout.addWidget(theme.make_source_button(
             self, "CV specific capacitance / capacity", formula_sources.CV_CAPACITANCE
         ))
@@ -244,6 +248,15 @@ class CvTab(QWidget):
         v, i = cyc
         self.plot.plot_xy(v, i, xlabel="Potential (V)", ylabel="Current (A)",
                            title="CV cycle preview")
+
+    def on_clear_results(self):
+        # self.table shows the loaded FILE's raw data (unrelated to the
+        # analysis result), so it's intentionally left alone here.
+        self.last_result = None
+        self.last_raw_df = None
+        self.results_text.clear()
+        self.plot.clear_plot()
+        self.export_btn.setEnabled(False)
 
     def on_analyze(self):
         cyc = self._get_cycle()
