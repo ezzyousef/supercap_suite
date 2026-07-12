@@ -25,7 +25,11 @@ from core import cv_analysis as cv
 from core import gcd_analysis as gcd
 from core import dunn_method as dunn
 from core import trasatti_method as trasatti
-from .widgets import PlotWidget, DataFrameModel, make_table_view, make_export_button, RecordLogPanel
+from core import units as unitconv
+from .widgets import (
+    PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
+    make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
+)
 from . import theme, formula_sources
 
 
@@ -40,15 +44,25 @@ class RateStudyTab(QWidget):
 
 
 class _EditableTable(QTableWidget):
-    """Small helper: a 2-column editable table for manual (x, y) entry."""
-    def __init__(self, col1, col2, rows=8):
+    """Small helper: a 2-column editable table for manual (x, y) entry.
+
+    `col1_category`/`col2_category` (core.units category names, or None)
+    let a caller apply a SINGLE whole-column unit conversion via
+    `get_pairs_base()` -- one dropdown above the table per column, not one
+    per cell/row, since a whole table of manually-entered values is
+    overwhelmingly likely to already be in one consistent unit.
+    """
+    def __init__(self, col1, col2, rows=8, col1_category=None, col2_category=None):
         super().__init__(rows, 2)
         self.setHorizontalHeaderLabels([col1, col2])
+        self.col1_category = col1_category
+        self.col2_category = col2_category
         for r in range(rows):
             for c in range(2):
                 self.setItem(r, c, QTableWidgetItem(""))
 
     def get_pairs(self):
+        """Raw (unconverted) numeric pairs, exactly as typed."""
         pairs = []
         for r in range(self.rowCount()):
             a = self.item(r, 0)
@@ -62,6 +76,18 @@ class _EditableTable(QTableWidget):
                 pairs.append((float(a_txt), float(b_txt)))
             except ValueError:
                 continue
+        return pairs
+
+    def get_pairs_base(self, col1_unit: str | None = None, col2_unit: str | None = None):
+        """Like get_pairs(), but converts each column to its core.units
+        base unit using the ONE unit selected for that whole column
+        (col1_unit/col2_unit -- typically read from a combo box above the
+        table). A column with no category/unit given is left as-is."""
+        pairs = self.get_pairs()
+        if col1_unit and self.col1_category:
+            pairs = [(unitconv.to_base(a, col1_unit, self.col1_category), b) for a, b in pairs]
+        if col2_unit and self.col2_category:
+            pairs = [(a, unitconv.to_base(b, col2_unit, self.col2_category)) for a, b in pairs]
         return pairs
 
     def add_row(self):
@@ -84,19 +110,47 @@ class CvRateTool(QWidget):
         left = QWidget()
         left_layout = QVBoxLayout(left)
 
-        entry_box = QGroupBox("1) Enter scan rate (V/s) + specific capacitance (F/g) "
+        entry_box = QGroupBox("1) Enter scan rate + specific capacitance "
                                "per scan rate  — from individual CV analyses")
         entry_layout = QVBoxLayout(entry_box)
-        self.cap_table = _EditableTable("Scan rate (V/s)", "Capacitance (F/g)")
+        entry_unit_row = QHBoxLayout()
+        entry_unit_row.addWidget(QLabel("Column units — scan rate:"))
+        self.cap_table_rate_unit = QComboBox()
+        self.cap_table_rate_unit.addItems(unitconv.units_for("scan_rate"))
+        self.cap_table_rate_unit.setCurrentText("V/s")
+        entry_unit_row.addWidget(self.cap_table_rate_unit)
+        entry_unit_row.addWidget(QLabel("capacitance:"))
+        self.cap_table_cap_unit = QComboBox()
+        self.cap_table_cap_unit.addItems(unitconv.units_for("specific_capacitance"))
+        self.cap_table_cap_unit.setCurrentText("F/g")
+        entry_unit_row.addWidget(self.cap_table_cap_unit)
+        entry_unit_row.addStretch()
+        entry_layout.addLayout(entry_unit_row)
+        self.cap_table = _EditableTable("Scan rate", "Capacitance",
+                                         col1_category="scan_rate", col2_category="specific_capacitance")
         entry_layout.addWidget(self.cap_table)
         add_row_btn = QPushButton("Add row")
         add_row_btn.clicked.connect(self.cap_table.add_row)
         entry_layout.addWidget(add_row_btn)
         left_layout.addWidget(entry_box)
 
-        peak_box = QGroupBox("2) (Optional) Enter scan rate + peak current (A) for b-value / Randles-Sevcik")
+        peak_box = QGroupBox("2) (Optional) Enter scan rate + peak current for b-value / Randles-Sevcik")
         peak_layout = QVBoxLayout(peak_box)
-        self.peak_table = _EditableTable("Scan rate (V/s)", "Peak current (A)")
+        peak_unit_row = QHBoxLayout()
+        peak_unit_row.addWidget(QLabel("Column units — scan rate:"))
+        self.peak_table_rate_unit = QComboBox()
+        self.peak_table_rate_unit.addItems(unitconv.units_for("scan_rate"))
+        self.peak_table_rate_unit.setCurrentText("V/s")
+        peak_unit_row.addWidget(self.peak_table_rate_unit)
+        peak_unit_row.addWidget(QLabel("peak current:"))
+        self.peak_table_current_unit = QComboBox()
+        self.peak_table_current_unit.addItems(unitconv.units_for("current"))
+        self.peak_table_current_unit.setCurrentText("A")
+        peak_unit_row.addWidget(self.peak_table_current_unit)
+        peak_unit_row.addStretch()
+        peak_layout.addLayout(peak_unit_row)
+        self.peak_table = _EditableTable("Scan rate", "Peak current",
+                                          col1_category="scan_rate", col2_category="current")
         peak_layout.addWidget(self.peak_table)
         add_row_btn2 = QPushButton("Add row")
         add_row_btn2.clicked.connect(self.peak_table.add_row)
@@ -160,11 +214,17 @@ class CvRateTool(QWidget):
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        self.plot = PlotWidget()
-        right_layout.addWidget(self.plot, stretch=2)
+        self.plot = PlotPanel()
         self.results_text = QTextEdit()
         self.results_text.setReadOnly(True)
-        right_layout.addWidget(self.results_text, stretch=1)
+
+        results_splitter = make_resizable_results_panel(self.plot, self.results_text, sizes=[320, 220])
+        right_layout.addWidget(results_splitter, stretch=1)
+
+        maximize_row = QHBoxLayout()
+        maximize_row.addStretch()
+        maximize_row.addWidget(make_maximize_results_button(splitter))
+        right_layout.addLayout(maximize_row)
 
         self.export_btn = make_export_button(
             self, "Rate study", lambda: self.last_result, lambda: self.last_raw_df,
@@ -178,9 +238,12 @@ class CvRateTool(QWidget):
 
         splitter.addWidget(right)
         splitter.setSizes([420, 700])
+        configure_collapsible_main_splitter(splitter)
 
     def on_trasatti(self):
-        pairs = self.cap_table.get_pairs()
+        pairs = self.cap_table.get_pairs_base(
+            self.cap_table_rate_unit.currentText(), self.cap_table_cap_unit.currentText()
+        )
         if len(pairs) < 3:
             QMessageBox.warning(self, "Not enough data", "Enter at least 3 (scan rate, capacitance) rows.")
             return
@@ -231,7 +294,9 @@ class CvRateTool(QWidget):
         self.export_btn.setEnabled(True)
 
     def on_bvalue(self):
-        pairs = self.peak_table.get_pairs()
+        pairs = self.peak_table.get_pairs_base(
+            self.peak_table_rate_unit.currentText(), self.peak_table_current_unit.currentText()
+        )
         if len(pairs) < 2:
             QMessageBox.warning(self, "Not enough data", "Enter at least 2 (scan rate, peak current) rows "
                                  "(3+ recommended).")
@@ -278,7 +343,9 @@ class CvRateTool(QWidget):
         self.export_btn.setEnabled(True)
 
     def on_randles_sevcik(self):
-        pairs = self.peak_table.get_pairs()
+        pairs = self.peak_table.get_pairs_base(
+            self.peak_table_rate_unit.currentText(), self.peak_table_current_unit.currentText()
+        )
         if len(pairs) < 3:
             QMessageBox.warning(self, "Not enough data", "Enter at least 3 (scan rate, peak current) rows "
                                  "in the table above.")
@@ -443,12 +510,18 @@ class GcdRateTool(QWidget):
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        self.plot = PlotWidget()
-        right_layout.addWidget(self.plot, stretch=2)
+        self.plot = PlotPanel()
         self.table = make_table_view()
         self.table_model = DataFrameModel()
         self.table.setModel(self.table_model)
-        right_layout.addWidget(self.table, stretch=1)
+
+        results_splitter = make_resizable_results_panel(self.plot, self.table, sizes=[380, 220])
+        right_layout.addWidget(results_splitter, stretch=1)
+
+        maximize_row = QHBoxLayout()
+        maximize_row.addStretch()
+        maximize_row.addWidget(make_maximize_results_button(splitter))
+        right_layout.addLayout(maximize_row)
 
         self.export_btn = make_export_button(
             self, "GCD rate study", lambda: self.last_result, lambda: self.last_result_df,
@@ -462,6 +535,7 @@ class GcdRateTool(QWidget):
 
         splitter.addWidget(right)
         splitter.setSizes([420, 700])
+        configure_collapsible_main_splitter(splitter)
 
     def on_open_file(self):
         path, _ = QFileDialog.getOpenFileName(

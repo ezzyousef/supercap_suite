@@ -193,6 +193,16 @@ _ELEMENT_PARAMS = {
 }
 
 
+def element_param_names(kind: str, prefix: str) -> list[str]:
+    """Public accessor for the ordered parameter names belonging to ONE
+    element instance (kind + prefix) -- e.g. element_param_names("Q",
+    "Rct_cap") -> ["Rct_cap_Y0", "Rct_cap_n"]. Used by the schematic
+    diagram renderer (ui/circuit_diagram.py) to label each drawn symbol
+    with just its own fitted values, without reaching into this module's
+    private _ELEMENT_PARAMS table directly."""
+    return [f"{prefix}{suffix}" for suffix, _ in _ELEMENT_PARAMS[kind]]
+
+
 def evaluate_circuit(tree, omega: np.ndarray, params: dict) -> np.ndarray:
     """Recursively evaluate a circuit tree's complex impedance at each
     angular frequency in `omega`, given a flat {param_name: value} dict."""

@@ -16,6 +16,7 @@ from core import cv_analysis as cv
 from core import eis_analysis as eis
 from core import dsc_analysis as dsc
 from .widgets import make_export_button, RecordLogPanel
+from .unit_widgets import CompoundRateSpinBox
 from . import theme, formula_sources
 
 
@@ -172,7 +173,8 @@ class CvCalculator(QWidget):
         self.method_combo.currentIndexChanged.connect(self._toggle_fields)
 
         self.current = _spin(6, 0, 1000, 0.005, " A")
-        self.scan_rate = _spin(6, 0.0000001, 100, 0.05, " V/s")
+        self.scan_rate = CompoundRateSpinBox(numerator_value=50.0, numerator_unit="mV",
+                                              denominator_value=1.0, denominator_unit="s")
         self.dv = _spin(4, 0.0001, 100, 1.0, " V")
         self.mass = _spin(6, 0.000001, 1000, 0.005, " g")
         self.enclosed_area = _spin(6, 0, 1e9, 0.01, " A·V (∮I dV, enclosed loop area)")
@@ -219,12 +221,12 @@ class CvCalculator(QWidget):
     def on_calculate(self):
         try:
             if self.method_combo.currentIndex() == 0:
-                c = cv.capacitance_from_cv_direct(self.current.value(), self.mass.value(), self.scan_rate.value())
+                c = cv.capacitance_from_cv_direct(self.current.value(), self.mass.value(), self.scan_rate.value_base())
                 formula = "C_s = I / (m × ν)"
             else:
-                if self.mass.value() <= 0 or self.scan_rate.value() <= 0 or self.dv.value() <= 0:
+                if self.mass.value() <= 0 or self.scan_rate.value_base() <= 0 or self.dv.value() <= 0:
                     raise ValueError("mass, scan rate, and ΔV must all be positive")
-                c = self.enclosed_area.value() / (2.0 * self.mass.value() * self.scan_rate.value() * self.dv.value())
+                c = self.enclosed_area.value() / (2.0 * self.mass.value() * self.scan_rate.value_base() * self.dv.value())
                 formula = "C_s = ∮I dV / (2 × m × ν × ΔV)"
         except (ValueError, ZeroDivisionError) as e:
             QMessageBox.critical(self, "Calculation error", str(e))
@@ -239,7 +241,7 @@ class CvCalculator(QWidget):
         )
         self.last_result = {
             "Formula used": formula,
-            "Scan rate ν (V/s)": self.scan_rate.value(),
+            "Scan rate ν (V/s)": self.scan_rate.value_base(),
             "Potential window ΔV (V)": self.dv.value(),
             "Active mass m (g)": self.mass.value(),
             "Specific capacitance C_s (F/g)": c,

@@ -14,7 +14,11 @@ from PySide6.QtCore import Qt
 from core.data_io import load_data_file, list_excel_sheets, find_column, DataLoadError
 from core import eis_analysis as eis
 from core import circuit_library as circuits
-from .widgets import PlotWidget, DataFrameModel, make_table_view, make_export_button, RecordLogPanel
+from .widgets import (
+    PlotWidget, PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
+    make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
+)
+from .circuit_diagram import draw_circuit
 from . import theme, formula_sources
 
 
@@ -148,16 +152,33 @@ class EisTab(QWidget):
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        self.plot = PlotWidget()
-        right_layout.addWidget(self.plot, stretch=2)
+
+        self.plot = PlotPanel()
+        self.circuit_diagram = PlotWidget(figsize=(5, 2.6))
+        self.circuit_diagram.ax.axis("off")
+        self.circuit_diagram.ax.set_title("Equivalent circuit diagram (fit a circuit to draw it)",
+                                           fontsize=9, color=theme.INK_DIM)
+        self.circuit_diagram.draw()
         self.results_text = QTextEdit()
         self.results_text.setReadOnly(True)
-        self.results_text.setMaximumHeight(200)
-        right_layout.addWidget(self.results_text)
         self.table = make_table_view()
         self.table_model = DataFrameModel()
         self.table.setModel(self.table_model)
-        right_layout.addWidget(self.table, stretch=1)
+
+        results_splitter = make_resizable_results_panel(
+            self.plot, self.circuit_diagram, self.results_text, self.table,
+            sizes=[320, 200, 160, 160],
+        )
+        right_layout.addWidget(results_splitter, stretch=1)
+
+        diagram_export_row = QHBoxLayout()
+        self.export_diagram_btn = QPushButton("Export circuit diagram as image…")
+        self.export_diagram_btn.setEnabled(False)
+        self.export_diagram_btn.clicked.connect(self.on_export_diagram)
+        diagram_export_row.addWidget(self.export_diagram_btn)
+        diagram_export_row.addWidget(make_maximize_results_button(splitter))
+        diagram_export_row.addStretch()
+        right_layout.addLayout(diagram_export_row)
 
         self.export_btn = make_export_button(
             self, "EIS", lambda: self.last_result, lambda: self.last_raw_df,
@@ -171,6 +192,7 @@ class EisTab(QWidget):
 
         splitter.addWidget(right)
         splitter.setSizes([420, 700])
+        configure_collapsible_main_splitter(splitter)
 
     # -------------------------------------------------------------- events
     def on_open_file(self):
@@ -464,3 +486,22 @@ class EisTab(QWidget):
                 self.last_result[f"{name} (± error)"] = err
         self.last_raw_df = pd.DataFrame({"frequency_hz": freq, "z_re_ohm": zre, "z_im_ohm": zim})
         self.export_btn.setEnabled(True)
+
+        spec = circuits.get_circuit(result.model)
+        draw_circuit(self.circuit_diagram.fig, spec, params=result.params)
+        self.circuit_diagram.draw()
+        self.export_diagram_btn.setEnabled(True)
+
+    def on_export_diagram(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save circuit diagram as image", "equivalent_circuit.png",
+            "PNG image (*.png);;PDF document (*.pdf);;SVG image (*.svg)"
+        )
+        if not path:
+            return
+        try:
+            self.circuit_diagram.fig.savefig(path, dpi=200, facecolor=self.circuit_diagram.fig.get_facecolor())
+        except Exception as e:
+            QMessageBox.critical(self, "Export failed", f"Could not save image:\n{e}")
+            return
+        QMessageBox.information(self, "Exported", f"Circuit diagram saved to:\n{path}")

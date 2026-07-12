@@ -12,7 +12,11 @@ from PySide6.QtCore import Qt
 
 from core.data_io import load_data_file, list_excel_sheets, find_column, DataLoadError
 from core import cv_analysis as cv
-from .widgets import PlotWidget, DataFrameModel, make_table_view, make_export_button, RecordLogPanel
+from .widgets import (
+    PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
+    make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
+)
+from .unit_widgets import CompoundRateSpinBox
 from . import theme, formula_sources
 
 
@@ -76,11 +80,8 @@ class CvTab(QWidget):
         param_grid = QGridLayout(param_box)
         self.current_unit_combo = QComboBox()
         self.current_unit_combo.addItems(["A", "mA", "µA"])
-        self.scan_rate_spin = QDoubleSpinBox()
-        self.scan_rate_spin.setDecimals(6)
-        self.scan_rate_spin.setRange(0.0000001, 100)
-        self.scan_rate_spin.setValue(0.01)
-        self.scan_rate_spin.setSuffix(" V/s")
+        self.scan_rate_spin = CompoundRateSpinBox(numerator_value=10.0, numerator_unit="mV",
+                                                    denominator_value=1.0, denominator_unit="s")
         self.mass_spin = QDoubleSpinBox()
         self.mass_spin.setDecimals(6)
         self.mass_spin.setRange(0.000001, 1000)
@@ -119,16 +120,20 @@ class CvTab(QWidget):
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        self.plot = PlotWidget()
-        right_layout.addWidget(self.plot, stretch=2)
+        self.plot = PlotPanel()
         self.results_text = QTextEdit()
         self.results_text.setReadOnly(True)
-        self.results_text.setMaximumHeight(180)
-        right_layout.addWidget(self.results_text)
         self.table = make_table_view()
         self.table_model = DataFrameModel()
         self.table.setModel(self.table_model)
-        right_layout.addWidget(self.table, stretch=1)
+
+        results_splitter = make_resizable_results_panel(self.plot, self.results_text, self.table)
+        right_layout.addWidget(results_splitter, stretch=1)
+
+        maximize_row = QHBoxLayout()
+        maximize_row.addStretch()
+        maximize_row.addWidget(make_maximize_results_button(splitter))
+        right_layout.addLayout(maximize_row)
 
         self.export_btn = make_export_button(
             self, "CV", lambda: self.last_result, lambda: self.last_raw_df,
@@ -142,6 +147,7 @@ class CvTab(QWidget):
 
         splitter.addWidget(right)
         splitter.setSizes([380, 700])
+        configure_collapsible_main_splitter(splitter)
 
     # -------------------------------------------------------------- events
     def on_open_file(self):
@@ -245,7 +251,7 @@ class CvTab(QWidget):
             return
         v, i = cyc
         mass_g = self.mass_spin.value()
-        scan_rate = self.scan_rate_spin.value()
+        scan_rate = self.scan_rate_spin.value_base()
 
         try:
             if self.report_combo.currentIndex() == 0:

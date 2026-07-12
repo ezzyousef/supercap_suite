@@ -6,9 +6,10 @@ from PySide6.QtCore import Qt, QAbstractTableModel
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QTableView, QPushButton, QFileDialog, QInputDialog, QMessageBox, QLineEdit,
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox, QSplitter
 )
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from matplotlib.figure import Figure
 
 from core import export_io
@@ -78,6 +79,40 @@ class PlotWidget(FigureCanvas):
         self.draw()
 
 
+class PlotPanel(QWidget):
+    """A PlotWidget with matplotlib's built-in navigation toolbar attached
+    above it -- gives every plot in the app box-select zoom (the magnifying
+    -glass "Zoom to rectangle" tool: drag a box over any region, e.g. the
+    high-frequency arc of a Nyquist plot, to zoom into exactly that area),
+    click-drag panning, scroll/toolbar zoom in/out, a Home button to reset
+    to the full-data view, Back/Forward through the zoom history, and a
+    Save-image button -- rather than a hand-rolled rubber-band selector.
+
+    Exposes the same `ax` / `fig` / `draw()` / `plot_xy()` /
+    `plot_raw_and_fit()` / `clear_plot()` surface as PlotWidget itself via
+    attribute delegation to the wrapped canvas, so every existing call
+    site (`self.plot.ax.clear()`, `self.plot.draw()`, `self.plot.plot_xy(
+    ...)`) keeps working unchanged -- only the constructor call
+    (`PlotWidget()` -> `PlotPanel()`) needs to change.
+    """
+
+    def __init__(self, parent=None, figsize=(5, 4)):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.canvas = PlotWidget(figsize=figsize)
+        self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        layout.addWidget(self.toolbar)
+        layout.addWidget(self.canvas)
+
+    def __getattr__(self, name):
+        # Only reached for attributes not found on PlotPanel/QWidget itself
+        # (e.g. ax, fig, draw, plot_xy, plot_raw_and_fit, clear_plot) --
+        # forward them to the wrapped canvas.
+        return getattr(self.canvas, name)
+
+
 class DataFrameModel(QAbstractTableModel):
     def __init__(self, df=None):
         super().__init__()
@@ -116,6 +151,62 @@ def make_table_view() -> QTableView:
     tv.setFont(QFont("Consolas", 10))
     tv.horizontalHeader().setStretchLastSection(False)
     return tv
+
+
+def make_resizable_results_panel(*widgets, sizes: list[int] | None = None) -> QSplitter:
+    """Vertical splitter for a tab's plot/results-text/table stack, in
+    place of a fixed-ratio QVBoxLayout -- lets the user drag to give the
+    plot more room at the table's expense (or vice versa) instead of
+    living with a hardcoded stretch ratio. Pass only the widgets a given
+    tab actually has (e.g. some tabs have no table); None entries are
+    skipped so callers can write `make_resizable_results_panel(self.plot,
+    self.results_text, getattr(self, "table", None))` without an if-chain.
+    """
+    splitter = QSplitter(Qt.Orientation.Vertical)
+    real_widgets = [w for w in widgets if w is not None]
+    for w in real_widgets:
+        splitter.addWidget(w)
+    splitter.setSizes(sizes if sizes else [280, 140, 160][:len(real_widgets)])
+    return splitter
+
+
+def configure_collapsible_main_splitter(splitter: QSplitter) -> None:
+    """Standard config for a tab's main left(settings)/right(results)
+    QSplitter: the LEFT pane can be dragged closed to give the results/
+    plot area the full width (a real "hide the settings panel" gesture),
+    while the RIGHT pane never collapses to zero -- hiding results/plots
+    entirely isn't a useful state, only shrinking the settings panel is.
+    """
+    splitter.setCollapsible(0, True)
+    splitter.setCollapsible(1, False)
+
+
+def make_maximize_results_button(main_splitter: QSplitter) -> QPushButton:
+    """A "⇔ Maximize results" toggle: collapses `main_splitter`'s
+    LEFT (settings) pane to width 0 on click, and restores it to its
+    previous width on a second click -- a one-click, discoverable
+    alternative to dragging the splitter handle to the edge (which
+    already works via configure_collapsible_main_splitter's
+    setCollapsible(0, True), this is just a shortcut for the same thing).
+    """
+    btn = QPushButton("⇔ Maximize results")
+    state = {"collapsed": False, "prev_sizes": None}
+
+    def _toggle():
+        sizes = main_splitter.sizes()
+        if not state["collapsed"]:
+            state["prev_sizes"] = sizes
+            main_splitter.setSizes([0, sum(sizes)])
+            btn.setText("⇔ Restore panel")
+            state["collapsed"] = True
+        else:
+            if state["prev_sizes"] and sum(state["prev_sizes"]) > 0:
+                main_splitter.setSizes(state["prev_sizes"])
+            btn.setText("⇔ Maximize results")
+            state["collapsed"] = False
+
+    btn.clicked.connect(_toggle)
+    return btn
 
 
 class ExportButtonPair(QWidget):

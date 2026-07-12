@@ -70,6 +70,15 @@ def load_data_file(path: str, sheet_name=0) -> pd.DataFrame:
     if suffix in (".xlsx", ".xls"):
         try:
             return pd.read_excel(p, sheet_name=sheet_name)
+        except ImportError as e:
+            missing = "xlrd" if suffix == ".xls" else "openpyxl"
+            raise DataLoadError(
+                f"Could not read '{p.name}': the '{missing}' package (needed to read "
+                f"legacy .xls files) is not installed in this environment. This is a "
+                f"packaging issue, not a problem with your file -- if you're running "
+                f"this app from source, run `pip install {missing}`; if you're using "
+                f"the packaged .exe, this shouldn't happen -- please report it."
+            ) from e
         except Exception as e:
             raise DataLoadError(f"Could not read Excel file '{p.name}': {e}") from e
 

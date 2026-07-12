@@ -12,7 +12,10 @@ from PySide6.QtCore import Qt
 
 from core.data_io import load_data_file, list_excel_sheets, find_column, DataLoadError
 from core import gcd_analysis as gcd
-from .widgets import PlotWidget, DataFrameModel, make_table_view, make_export_button, RecordLogPanel
+from .widgets import (
+    PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
+    make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
+)
 from . import theme, formula_sources
 
 
@@ -179,18 +182,22 @@ class GcdTab(QWidget):
         # --- Right: plot + results ---
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        self.plot = PlotWidget()
-        right_layout.addWidget(self.plot, stretch=2)
+        self.plot = PlotPanel()
 
         self.results_text = QTextEdit()
         self.results_text.setReadOnly(True)
-        self.results_text.setMaximumHeight(220)
-        right_layout.addWidget(self.results_text)
 
         self.table = make_table_view()
         self.table_model = DataFrameModel()
         self.table.setModel(self.table_model)
-        right_layout.addWidget(self.table, stretch=1)
+
+        results_splitter = make_resizable_results_panel(self.plot, self.results_text, self.table)
+        right_layout.addWidget(results_splitter, stretch=1)
+
+        maximize_row = QHBoxLayout()
+        maximize_row.addStretch()
+        maximize_row.addWidget(make_maximize_results_button(splitter))
+        right_layout.addLayout(maximize_row)
 
         self.export_btn = make_export_button(
             self, "GCD", lambda: self.last_result, lambda: self.last_raw_df,
@@ -204,6 +211,7 @@ class GcdTab(QWidget):
 
         splitter.addWidget(right)
         splitter.setSizes([380, 700])
+        configure_collapsible_main_splitter(splitter)
 
     def _update_mass_basis_label(self):
         idx = self.config_combo.currentIndex()
