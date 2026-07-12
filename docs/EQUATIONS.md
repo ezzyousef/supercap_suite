@@ -247,7 +247,7 @@ circuit dataset with a known true Rs.
 
 `core/circuit_library.py` implements a generic circuit-TREE engine (every
 circuit is a nested `("elem", kind, prefix)` / `("series", [...])` /
-`("parallel", [...])` expression) with ~118 preset circuits across 8
+`("parallel", [...])` expression) with ~122 preset circuits across 8
 categories, rather than a fixed handful of named models -- one evaluator
 and one CNLS fitter (`core/eis_analysis.fit_equivalent_circuit`, via
 `scipy.optimize.least_squares` on the stacked real+imaginary residuals)
@@ -258,7 +258,7 @@ one hand-picked model. Reported per fit: fitted parameters, approximate
 chi-squared, and explicit warnings when a parameter is pinned at its
 search bound (a strong sign the model doesn't actually need that
 element -- see the Warburg discussion below). Nonlinear least squares can
-still converge to a local minimum; single-circuit fits (not the ~118
+still converge to a local minimum; single-circuit fits (not the ~122
 -circuit screening pass) additionally try a few rescaled starting points
 (`multistart=True`) and keep the best, which fixed confirmed local-minimum
 failures in several circuits during self-consistency testing (fitting
@@ -340,6 +340,57 @@ hours-to-days) -- `circuit_library.initial_guess_and_bounds` seeds a
 parameter literally named `Rleak` from a much larger scale than other
 resistors for exactly this reason (confirmed necessary via
 self-consistency testing with a physically realistic Rleak >> Rs/R2).
+
+**BioLogic Application Note #34 full-spectrum model** -- `Z = L + Rs +
+[C2 || (R2-M2)]` (`supercap_an34_C`, `supercap_an34_Q`, and their `_L`
+variants) -- BioLogic's own worked example for fitting a REAL commercial
+supercapacitor's full-spectrum EIS data. Source: BioLogic, EC-Lab
+Application Note #34, "Supercapacitors Investigations Part II: Time
+Constant" (2010, rev. 2019) -- fits a 22 F commercial supercapacitor,
+explicitly presented as the circuit needed once a plain series R+C model
+stops working above ~1 Hz (the Nyquist trace's phase shifts from
+45 degrees toward 90 degrees there); reports R1=31.61 mOhm, L1=98.45 nH,
+C2=15.59 mF, R2=4.23 mOhm, Rd2=37.89 mOhm, taud2=1.044 s as the fitted
+result for their example cell. Two PARALLEL current paths after Rs+L: a
+purely capacitive double-layer path (C2 alone, no series resistance) and
+a resistive-then-diffusive Faradaic/charge-transfer path (R2 in series
+with the restricted-diffusion element) -- the mirror image of this
+library's other semicircle+Warburg entries, which put the bare RESISTOR
+(not the bare capacitor) in its own branch. `test_circuit_library.py`
+verifies this circuit recovers BioLogic's own reported values exactly
+(not just a synthetic parameter draw).
+
+**Cross-validation against EC-Lab's own element library:** EC-Lab's ZFit
+module documents 13 element types (EC-Lab software Analysis and Data
+Process manual, section 4.3.1.1.4). Directly comparing formulas: EC-Lab's
+"M" (restricted linear diffusion, `Z = Rd*coth(sqrt(td*jw))/sqrt(td*jw)`)
+is IDENTICAL to this library's "Wo"; EC-Lab's "Wd" (diffusion convection/
+Nernst, `Z = Rd*tanh(sqrt(td*jw))/sqrt(td*jw)`) is identical to this
+library's "Ws"; EC-Lab's "W", "G", "R", "C", "L", "Q" all match this
+library's elements of the same name exactly. This is independent
+confirmation (beyond the physical-reasoning and asymptotic-limit checks
+already documented above) that this library's Warburg/Gerischer element
+conventions are correct.
+
+EC-Lab also documents several element types this library does NOT
+implement, found during the same cross-check -- noted here rather than
+silently omitted:
+- `La` (modified inductor, `Z = L*(jw)^a`) and `Winf` (an RDE/rotating-
+  disk convective-diffusion element, `Z = Rd*sqrt(g^2+td*jw)/(g+td*jw)`) --
+  both low relevance to supercapacitor characterization specifically
+  (unusual-lead-inductance and rotating-disk-electrode use cases).
+- `Ma` (modified restricted diffusion, `Z = R*coth((t*jw)^(a/2))/
+  (t*jw)^(a/2)`) -- a genuinely useful CPE-style generalization of this
+  library's "Wo" (fixed exponent 1/2 -> variable exponent a/2), directly
+  relevant to real porous supercapacitor electrodes with a distribution of
+  pore relaxation times rather than one sharp time constant -- a
+  reasonable candidate for a future addition, not implemented this pass.
+- `Mg` (Bisquert/anomalous diffusion) and `Ga`/`Gb` (two different
+  generalizations of the Gerischer element with a variable exponent) --
+  more specialized elements (mesoporous semiconductor films,
+  dye-sensitized solar cells for Mg; non-ideal Faradaic/chemical
+  relaxation for Ga/Gb), lower priority for this app's supercapacitor/DSC
+  focus, not implemented this pass.
 
 **Not implemented this pass:**
 - An "EDL capacitance + pseudocapacitance" combined model was investigated

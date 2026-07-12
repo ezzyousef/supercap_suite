@@ -622,6 +622,34 @@ def _build_library() -> None:
                 disp = f"{'L-' if with_l else ''}Rs({c1}||Rleak||(R2-{c2}))  [two-branch]"
                 _register(CircuitSpec(name, disp, "Supercapacitor (recommended)", tree))
 
+    # --- H3. BioLogic Application Note #34 full-spectrum model -------------
+    #        Z = L + Rs + [C2 || (R2-M2)]   (M2 = restricted/bounded
+    #        diffusion, i.e. this library's "Wo" -- confirmed identical
+    #        formula to EC-Lab's own "M" element, cross-checked directly
+    #        against BioLogic's EC-Lab software manual)
+    #        Source: BioLogic, EC-Lab Application Note #34, "Supercapacitors
+    #        Investigations Part II: Time Constant" (2010, rev. 2019) --
+    #        BioLogic's own worked example fitting a REAL commercial 22 F
+    #        supercapacitor's full-spectrum EIS data, explicitly presented
+    #        as the circuit needed once a plain series R+C model stops
+    #        working above ~1 Hz (where the Nyquist trace's phase shifts
+    #        from 45 degrees toward 90 degrees). Reported fitted result:
+    #        R1=31.61 mOhm, L1=98.45 nH, C2=15.59 mF, R2=4.23 mOhm,
+    #        Rd2=37.89 mOhm, taud2=1.044 s. Two PARALLEL current paths
+    #        after Rs+L: a purely capacitive double-layer path (C2 alone,
+    #        no series resistance) and a resistive-then-diffusive Faradaic/
+    #        charge-transfer path (R2 in series with the restricted-
+    #        diffusion element) -- the mirror image of this library's other
+    #        semicircle+Warburg entries, which put the bare RESISTOR (not
+    #        the bare capacitor) in its own branch.
+    for cap in cap_opts:
+        for with_l in (False, True):
+            name = f"supercap_an34_{cap}" + ("_L" if with_l else "")
+            branch = _parallel(_e(cap, "C2"), _series(_e("R", "R2"), _e("Wo", "M2")))
+            tree = _maybe_L(_series(_e("R", "Rs"), branch), with_l)
+            disp = f"{'L-' if with_l else ''}Rs({cap}2||(R2-M2))  [BioLogic AN34]"
+            _register(CircuitSpec(name, disp, "Supercapacitor (recommended)", tree))
+
     # --- G. Gerischer element (mixed ionic/electronic conduction, battery-
     #        type insertion electrodes with a coupled chemical reaction) ----
     _register(CircuitSpec("gerischer_R", "Rs-G", "Gerischer (mixed conduction)",

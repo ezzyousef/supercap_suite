@@ -47,6 +47,33 @@ def test_two_branch_model_all_cpe_variants_registered():
             assert spec.category == "Supercapacitor (recommended)"
 
 
+def test_an34_model_recovers_biologic_own_published_fit_values():
+    """supercap_an34_C_L (Z = L + Rs + [C2 || (R2-M2)]) is BioLogic's own
+    worked example for full-spectrum supercapacitor EIS fitting (EC-Lab
+    Application Note #34, "Supercapacitors Investigations Part II: Time
+    Constant", 2010/2019) -- this test uses the ACTUAL fitted values
+    BioLogic reported for a real commercial 22 F supercapacitor (not just
+    a synthetic self-consistency draw), converting their Rd2/taud2
+    (EC-Lab's "M" element convention: Z = Rd*coth(sqrt(taud*jw))/
+    sqrt(taud*jw)) to this library's Wo parameterization (Y0, B)."""
+    freq = np.logspace(5, -2, 60)  # AN34 measured 200 kHz down to 10 mHz
+    omega = 2 * np.pi * freq
+    spec = cl.get_circuit("supercap_an34_C_L")
+
+    rd2, taud2 = 37.89e-3, 1.044  # BioLogic AN34's own reported values
+    true_params = {
+        "L": 98.45e-9, "Rs": 31.61e-3, "C2": 15.59e-3, "R2": 4.23e-3,
+        "M2_B": np.sqrt(taud2), "M2_Y0": np.sqrt(taud2) / rd2,
+    }
+    z_true = cl.evaluate_circuit(spec.tree, omega, true_params)
+
+    result = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag,
+                                         model="supercap_an34_C_L", multistart=True)
+    assert result.reduced_chi_squared < 1e-6
+    for name, true_val in true_params.items():
+        assert result.params[name] == pytest.approx(true_val, rel=0.01)
+
+
 def test_every_circuit_evaluates_to_finite_impedance_and_has_unique_param_names():
     """Structural self-consistency sweep across the WHOLE library (not just
     a handful of hand-picked circuits): every registered circuit must (1)
