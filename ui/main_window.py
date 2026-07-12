@@ -1,5 +1,5 @@
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QLabel
 
 from .gcd_tab import GcdTab
@@ -10,7 +10,7 @@ from .rate_study_tab import RateStudyTab
 from .calculator_tab import CalculatorTab
 from .cycling_stability_tab import CyclingStabilityTab
 from . import theme
-from .resources import asset_path
+from .resources import asset_path, load_app_icon
 
 
 class AboutTab(QWidget):
@@ -74,7 +74,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Supercapacitor & DSC Analysis Suite")
-        self.setWindowIcon(QIcon(asset_path("app_icon_256.png")))
+        self.setWindowIcon(load_app_icon())
         self.resize(1200, 800)
 
         central = QWidget()
