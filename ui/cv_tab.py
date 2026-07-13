@@ -59,18 +59,23 @@ class CvTab(QWidget):
         self.data_section = CollapsibleSection("1) Data", start_expanded=True)
         left_layout.addWidget(self.data_section)
 
-        col_box = QGroupBox("Column mapping")
-        col_grid = QGridLayout(col_box)
+        # Each box below is ALSO independently collapsible (not just the
+        # outer Data/Configure stage it lives in) -- closing one you're
+        # done with makes room to see the others without scrolling, and
+        # clicking its header again brings it straight back.
+        col_section = CollapsibleSection("Column mapping", start_expanded=True)
+        col_grid = QGridLayout()
         self.voltage_combo = QComboBox()
         self.current_combo = QComboBox()
         col_grid.addWidget(QLabel("Voltage column:"), 0, 0)
         col_grid.addWidget(self.voltage_combo, 0, 1)
         col_grid.addWidget(QLabel("Current column:"), 1, 0)
         col_grid.addWidget(self.current_combo, 1, 1)
-        self.data_section.addWidget(col_box)
+        col_section.addLayout(col_grid)
+        self.data_section.addWidget(col_section)
 
-        seg_box = QGroupBox("One CV cycle (row range, 0-indexed)")
-        seg_grid = QGridLayout(seg_box)
+        seg_section = CollapsibleSection("One CV cycle (row range, 0-indexed)", start_expanded=True)
+        seg_grid = QGridLayout()
         self.start_spin = QSpinBox()
         self.start_spin.setMaximum(10_000_000)
         self.end_spin = QSpinBox()
@@ -82,13 +87,14 @@ class CvTab(QWidget):
         preview_btn = QPushButton("Preview cycle (I vs V)")
         preview_btn.clicked.connect(self.on_preview)
         seg_grid.addWidget(preview_btn, 2, 0, 1, 2)
-        self.data_section.addWidget(seg_box)
+        seg_section.addLayout(seg_grid)
+        self.data_section.addWidget(seg_section)
 
         self.configure_section = CollapsibleSection("2) Configure", start_expanded=True)
         left_layout.addWidget(self.configure_section)
 
-        param_box = QGroupBox("Parameters")
-        param_grid = QGridLayout(param_box)
+        param_section = CollapsibleSection("Parameters", start_expanded=True)
+        param_grid = QGridLayout()
         self.current_unit_combo = QComboBox()
         self.current_unit_combo.addItems(["A", "mA", "µA"])
         self.scan_rate_spin = CompoundRateSpinBox(numerator_value=10.0, numerator_unit="mV",
@@ -97,23 +103,24 @@ class CvTab(QWidget):
         param_grid.addWidget(self.current_unit_combo, 0, 1)
         param_grid.addWidget(QLabel("Scan rate:"), 1, 0)
         param_grid.addWidget(self.scan_rate_spin, 1, 1)
-        self.configure_section.addWidget(param_box)
+        param_section.addLayout(param_grid)
+        self.configure_section.addWidget(param_section)
 
-        norm_box = QGroupBox("Capacitance basis (specific capacitance report only)")
-        norm_layout = QVBoxLayout(norm_box)
+        norm_section = CollapsibleSection("Capacitance basis (specific capacitance report only)", start_expanded=True)
         self.normalizer = NormalizationSelector(default_mass_g=0.005)
-        norm_layout.addWidget(self.normalizer)
-        self.configure_section.addWidget(norm_box)
+        norm_section.addWidget(self.normalizer)
+        self.configure_section.addWidget(norm_section)
 
-        report_box = QGroupBox("Report as")
-        report_grid = QGridLayout(report_box)
+        report_section = CollapsibleSection("Report as", start_expanded=True)
+        report_grid = QGridLayout()
         self.report_combo = QComboBox()
         self.report_combo.addItems([
             "Specific capacitance (F/g, F/cm², or F/cm³) — EDLC/pseudocapacitive materials",
             "Specific capacity (C/g) — battery-type materials",
         ])
         report_grid.addWidget(self.report_combo, 0, 0)
-        self.configure_section.addWidget(report_box)
+        report_section.addLayout(report_grid)
+        self.configure_section.addWidget(report_section)
 
         analyze_btn = QPushButton("▶ Analyze CV cycle")
         analyze_btn.clicked.connect(self.on_analyze)

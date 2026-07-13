@@ -64,8 +64,12 @@ class EisTab(QWidget):
         self.data_section = CollapsibleSection("1) Data", start_expanded=True)
         left_layout.addWidget(self.data_section)
 
-        col_box = QGroupBox("Column mapping")
-        col_grid = QGridLayout(col_box)
+        # Each box below is ALSO independently collapsible (not just the
+        # outer Data/Configure stage it lives in) -- closing one you're
+        # done with makes room to see the others without scrolling, and
+        # clicking its header again brings it straight back.
+        col_section = CollapsibleSection("Column mapping", start_expanded=True)
+        col_grid = QGridLayout()
         self.zre_combo = QComboBox()
         self.zim_combo = QComboBox()
         self.freq_combo = QComboBox()
@@ -107,10 +111,11 @@ class EisTab(QWidget):
         preview_btn = QPushButton("Load & preview Nyquist / Bode")
         preview_btn.clicked.connect(self.on_preview)
         col_grid.addWidget(preview_btn, 7, 0, 1, 2)
-        self.data_section.addWidget(col_box)
+        col_section.addLayout(col_grid)
+        self.data_section.addWidget(col_section)
 
-        induct_box = QGroupBox("Series inductance removal (optional)")
-        induct_grid = QGridLayout(induct_box)
+        induct_section = CollapsibleSection("Series inductance removal (optional)", start_expanded=True)
+        induct_grid = QGridLayout()
         induct_note = QLabel(
             "A stray series inductance (cable/connector artifact) adds "
             "j*omega*L to Z, which only ever affects Im(Z) -- on a "
@@ -139,13 +144,14 @@ class EisTab(QWidget):
         self.inductance_checkbox = QCheckBox("Remove this inductance from all analyses below")
         self.inductance_checkbox.toggled.connect(self._on_inductance_changed)
         induct_grid.addWidget(self.inductance_checkbox, 3, 0, 1, 2)
-        self.data_section.addWidget(induct_box)
+        induct_section.addLayout(induct_grid)
+        self.data_section.addWidget(induct_section)
 
         self.configure_section = CollapsibleSection("2) Configure", start_expanded=True)
         left_layout.addWidget(self.configure_section)
 
-        cap_box = QGroupBox("Low-frequency capacitance")
-        cap_grid = QGridLayout(cap_box)
+        cap_section = CollapsibleSection("Low-frequency capacitance", start_expanded=True)
+        cap_grid = QGridLayout()
         self.mass_spin_cap = QDoubleSpinBox(); self.mass_spin_cap.setDecimals(6)
         self.mass_spin_cap.setRange(0, 1000); self.mass_spin_cap.setSuffix(" g (0 = report total C, not specific)")
         cap_grid.addWidget(QLabel("Active mass:"), 0, 0)
@@ -154,10 +160,11 @@ class EisTab(QWidget):
         cap_btn.clicked.connect(self.on_capacitance)
         cap_grid.addWidget(cap_btn, 1, 0, 1, 2)
         cap_grid.addWidget(theme.make_source_button(self, "EIS capacitance", formula_sources.EIS_CAPACITANCE), 2, 0, 1, 2)
-        self.configure_section.addWidget(cap_box)
+        cap_section.addLayout(cap_grid)
+        self.configure_section.addWidget(cap_section)
 
-        cond_box = QGroupBox("Ionic conductivity (2-electrode ion-blocking cell)")
-        cond_grid = QGridLayout(cond_box)
+        cond_section = CollapsibleSection("Ionic conductivity (2-electrode ion-blocking cell)", start_expanded=True)
+        cond_grid = QGridLayout()
         self.thickness_spin = QDoubleSpinBox(); self.thickness_spin.setDecimals(4)
         self.thickness_spin.setRange(0.0001, 100); self.thickness_spin.setValue(0.18); self.thickness_spin.setSuffix(" cm")
         self.area_spin = QDoubleSpinBox(); self.area_spin.setDecimals(4)
@@ -170,10 +177,13 @@ class EisTab(QWidget):
         cond_btn.clicked.connect(self.on_conductivity)
         cond_grid.addWidget(cond_btn, 2, 0, 1, 2)
         cond_grid.addWidget(theme.make_source_button(self, "Ionic conductivity", formula_sources.IONIC_CONDUCTIVITY), 3, 0, 1, 2)
-        self.configure_section.addWidget(cond_box)
+        cond_section.addLayout(cond_grid)
+        self.configure_section.addWidget(cond_section)
 
-        fit_box = QGroupBox(f"Equivalent circuit fit — {len(circuits.all_circuit_names())} preset circuits")
-        fit_grid = QGridLayout(fit_box)
+        fit_section = CollapsibleSection(
+            f"Equivalent circuit fit — {len(circuits.all_circuit_names())} preset circuits", start_expanded=True
+        )
+        fit_grid = QGridLayout()
 
         recommend_note = QLabel(
             "Recommended starting points: the \"Supercapacitor (recommended)\" "
@@ -227,7 +237,8 @@ class EisTab(QWidget):
         clear_btn.clicked.connect(self.on_clear_results)
         fit_grid.addWidget(clear_btn, 5, 0, 1, 2)
         fit_grid.addWidget(theme.make_source_button(self, "Equivalent circuit fit", formula_sources.EIS_CIRCUIT_FIT), 6, 0, 1, 2)
-        self.configure_section.addWidget(fit_box)
+        fit_section.addLayout(fit_grid)
+        self.configure_section.addWidget(fit_section)
 
         left_layout.addStretch()
         splitter.addWidget(make_scrollable_panel(left))

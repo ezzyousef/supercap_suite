@@ -63,8 +63,13 @@ class GcdTab(QWidget):
         self.data_section = CollapsibleSection("1) Data", start_expanded=True)
         left_layout.addWidget(self.data_section)
 
-        col_box = QGroupBox("Column mapping")
-        col_grid = QGridLayout(col_box)
+        # Each box below is ALSO independently collapsible (not just the
+        # outer Data/Configure/Advanced stage it lives in) -- closing one
+        # you're done with (e.g. "Column mapping" once it's set) makes
+        # room to see the others without scrolling, and clicking its
+        # header again brings it straight back.
+        col_section = CollapsibleSection("Column mapping", start_expanded=True)
+        col_grid = QGridLayout()
         self.time_combo = QComboBox()
         self.voltage_combo = QComboBox()
         self.current_combo = QComboBox()
@@ -74,10 +79,11 @@ class GcdTab(QWidget):
         col_grid.addWidget(self.voltage_combo, 1, 1)
         col_grid.addWidget(QLabel("Current column (optional):"), 2, 0)
         col_grid.addWidget(self.current_combo, 2, 1)
-        self.data_section.addWidget(col_box)
+        col_section.addLayout(col_grid)
+        self.data_section.addWidget(col_section)
 
-        seg_box = QGroupBox("Discharge segment (row range, 0-indexed)")
-        seg_grid = QGridLayout(seg_box)
+        seg_section = CollapsibleSection("Discharge segment (row range, 0-indexed)", start_expanded=True)
+        seg_grid = QGridLayout()
 
         detect_btn = QPushButton("Auto-detect charge/discharge segments")
         detect_btn.setToolTip(
@@ -104,13 +110,14 @@ class GcdTab(QWidget):
         preview_btn = QPushButton("Preview segment on plot")
         preview_btn.clicked.connect(self.on_preview_segment)
         seg_grid.addWidget(preview_btn, 4, 0, 1, 2)
-        self.data_section.addWidget(seg_box)
+        seg_section.addLayout(seg_grid)
+        self.data_section.addWidget(seg_section)
 
         self.configure_section = CollapsibleSection("2) Configure", start_expanded=True)
         left_layout.addWidget(self.configure_section)
 
-        param_box = QGroupBox("Test parameters")
-        param_grid = QGridLayout(param_box)
+        param_section = CollapsibleSection("Test parameters", start_expanded=True)
+        param_grid = QGridLayout()
         self.current_spin = QDoubleSpinBox()
         self.current_spin.setDecimals(6)
         self.current_spin.setRange(0, 1000)
@@ -132,16 +139,16 @@ class GcdTab(QWidget):
         param_grid.addWidget(self.use_current_manual, 1, 0, 1, 2)
         param_grid.addWidget(QLabel("Manual current:"), 2, 0)
         param_grid.addWidget(self.current_spin, 2, 1)
-        self.configure_section.addWidget(param_box)
+        param_section.addLayout(param_grid)
+        self.configure_section.addWidget(param_section)
 
-        norm_box = QGroupBox("Capacitance basis")
-        norm_layout = QVBoxLayout(norm_box)
+        norm_section = CollapsibleSection("Capacitance basis", start_expanded=True)
         self.normalizer = NormalizationSelector(default_mass_g=0.005)
-        norm_layout.addWidget(self.normalizer)
-        self.configure_section.addWidget(norm_box)
+        norm_section.addWidget(self.normalizer)
+        self.configure_section.addWidget(norm_section)
 
-        cfg_box = QGroupBox("Cell configuration")
-        cfg_grid = QGridLayout(cfg_box)
+        cfg_section = CollapsibleSection("Cell configuration", start_expanded=True)
+        cfg_grid = QGridLayout()
         self.config_combo = QComboBox()
         self.config_combo.addItems([
             "3-electrode (single working electrode)",
@@ -156,7 +163,8 @@ class GcdTab(QWidget):
         self.config_combo.currentIndexChanged.connect(self._update_mass_basis_label)
         cfg_grid.addWidget(self.config_combo, 0, 0)
         cfg_grid.addWidget(self.mass_basis_label, 1, 0)
-        self.configure_section.addWidget(cfg_box)
+        cfg_section.addLayout(cfg_grid)
+        self.configure_section.addWidget(cfg_section)
 
         method_section = CollapsibleSection("3) Advanced: capacitance formula override")
         method_grid = QGridLayout()

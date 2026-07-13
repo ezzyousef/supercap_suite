@@ -264,9 +264,15 @@ class CvRateTool(QWidget):
             "Fills the tables below from file(s) -- or enter rows manually."
         ))
 
-        entry_box = QGroupBox("1) Enter scan rate + capacitance "
-                               "per scan rate  — from individual CV analyses")
-        entry_layout = QVBoxLayout(entry_box)
+        # Each box below is ALSO independently collapsible (not just the
+        # outer Data section they live in) -- closing one you're done
+        # with makes room to see the other without scrolling, and
+        # clicking its header again brings it straight back.
+        entry_section = CollapsibleSection(
+            "1) Enter scan rate + capacitance per scan rate  — from individual CV analyses",
+            start_expanded=True,
+        )
+        entry_layout = QVBoxLayout()
         entry_unit_row = QHBoxLayout()
         entry_unit_row.addWidget(QLabel("Column units — scan rate:"))
         self.cap_table_rate_unit = QComboBox()
@@ -291,10 +297,14 @@ class CvRateTool(QWidget):
         add_row_btn = QPushButton("+ Add row")
         add_row_btn.clicked.connect(self.cap_table.add_row)
         entry_layout.addWidget(add_row_btn)
-        self.data_section.addWidget(entry_box)
+        entry_section.addLayout(entry_layout)
+        self.data_section.addWidget(entry_section)
 
-        peak_box = QGroupBox("2) (Optional) Enter scan rate + peak current for b-value / Randles-Sevcik")
-        peak_layout = QVBoxLayout(peak_box)
+        peak_section = CollapsibleSection(
+            "2) (Optional) Enter scan rate + peak current for b-value / Randles-Sevcik",
+            start_expanded=True,
+        )
+        peak_layout = QVBoxLayout()
         peak_unit_row = QHBoxLayout()
         peak_unit_row.addWidget(QLabel("Column units — scan rate:"))
         self.peak_table_rate_unit = QComboBox()
@@ -314,7 +324,8 @@ class CvRateTool(QWidget):
         add_row_btn2 = QPushButton("+ Add row")
         add_row_btn2.clicked.connect(self.peak_table.add_row)
         peak_layout.addWidget(add_row_btn2)
-        self.data_section.addWidget(peak_box)
+        peak_section.addLayout(peak_layout)
+        self.data_section.addWidget(peak_section)
 
         rs_section = CollapsibleSection(
             "2) Advanced: Randles-Sevcik diffusion coefficient (redox-active/battery-type materials)"
@@ -843,21 +854,22 @@ class GcdRateTool(QWidget):
         self.data_section = CollapsibleSection("1) Data", start_expanded=True)
         left_layout.addWidget(self.data_section)
 
-        col_box = QGroupBox("Column mapping")
-        col_grid = QGridLayout(col_box)
+        col_section = CollapsibleSection("Column mapping", start_expanded=True)
+        col_grid = QGridLayout()
         self.time_combo = QComboBox()
         self.voltage_combo = QComboBox()
         col_grid.addWidget(QLabel("Time column:"), 0, 0)
         col_grid.addWidget(self.time_combo, 0, 1)
         col_grid.addWidget(QLabel("Voltage column:"), 1, 0)
         col_grid.addWidget(self.voltage_combo, 1, 1)
-        self.data_section.addWidget(col_box)
+        col_section.addLayout(col_grid)
+        self.data_section.addWidget(col_section)
 
         self.configure_section = CollapsibleSection("2) Configure", start_expanded=True)
         left_layout.addWidget(self.configure_section)
 
-        seg_box = QGroupBox("Add one discharge segment at a time")
-        seg_grid = QGridLayout(seg_box)
+        seg_section = CollapsibleSection("Add one discharge segment at a time", start_expanded=True)
+        seg_grid = QGridLayout()
 
         detect_btn = QPushButton("Auto-detect charge/discharge segments")
         detect_btn.setToolTip(
@@ -887,7 +899,8 @@ class GcdRateTool(QWidget):
         add_seg_btn = QPushButton("+ Add this segment to the rate study")
         add_seg_btn.clicked.connect(self.on_add_segment)
         seg_grid.addWidget(add_seg_btn, 5, 0, 1, 2)
-        self.configure_section.addWidget(seg_box)
+        seg_section.addLayout(seg_grid)
+        self.configure_section.addWidget(seg_section)
 
         mass_row = QHBoxLayout()
         self.mass_spin = QDoubleSpinBox(); self.mass_spin.setDecimals(6)

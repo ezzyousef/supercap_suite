@@ -146,8 +146,12 @@ class EnthalpyTool(QWidget):
         self.data_section = CollapsibleSection("1) Data", start_expanded=True)
         left_layout.addWidget(self.data_section)
 
-        col_box = QGroupBox("Column mapping")
-        col_grid = QGridLayout(col_box)
+        # Each box below is ALSO independently collapsible (not just the
+        # outer Data/Configure stage it lives in) -- closing one you're
+        # done with makes room to see the others without scrolling, and
+        # clicking its header again brings it straight back.
+        col_section = CollapsibleSection("Column mapping", start_expanded=True)
+        col_grid = QGridLayout()
         self.x_combo = QComboBox()  # time or temperature
         self.x_type_combo = QComboBox()
         self.x_type_combo.addItems(["Time (s)", "Temperature (°C)"])
@@ -158,7 +162,8 @@ class EnthalpyTool(QWidget):
         col_grid.addWidget(self.x_type_combo, 1, 1)
         col_grid.addWidget(QLabel("Heat flow column (mW):"), 2, 0)
         col_grid.addWidget(self.y_combo, 2, 1)
-        self.data_section.addWidget(col_box)
+        col_section.addLayout(col_grid)
+        self.data_section.addWidget(col_section)
 
         note = QLabel(
             "If your X axis is temperature rather than time, enter the scan\n"
@@ -179,8 +184,8 @@ class EnthalpyTool(QWidget):
         rate_row.addWidget(self.scan_rate_spin)
         self.data_section.addLayout(rate_row)
 
-        seg_box = QGroupBox("Peak region (row range, 0-indexed)")
-        seg_grid = QGridLayout(seg_box)
+        seg_section = CollapsibleSection("Peak region (row range, 0-indexed)", start_expanded=True)
+        seg_grid = QGridLayout()
         auto_detect_btn = QPushButton("Auto-detect peak (position, value & enthalpy)")
         auto_detect_btn.setObjectName("recordButton")
         auto_detect_btn.setToolTip(
@@ -204,7 +209,8 @@ class EnthalpyTool(QWidget):
         preview_btn = QPushButton("Preview peak + baseline")
         preview_btn.clicked.connect(self.on_preview)
         seg_grid.addWidget(preview_btn, 3, 0, 1, 2)
-        self.data_section.addWidget(seg_box)
+        seg_section.addLayout(seg_grid)
+        self.data_section.addWidget(seg_section)
 
         self.configure_section = CollapsibleSection("2) Configure", start_expanded=True)
         left_layout.addWidget(self.configure_section)
@@ -219,8 +225,8 @@ class EnthalpyTool(QWidget):
         mass_row.addWidget(self.mass_spin)
         self.configure_section.addLayout(mass_row)
 
-        water_box = QGroupBox("Water-type auto-calculation (optional)")
-        water_grid = QGridLayout(water_box)
+        water_section = CollapsibleSection("Water-type auto-calculation (optional)", start_expanded=True)
+        water_grid = QGridLayout()
         water_note = QLabel(
             "Fill both masses below to fully automatically compute the free / "
             "freezable-bound / non-freezable-bound water breakdown from this "
@@ -256,7 +262,8 @@ class EnthalpyTool(QWidget):
         source_row.addWidget(theme.make_source_button(self, "Symmetric/total split (automated)", formula_sources.DSC_SYMMETRIC_TOTAL_SPLIT))
         source_row.addWidget(theme.make_source_button(self, "Integration accuracy check", formula_sources.DSC_INTEGRATION_ACCURACY))
         water_grid.addLayout(source_row, 4, 0, 1, 2)
-        self.configure_section.addWidget(water_box)
+        water_section.addLayout(water_grid)
+        self.configure_section.addWidget(water_section)
 
         analyze_btn = QPushButton("▶ Integrate peak (linear baseline)")
         analyze_btn.clicked.connect(self.on_analyze)

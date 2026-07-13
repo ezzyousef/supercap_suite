@@ -71,8 +71,8 @@ class CyclingStabilityTab(QWidget):
         note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
         self.data_section.addWidget(note)
 
-        col_box = QGroupBox("Column mapping")
-        col_grid = QGridLayout(col_box)
+        col_section = CollapsibleSection("Column mapping", start_expanded=True)
+        col_grid = QGridLayout()
         self.time_combo = QComboBox()
         self.voltage_combo = QComboBox()
         self.cycle_combo = QComboBox()
@@ -92,13 +92,14 @@ class CyclingStabilityTab(QWidget):
         cycle_note.setWordWrap(True)
         cycle_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
         col_grid.addWidget(cycle_note, 3, 0, 1, 2)
-        self.data_section.addWidget(col_box)
+        col_section.addLayout(col_grid)
+        self.data_section.addWidget(col_section)
 
         self.configure_section = CollapsibleSection("2) Configure", start_expanded=True)
         left_layout.addWidget(self.configure_section)
 
-        param_box = QGroupBox("Test parameters")
-        param_grid = QGridLayout(param_box)
+        param_section = CollapsibleSection("Test parameters", start_expanded=True)
+        param_grid = QGridLayout()
         self.current_spin = QDoubleSpinBox()
         self.current_spin.setDecimals(6)
         self.current_spin.setRange(0.000001, 1000)
@@ -120,7 +121,8 @@ class CyclingStabilityTab(QWidget):
         param_grid.addWidget(self.mass_spin, 1, 1)
         param_grid.addWidget(QLabel("Linearity R² threshold (capacitance formula):"), 2, 0)
         param_grid.addWidget(self.r2_spin, 2, 1)
-        self.configure_section.addWidget(param_box)
+        param_section.addLayout(param_grid)
+        self.configure_section.addWidget(param_section)
 
         analyze_btn = QPushButton("▶ Analyze cycling stability")
         analyze_btn.clicked.connect(self.on_analyze)
