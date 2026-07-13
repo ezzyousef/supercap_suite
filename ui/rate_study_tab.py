@@ -29,6 +29,7 @@ from core import units as unitconv
 from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
+    ResultCard, show_toast, show_empty_state,
 )
 from . import theme, formula_sources
 
@@ -349,6 +350,11 @@ class CvRateTool(QWidget):
         right = QWidget()
         right_layout = QVBoxLayout(right)
         self.plot = PlotPanel()
+        show_empty_state(self.plot, "Enter or import scan-rate data, then run Trasatti's/b-value/Randles-Sevcik")
+
+        self.result_card = ResultCard()
+        right_layout.addWidget(self.result_card)
+
         self.results_text = QTextEdit()
         self.results_text.setReadOnly(True)
 
@@ -419,14 +425,10 @@ class CvRateTool(QWidget):
             self.peak_table.load_rows(pairs)
             n_filled += 1
 
-        QMessageBox.information(
-            self, "Imported",
-            f"Filled {n_filled} table(s) from '{rate_col}' + "
-            f"{'capacitance' if cap_col != '-- none --' else ''}"
-            f"{' and ' if cap_col != '-- none --' and peak_col != '-- none --' else ''}"
-            f"{'peak current' if peak_col != '-- none --' else ''}.\n\n"
-            "Check that the column-unit dropdowns above each table match "
-            "the units your file actually used before running an analysis."
+        show_toast(
+            self,
+            f"Filled {n_filled} table(s) from '{rate_col}' -- check the unit dropdowns "
+            "above each table match your file's units.",
         )
 
     def on_import_multi_files(self):
@@ -543,11 +545,20 @@ class CvRateTool(QWidget):
             f"Outer fraction of total: {result.outer_fraction_percent:.2f} %",
             f"Inner fraction of total: {result.inner_fraction_percent:.2f} %",
         ]
+        card_warnings = []
         if result.inner_capacitance_f_per_g < 0:
-            lines.append("\nWarning: inner capacitance is negative -- the outer-capacitance "
-                          "extrapolation exceeded the total-capacitance extrapolation. Check "
-                          "your data range/units (this can happen with too narrow a scan-rate span).")
+            negative_note = ("Inner capacitance is negative -- the outer-capacitance extrapolation "
+                              "exceeded the total-capacitance extrapolation. Check your data "
+                              "range/units (this can happen with too narrow a scan-rate span).")
+            lines.append(f"\nWarning: {negative_note}")
+            card_warnings.append(negative_note)
         self.results_text.setPlainText("\n".join(lines))
+        self.result_card.set_headline("Outer capacitance Q*_outer", f"{result.outer_capacitance_f_per_g:.3f} F/g")
+        self.result_card.set_secondary([
+            ("Total capacitance Q*_total", f"{result.total_capacitance_f_per_g:.3f} F/g"),
+            ("Outer fraction", f"{result.outer_fraction_percent:.2f} %"),
+        ])
+        self.result_card.set_warnings(card_warnings)
 
         inv_sqrt_v = 1.0 / np.sqrt(rates)
         self.plot.ax.clear()
@@ -601,6 +612,9 @@ class CvRateTool(QWidget):
             "this as indicative, not a precise mechanistic proof.",
         ]
         self.results_text.setPlainText("\n".join(lines))
+        self.result_card.set_headline("b-value", f"{result.b_value:.4f}")
+        self.result_card.set_secondary([("Interpretation", interp)])
+        self.result_card.set_warnings([])
 
         self.plot.ax.clear()
         self.plot.ax.scatter(result.log_scan_rates, result.log_peak_currents, color=theme.RAW, s=22, label="data")
@@ -659,6 +673,9 @@ class CvRateTool(QWidget):
             "trusting D.",
         ]
         self.results_text.setPlainText("\n".join(lines))
+        self.result_card.set_headline("Diffusion coefficient D", f"{result['diffusion_coefficient_cm2_per_s']:.4g} cm²/s")
+        self.result_card.set_secondary([("Linear fit R²", f"{result['r_squared']:.5f}")])
+        self.result_card.set_warnings([])
 
         sqrt_v = np.sqrt(rates)
         fit_line = result["slope_a_per_sqrt_vs"] * sqrt_v + (np.mean(peaks) - result["slope_a_per_sqrt_vs"] * np.mean(sqrt_v))
@@ -791,6 +808,11 @@ class GcdRateTool(QWidget):
         right = QWidget()
         right_layout = QVBoxLayout(right)
         self.plot = PlotPanel()
+        show_empty_state(self.plot, "Add discharge segments at different currents, then run the analysis")
+
+        self.result_card = ResultCard()
+        right_layout.addWidget(self.result_card)
+
         self.table = make_table_view()
         self.table_model = DataFrameModel()
         self.table.setModel(self.table_model)
@@ -906,7 +928,7 @@ class GcdRateTool(QWidget):
         self.start_spin.setValue(seg.start)
         self.end_spin.setValue(seg.end)
         if seg.kind == "charge":
-            QMessageBox.information(
+            QMessageBox.warning(
                 self, "Charge segment selected",
                 "This is a CHARGE segment (voltage rising), not discharge -- "
                 "pick a 'Discharge' entry instead before adding it to the "
@@ -973,6 +995,17 @@ class GcdRateTool(QWidget):
         theme.apply_plot_style(self.plot.ax)
         self.plot.fig.tight_layout()
         self.plot.draw()
+
+        self.result_card.set_headline(
+            "Capacitance retention at highest current",
+            f"{retention[-1]:.2f} %",
+        )
+        self.result_card.set_secondary([
+            ("First-point capacitance", f"{caps[0]:.4f} F/g"),
+            ("Last-point capacitance", f"{caps[-1]:.4f} F/g"),
+            ("Current densities tested", str(len(results))),
+        ])
+        self.result_card.set_warnings([])
 
         self.last_result = {
             "Active mass (g)": mass_g,

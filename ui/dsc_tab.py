@@ -23,6 +23,7 @@ from core import dsc_analysis as dsc
 from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
+    ResultCard, CollapsibleSection, show_toast, show_empty_state,
 )
 from . import theme, formula_sources
 
@@ -197,6 +198,11 @@ class EnthalpyTool(QWidget):
         right = QWidget()
         right_layout = QVBoxLayout(right)
         self.plot = PlotPanel()
+        show_empty_state(self.plot, "Load a DSC file, then auto-detect or select the peak region")
+
+        self.result_card = ResultCard()
+        right_layout.addWidget(self.result_card)
+
         self.results_text = QTextEdit()
         self.results_text.setReadOnly(True)
         self.table = make_table_view()
@@ -427,6 +433,11 @@ class EnthalpyTool(QWidget):
             "Specific enthalpy ΔH (J/g)": dh,
         }
 
+        card_warnings = []
+        card_secondary = [
+            ("Peak area (baseline-corrected)", f"{area_j:.6f} J"),
+            ("Sample mass", f"{self.mass_spin.value():.6g} g"),
+        ]
         water_mass = self.water_mass_spin.value()
         dry_mass = self.dry_mass_spin.value()
         if water_mass > 0 and dry_mass > 0:
@@ -438,6 +449,7 @@ class EnthalpyTool(QWidget):
                 )
             except ValueError as e:
                 lines += ["", f"Water-type calculation error: {e}"]
+                card_warnings.append(f"Water-type calculation error: {e}")
             else:
                 lines += [
                     "",
@@ -450,9 +462,12 @@ class EnthalpyTool(QWidget):
                     f"  Total bound water           W_b    = {water_result.total_bound_water:.4f} g/g",
                     f"  Free water                  W_free = {water_result.free_water:.4f} g/g",
                 ]
+                card_secondary.append(("Total water content W_t", f"{water_result.total_water_content:.4f} g/g"))
                 if water_result.non_freezable_bound_water < 0:
-                    lines.append("  Warning: non-freezable bound water came out negative -- "
-                                  "check m_w, m_d, and the peak area/heat-of-fusion values.")
+                    negative_note = ("Non-freezable bound water came out negative -- check m_w, "
+                                      "m_d, and the peak area/heat-of-fusion values.")
+                    lines.append(f"  Warning: {negative_note}")
+                    card_warnings.append(negative_note)
                 self.last_result.update({
                     "Mass of water m_w (g)": water_mass,
                     "Mass of dry sample m_d (g)": dry_mass,
@@ -473,6 +488,9 @@ class EnthalpyTool(QWidget):
             ]
 
         self.results_text.setPlainText("\n".join(lines))
+        self.result_card.set_headline("Specific enthalpy ΔH", f"{dh:.4f} J/g")
+        self.result_card.set_secondary(card_secondary)
+        self.result_card.set_warnings(card_warnings)
 
         self.plot.ax.clear()
         self.plot.ax.plot(t, y, "-", color=theme.RAW, linewidth=1.3, label="Heat flow (raw)")
@@ -517,7 +535,6 @@ class WaterTypeTool(QWidget):
         self.area_melting = QDoubleSpinBox(); self.area_melting.setDecimals(6); self.area_melting.setRange(0, 100000); self.area_melting.setSuffix(" J")
         self.area_symmetric = QDoubleSpinBox(); self.area_symmetric.setDecimals(6); self.area_symmetric.setRange(0, 100000); self.area_symmetric.setSuffix(" J")
         self.area_total = QDoubleSpinBox(); self.area_total.setDecimals(6); self.area_total.setRange(0.000001, 100000); self.area_total.setSuffix(" J")
-        self.heat_fusion = QDoubleSpinBox(); self.heat_fusion.setDecimals(2); self.heat_fusion.setRange(1, 1000); self.heat_fusion.setValue(334.0); self.heat_fusion.setSuffix(" J/g")
 
         rows = [
             ("Mass of water in sample (m_w):", self.mass_water),
@@ -525,7 +542,6 @@ class WaterTypeTool(QWidget):
             ("Melting endotherm area, A_f (freezable water peak):", self.area_melting),
             ("Symmetric (sharp/bulk-like) peak component area:", self.area_symmetric),
             ("Total melting-peak area (all components):", self.area_total),
-            ("Heat of fusion of water used (default 334 J/g):", self.heat_fusion),
         ]
         for r, (label, widget) in enumerate(rows):
             l = QLabel(label)
@@ -534,6 +550,12 @@ class WaterTypeTool(QWidget):
             grid.addWidget(widget, r, 1)
         root.addLayout(grid)
 
+        self.heat_fusion = QDoubleSpinBox(); self.heat_fusion.setDecimals(2); self.heat_fusion.setRange(1, 1000); self.heat_fusion.setValue(334.0); self.heat_fusion.setSuffix(" J/g")
+        advanced = CollapsibleSection("Advanced: heat of fusion constant")
+        hf_row = QHBoxLayout()
+        hf_row.addWidget(QLabel("Heat of fusion of water used (default 334 J/g):"))
+        hf_row.addWidget(self.heat_fusion)
+        advanced.addLayout(hf_row)
         note = QLabel(
             "Note: 334 J/g is the value used in the source equation set for this "
             "tool; the literature value for the heat of fusion of bulk water is "
@@ -542,12 +564,16 @@ class WaterTypeTool(QWidget):
         )
         note.setWordWrap(True)
         note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
-        root.addWidget(note)
+        advanced.addWidget(note)
+        root.addWidget(advanced)
 
         btn = QPushButton("▶ Classify water content")
         btn.clicked.connect(self.on_classify)
         root.addWidget(btn)
         root.addWidget(theme.make_source_button(self, "DSC water-type classification", formula_sources.DSC_WATER_TYPE))
+
+        self.result_card = ResultCard()
+        root.addWidget(self.result_card)
 
         self.results_text = QTextEdit()
         self.results_text.setReadOnly(True)
@@ -598,15 +624,23 @@ class WaterTypeTool(QWidget):
         if pct["free_pct"] is not None:
             lines.append(f"  Free (of freezable fraction): {pct['free_pct']:.2f} %")
 
+        card_warnings = []
         if result.non_freezable_bound_water < 0:
-            lines.append(
-                "\nWarning: non-freezable bound water came out negative. This "
-                "means W_f (from the melting peak) exceeds W_t (total water) as "
-                "entered -- double check m_w, m_d, and the peak area/heat of "
-                "fusion values."
-            )
+            negative_note = ("Non-freezable bound water came out negative. This means W_f "
+                              "(from the melting peak) exceeds W_t (total water) as entered "
+                              "-- double check m_w, m_d, and the peak area/heat of fusion values.")
+            lines.append(f"\nWarning: {negative_note}")
+            card_warnings.append(negative_note)
 
         self.results_text.setPlainText("\n".join(lines))
+        self.result_card.set_headline("Total water content W_t", f"{result.total_water_content:.4f} g/g")
+        card_secondary = [
+            ("Freezable water W_f", f"{result.freezable_water_content:.4f} g/g"),
+            ("Non-freezable bound W_nb", f"{result.non_freezable_bound_water:.4f} g/g"),
+            ("Free water W_free", f"{result.free_water:.4f} g/g"),
+        ]
+        self.result_card.set_secondary(card_secondary)
+        self.result_card.set_warnings(card_warnings)
 
         self.last_result = {
             "Mass of water in sample, m_w (g)": self.mass_water.value(),

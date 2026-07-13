@@ -1,12 +1,14 @@
 """Small reusable Qt widgets shared across tabs."""
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
-from PySide6.QtCore import Qt, QAbstractTableModel
+from PySide6.QtCore import Qt, QAbstractTableModel, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QTableView, QPushButton, QFileDialog, QInputDialog, QMessageBox, QLineEdit,
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox, QSplitter
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QGroupBox, QSplitter,
+    QToolButton, QSizePolicy
 )
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
@@ -111,6 +113,210 @@ class PlotPanel(QWidget):
         # (e.g. ax, fig, draw, plot_xy, plot_raw_and_fit, clear_plot) --
         # forward them to the wrapped canvas.
         return getattr(self.canvas, name)
+
+
+def show_empty_state(plot_widget, message: str = "Load a file or enter values, then click Analyze") -> None:
+    """Draws a light placeholder message on an otherwise-blank plot instead
+    of leaving a jarring blank panel-colored canvas before the first
+    analysis runs. Call once at tab construction; the next real plot_xy()/
+    plot_raw_and_fit()/ax.clear()-and-redraw call overwrites it normally,
+    since this just draws text on the same axes rather than a separate
+    overlay widget."""
+    ax = plot_widget.ax
+    ax.clear()
+    ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=10,
+             color=theme.INK_DIM, style="italic", wrap=True, transform=ax.transAxes)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_color(theme.BORDER)
+    plot_widget.fig.patch.set_facecolor(theme.PANEL)
+    ax.set_facecolor(theme.PANEL)
+    plot_widget.draw()
+
+
+class ToastNotification(QWidget):
+    """A transient, non-blocking success/info notification shown in the
+    bottom-right corner of the parent window and auto-dismissed after a
+    few seconds -- used for routine confirmations ("Exported", "Recorded")
+    where a QMessageBox.information() the user has to click through is
+    disproportionate friction. Genuinely destructive-action confirmations
+    (e.g. "Clear all recorded rows?") should still use QMessageBox."""
+
+    def __init__(self, parent, text: str, kind: str = "success", duration_ms: int = 2600):
+        super().__init__(parent, Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        accent = {"success": theme.GOOD, "error": theme.WARN}.get(kind, theme.RAW)
+        label = QLabel(f"  {text}  ")
+        label.setWordWrap(True)
+        label.setMaximumWidth(320)
+        label.setStyleSheet(
+            f"background-color: {theme.INK}; color: white; border-radius: 4px; "
+            f"border-left: 4px solid {accent}; padding: 8px 12px; font-weight: 600;"
+        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(label)
+        self.adjustSize()
+        self._reposition()
+        self.show()
+        QTimer.singleShot(duration_ms, self.close)
+
+    def _reposition(self):
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        top_level = parent.window()
+        geo = top_level.geometry()
+        x = geo.x() + geo.width() - self.width() - 24
+        y = geo.y() + geo.height() - self.height() - 40
+        self.move(max(x, 0), max(y, 0))
+
+
+def show_toast(parent, text: str, kind: str = "success") -> None:
+    """Fire-and-forget toast -- the ToastNotification instance manages its
+    own lifetime (auto-closes and self-deletes), so callers don't need to
+    hold a reference."""
+    ToastNotification(parent, text, kind)
+
+
+class CollapsibleSection(QWidget):
+    """A titled, collapsed-by-default container for "Advanced" options --
+    keeps a tab's default view limited to the inputs used every time,
+    with rarely-changed parameters (a linearity threshold, a physical
+    constant override, ...) one click away instead of permanently
+    occupying space in the main form. Use `.body_layout` to add widgets/
+    layouts to the collapsible content, the same way you'd use any
+    QVBoxLayout."""
+
+    def __init__(self, title: str = "Advanced options", parent=None):
+        super().__init__(parent)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(2)
+
+        self.toggle_btn = QToolButton()
+        self.toggle_btn.setText(title)
+        self.toggle_btn.setCheckable(True)
+        self.toggle_btn.setChecked(False)
+        self.toggle_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toggle_btn.setArrowType(Qt.ArrowType.RightArrow)
+        self.toggle_btn.setStyleSheet(
+            f"QToolButton {{ border: none; font-weight: 600; color: {theme.INK_DIM}; "
+            f"padding: 4px 0; background: transparent; }}"
+        )
+        self.toggle_btn.clicked.connect(self._on_toggled)
+        outer.addWidget(self.toggle_btn)
+
+        self.body = QWidget()
+        self.body_layout = QVBoxLayout(self.body)
+        self.body_layout.setContentsMargins(14, 4, 0, 4)
+        self.body.setVisible(False)
+        outer.addWidget(self.body)
+
+    def _on_toggled(self):
+        expanded = self.toggle_btn.isChecked()
+        self.body.setVisible(expanded)
+        self.toggle_btn.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+
+    def addWidget(self, w):
+        self.body_layout.addWidget(w)
+
+    def addLayout(self, layout):
+        self.body_layout.addLayout(layout)
+
+
+class ResultCard(QGroupBox):
+    """Structured, scannable result display: one HEADLINE value (large,
+    bold, brand-blue -- the number a researcher came for), a row of
+    smaller SECONDARY values (method used, R², mass, ...), and warnings/
+    notes rendered as a visually distinct amber alert strip -- not all
+    three flattened into one plain-text block the way results were shown
+    before. Placed above a tab's existing QTextEdit/table (kept for full
+    detail and export -- this does not replace them, only adds an
+    at-a-glance headline in front of them). Hidden until the first
+    `set_headline()` call, so a tab shows its plot/empty-state instead of
+    an empty card before any analysis has run."""
+
+    def __init__(self, parent=None):
+        super().__init__("Result", parent)
+        self.setObjectName("resultCard")
+        layout = QVBoxLayout(self)
+        layout.setSpacing(6)
+
+        self.headline_title = QLabel("")
+        self.headline_title.setStyleSheet(f"color: {theme.INK_DIM}; font-size: 9pt;")
+        layout.addWidget(self.headline_title)
+
+        self.headline_value = QLabel("—")
+        self.headline_value.setStyleSheet(f"color: {theme.RAW}; font-size: 20pt; font-weight: 700;")
+        self.headline_value.setWordWrap(True)
+        layout.addWidget(self.headline_value)
+
+        self.secondary_widget = QWidget()
+        self.secondary_layout = QGridLayout(self.secondary_widget)
+        self.secondary_layout.setContentsMargins(0, 4, 0, 0)
+        self.secondary_layout.setHorizontalSpacing(18)
+        self.secondary_layout.setVerticalSpacing(2)
+        layout.addWidget(self.secondary_widget)
+
+        self.warning_widget = QWidget()
+        self.warning_layout = QVBoxLayout(self.warning_widget)
+        self.warning_layout.setContentsMargins(0, 6, 0, 0)
+        self.warning_layout.setSpacing(3)
+        layout.addWidget(self.warning_widget)
+        self.warning_widget.setVisible(False)
+
+        self.setVisible(False)
+
+    def set_headline(self, label: str, value: str):
+        self.headline_title.setText(label)
+        self.headline_value.setText(value)
+        self.setVisible(True)
+
+    def set_secondary(self, pairs):
+        """`pairs`: list of (label, value) string tuples, one row each."""
+        while self.secondary_layout.count():
+            item = self.secondary_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        for row, (label, value) in enumerate(pairs):
+            l = QLabel(label)
+            l.setStyleSheet(f"color: {theme.INK_DIM}; font-size: 8.5pt;")
+            v = QLabel(value)
+            v.setStyleSheet(f"color: {theme.INK}; font-size: 9.5pt; font-weight: 600;")
+            v.setWordWrap(True)
+            self.secondary_layout.addWidget(l, row, 0)
+            self.secondary_layout.addWidget(v, row, 1)
+
+    def set_warnings(self, warnings):
+        """`warnings`: list of warning strings; pass [] or None to clear/hide."""
+        while self.warning_layout.count():
+            item = self.warning_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        if not warnings:
+            self.warning_widget.setVisible(False)
+            return
+        for text in warnings:
+            strip = QLabel(f"⚠ {text}")
+            strip.setWordWrap(True)
+            strip.setStyleSheet(
+                f"background-color: #FDF3E0; color: {theme.INK}; border-left: 3px solid {theme.WARN}; "
+                f"padding: 6px 8px; border-radius: 2px; font-size: 8.5pt;"
+            )
+            self.warning_layout.addWidget(strip)
+        self.warning_widget.setVisible(True)
+
+    def clear(self):
+        self.headline_title.setText("")
+        self.headline_value.setText("—")
+        self.set_secondary([])
+        self.set_warnings([])
+        self.setVisible(False)
 
 
 class DataFrameModel(QAbstractTableModel):
@@ -353,10 +559,7 @@ def run_export_dialog(parent, sheet_prefix: str, results: dict, raw_data=None,
         QMessageBox.critical(parent, "Export failed", f"Could not write to '{path}':\n{e}")
         return
 
-    QMessageBox.information(
-        parent, "Exported",
-        f"Results written to sheet '{used_name}' in:\n{path}"
-    )
+    show_toast(parent, f"Exported to sheet '{used_name}' in {Path(path).name}")
 
 
 def run_export_table_dialog(parent, sheet_prefix: str, df: pd.DataFrame,
@@ -394,10 +597,7 @@ def run_export_table_dialog(parent, sheet_prefix: str, df: pd.DataFrame,
         QMessageBox.critical(parent, "Export failed", f"Could not write to '{path}':\n{e}")
         return
 
-    QMessageBox.information(
-        parent, "Exported",
-        f"{len(df)} row(s) written to sheet '{used_name}' in:\n{path}"
-    )
+    show_toast(parent, f"Exported {len(df)} row(s) to sheet '{used_name}' in {Path(path).name}")
 
 
 class RecordLogPanel(QGroupBox):

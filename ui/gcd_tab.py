@@ -15,6 +15,7 @@ from core import gcd_analysis as gcd
 from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
+    ResultCard, CollapsibleSection, show_toast, show_empty_state,
 )
 from . import theme, formula_sources
 
@@ -148,8 +149,8 @@ class GcdTab(QWidget):
         cfg_grid.addWidget(self.mass_basis_label, 1, 0)
         left_layout.addWidget(cfg_box)
 
-        method_box = QGroupBox("Capacitance formula")
-        method_grid = QGridLayout(method_box)
+        method_section = CollapsibleSection("Advanced: capacitance formula override")
+        method_grid = QGridLayout()
         self.method_combo = QComboBox()
         self.method_combo.addItems([
             "Auto-detect (recommended)",
@@ -165,7 +166,8 @@ class GcdTab(QWidget):
         self.r2_spin.setValue(0.98)
         method_grid.addWidget(QLabel("Linearity R² threshold:"), 1, 0)
         method_grid.addWidget(self.r2_spin, 1, 1)
-        left_layout.addWidget(method_box)
+        method_section.addLayout(method_grid)
+        left_layout.addWidget(method_section)
 
         analyze_btn = QPushButton("▶ Analyze discharge segment")
         analyze_btn.clicked.connect(self.on_analyze)
@@ -187,6 +189,10 @@ class GcdTab(QWidget):
         right = QWidget()
         right_layout = QVBoxLayout(right)
         self.plot = PlotPanel()
+        show_empty_state(self.plot, "Load a file and select a discharge segment, then click Analyze")
+
+        self.result_card = ResultCard()
+        right_layout.addWidget(self.result_card)
 
         self.results_text = QTextEdit()
         self.results_text.setReadOnly(True)
@@ -334,12 +340,10 @@ class GcdTab(QWidget):
         self.segment_combo.blockSignals(False)
 
         n_discharge = sum(1 for s in self._detected_segments if s.kind == "discharge")
-        QMessageBox.information(
-            self, "Segments detected",
+        show_toast(
+            self,
             f"Found {len(self._detected_segments)} segment(s): {n_discharge} discharge, "
-            f"{len(self._detected_segments) - n_discharge} charge.\n\n"
-            "Pick one from the dropdown to load its row range below, then "
-            "check it on the plot before analyzing."
+            f"{len(self._detected_segments) - n_discharge} charge. Pick one from the dropdown.",
         )
 
     def on_segment_selected(self, index: int):
@@ -349,7 +353,7 @@ class GcdTab(QWidget):
         self.start_spin.setValue(seg.start)
         self.end_spin.setValue(seg.end)
         if seg.kind == "charge":
-            QMessageBox.information(
+            QMessageBox.warning(
                 self, "Charge segment selected",
                 "This is a CHARGE segment (voltage rising), not discharge. "
                 "The row range has been loaded, but GCD capacitance analysis "
@@ -403,7 +407,8 @@ class GcdTab(QWidget):
         self.last_result = None
         self.last_raw_df = None
         self.results_text.clear()
-        self.plot.clear_plot()
+        self.result_card.clear()
+        show_empty_state(self.plot, "Load a file and select a discharge segment, then click Analyze")
         self.export_btn.setEnabled(False)
 
     def on_analyze(self):
@@ -501,13 +506,26 @@ class GcdTab(QWidget):
             f"Specific power density P = {p_density:.4f} W/kg",
         ]
 
+        card_warnings = []
         if result["r_squared"] < r2_thr < result["r_squared"] + 0.05:
-            lines.append("\nNote: R² is close to the linearity threshold -- borderline case, "
-                          "inspect the plotted curve before trusting the automatic method choice.")
+            borderline_note = ("R² is close to the linearity threshold -- borderline case, "
+                                "inspect the plotted curve before trusting the automatic method choice.")
+            lines.append(f"\nNote: {borderline_note}")
+            card_warnings.append(borderline_note)
 
         self.results_text.setPlainText("\n".join(lines))
         self.plot.plot_xy(t, v, xlabel="Time (s)", ylabel="Voltage (V)",
                            title=f"Discharge segment — {result['method']}")
+
+        self.result_card.set_headline("Specific capacitance C_s", f"{result['capacitance_f_per_g']:.4f} F/g")
+        self.result_card.set_secondary([
+            ("Method", result["method"]),
+            ("R² of linear fit", f"{result['r_squared']:.5f}"),
+            ("ESR", f"{esr:.4f} Ω"),
+            ("Energy density", f"{e_density:.3f} Wh/kg"),
+            ("Power density", f"{p_density:.3f} W/kg"),
+        ])
+        self.result_card.set_warnings(card_warnings)
 
         self.last_result = {
             "Method used": result["method"],

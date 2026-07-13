@@ -15,6 +15,7 @@ from core import cv_analysis as cv
 from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
+    ResultCard, show_toast, show_empty_state,
 )
 from .unit_widgets import CompoundRateSpinBox
 from . import theme, formula_sources
@@ -125,6 +126,11 @@ class CvTab(QWidget):
         right = QWidget()
         right_layout = QVBoxLayout(right)
         self.plot = PlotPanel()
+        show_empty_state(self.plot, "Load a file and select one CV cycle, then click Analyze")
+
+        self.result_card = ResultCard()
+        right_layout.addWidget(self.result_card)
+
         self.results_text = QTextEdit()
         self.results_text.setReadOnly(True)
         self.table = make_table_view()
@@ -255,7 +261,8 @@ class CvTab(QWidget):
         self.last_result = None
         self.last_raw_df = None
         self.results_text.clear()
-        self.plot.clear_plot()
+        self.result_card.clear()
+        show_empty_state(self.plot, "Load a file and select one CV cycle, then click Analyze")
         self.export_btn.setEnabled(False)
 
     def on_analyze(self):
@@ -296,6 +303,15 @@ class CvTab(QWidget):
             "meaningful for a curve with no resolvable redox peaks.)",
         ]
         self.results_text.setPlainText("\n".join(lines))
+
+        self.result_card.set_headline(label, f"{value:.4f} {unit}")
+        self.result_card.set_secondary([
+            ("Potential window ΔV", f"{dv:.4f} V"),
+            ("Scan rate", f"{scan_rate:.6g} V/s"),
+            ("ΔEp (peak separation)", f"{sep['delta_ep_v']*1000:.1f} mV"),
+        ])
+        self.result_card.set_warnings([])
+
         self.plot.ax.clear()
         self.plot.ax.plot(v, i, "-", color=theme.RAW, linewidth=1.3, label="CV cycle (raw)")
         self.plot.ax.plot([sep["e_pa_v"]], [sep["i_pa_a"]], "^", color=theme.FIT, markersize=8, label="Anodic peak")

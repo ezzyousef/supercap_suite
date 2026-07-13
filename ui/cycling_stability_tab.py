@@ -18,6 +18,7 @@ from core import gcd_analysis as gcd
 from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
+    ResultCard, show_toast, show_empty_state,
 )
 from . import theme, formula_sources
 
@@ -125,6 +126,11 @@ class CyclingStabilityTab(QWidget):
         right = QWidget()
         right_layout = QVBoxLayout(right)
         self.plot = PlotPanel()
+        show_empty_state(self.plot, "Load a multi-cycle file, then click Analyze cycling stability")
+
+        self.result_card = ResultCard()
+        right_layout.addWidget(self.result_card)
+
         self.results_text = QTextEdit()
         self.results_text.setReadOnly(True)
         self.table = make_table_view()
@@ -293,17 +299,28 @@ class CyclingStabilityTab(QWidget):
             f"Capacitance retention after {len(cycles)} cycles = {last_ret:.2f} %",
             f"Mean coulombic efficiency = {mean_ce:.2f} %",
         ]
+        card_warnings = []
         anomalous = df[(df["Coulombic efficiency (%)"] > 105) | (df["Coulombic efficiency (%)"] < 50)]
         if not anomalous.empty:
-            lines.append("")
-            lines.append(
-                f"Note: {len(anomalous)} cycle(s) show a coulombic efficiency outside "
-                "the typical ~50-105% literature range -- values above 100% can "
-                "reflect charge redistribution/self-discharge effects rather than "
-                "a measurement error, but check the underlying segments before "
+            anomalous_note = (
+                f"{len(anomalous)} cycle(s) show a coulombic efficiency outside the "
+                "typical ~50-105% literature range -- values above 100% can reflect "
+                "charge redistribution/self-discharge effects rather than a "
+                "measurement error, but check the underlying segments before "
                 "trusting them at face value."
             )
+            lines.append("")
+            lines.append(f"Note: {anomalous_note}")
+            card_warnings.append(anomalous_note)
         self.results_text.setPlainText("\n".join(lines))
+
+        self.result_card.set_headline("Capacitance retention", f"{last_ret:.2f} % after {len(cycles)} cycles")
+        self.result_card.set_secondary([
+            ("First-cycle capacitance", f"{first_cap:.4f} F/g"),
+            ("Last-cycle capacitance", f"{last_cap:.4f} F/g"),
+            ("Mean coulombic efficiency", f"{mean_ce:.2f} %"),
+        ])
+        self.result_card.set_warnings(card_warnings)
 
         self.plot.ax.clear()
         cyc_num = df["Cycle"].to_numpy()

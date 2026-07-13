@@ -15,7 +15,7 @@ from core import gcd_analysis as gcd
 from core import cv_analysis as cv
 from core import eis_analysis as eis
 from core import dsc_analysis as dsc
-from .widgets import make_export_button, RecordLogPanel
+from .widgets import make_export_button, RecordLogPanel, ResultCard
 from .unit_widgets import CompoundRateSpinBox
 from . import theme, formula_sources
 
@@ -86,6 +86,9 @@ class GcdCalculator(QWidget):
         btn.clicked.connect(self.on_calculate)
         layout.addWidget(btn)
 
+        self.result_card = ResultCard()
+        layout.addWidget(self.result_card)
+
         self.result = QTextEdit()
         self.result.setReadOnly(True)
         layout.addWidget(self.result, stretch=1)
@@ -137,6 +140,11 @@ class GcdCalculator(QWidget):
             f"Energy density E = {e_wh_kg:.4f} Wh/kg\n"
             f"Power density P = {p_w_kg:.4f} W/kg"
         )
+        self.result_card.set_headline("Specific capacitance C_s", f"{c:.4f} F/g")
+        self.result_card.set_secondary([
+            ("Energy density", f"{e_wh_kg:.4f} Wh/kg"),
+            ("Power density", f"{p_w_kg:.4f} W/kg"),
+        ])
         self.last_result = {
             "Formula used": formula,
             "Current I (A)": self.current.value(),
@@ -197,6 +205,9 @@ class CvCalculator(QWidget):
         btn.clicked.connect(self.on_calculate)
         layout.addWidget(btn)
 
+        self.result_card = ResultCard()
+        layout.addWidget(self.result_card)
+
         self.result = QTextEdit()
         self.result.setReadOnly(True)
         layout.addWidget(self.result, stretch=1)
@@ -239,6 +250,8 @@ class CvCalculator(QWidget):
             "curve that is (close to) a rectangle -- if your curve has "
             "redox humps or slope, use the integral form instead."
         )
+        self.result_card.set_headline("Specific capacitance C_s", f"{c:.4f} F/g")
+        self.result_card.set_secondary([("Formula", formula)])
         self.last_result = {
             "Formula used": formula,
             "Scan rate ν (V/s)": self.scan_rate.value_base(),
@@ -274,6 +287,9 @@ class EnergyPowerCalculator(QWidget):
         btn.clicked.connect(self.on_calculate)
         layout.addWidget(btn)
 
+        self.result_card = ResultCard()
+        layout.addWidget(self.result_card)
+
         self.result = QTextEdit()
         self.result.setReadOnly(True)
         layout.addWidget(self.result, stretch=1)
@@ -296,6 +312,8 @@ class EnergyPowerCalculator(QWidget):
             QMessageBox.critical(self, "Calculation error", str(e_))
             return
         self.result.setPlainText(f"Energy density E = {e:.4f} Wh/kg\nPower density P = {p:.4f} W/kg")
+        self.result_card.set_headline("Energy density E", f"{e:.4f} Wh/kg")
+        self.result_card.set_secondary([("Power density", f"{p:.4f} W/kg")])
         self.last_result = {
             "Specific capacitance C (F/g)": self.cap.value(),
             "Voltage window ΔV (V)": self.dv.value(),
@@ -331,6 +349,9 @@ class ConductivityCalculator(QWidget):
         btn.clicked.connect(self.on_calculate)
         layout.addWidget(btn)
 
+        self.result_card = ResultCard()
+        layout.addWidget(self.result_card)
+
         self.result = QTextEdit()
         self.result.setReadOnly(True)
         layout.addWidget(self.result, stretch=1)
@@ -352,6 +373,8 @@ class ConductivityCalculator(QWidget):
             QMessageBox.critical(self, "Calculation error", str(e))
             return
         self.result.setPlainText(f"Ionic conductivity σ = {sigma:.6g} S/cm  ({sigma*1000:.4f} mS/cm)")
+        self.result_card.set_headline("Ionic conductivity σ", f"{sigma:.6g} S/cm")
+        self.result_card.set_secondary([("In mS/cm", f"{sigma * 1000:.4f} mS/cm")])
         self.last_result = {
             "Bulk resistance R (Ω)": self.resistance.value(),
             "Thickness L (cm)": self.thickness.value(),
@@ -395,6 +418,9 @@ class ElectrodeConversionCalculator(QWidget):
         btn.clicked.connect(self.on_calculate)
         layout.addWidget(btn)
 
+        self.result_card = ResultCard()
+        layout.addWidget(self.result_card)
+
         self.result = QTextEdit()
         self.result.setReadOnly(True)
         layout.addWidget(self.result, stretch=1)
@@ -415,6 +441,8 @@ class ElectrodeConversionCalculator(QWidget):
                 out = gcd.symmetric_cell_to_electrode_capacitance(self.value_spin.value())
                 self.result.setPlainText(f"Estimated single-electrode C_s = 4 × {self.value_spin.value():.4f} "
                                           f"= {out:.4f} F/g")
+                self.result_card.set_headline("Estimated single-electrode C_s", f"{out:.4f} F/g")
+                self.result_card.set_secondary([])
                 self.last_result = {
                     "Direction": self.direction_combo.currentText(),
                     "Known symmetric-cell C_s (F/g)": self.value_spin.value(),
@@ -424,6 +452,8 @@ class ElectrodeConversionCalculator(QWidget):
                 out = gcd.three_electrode_to_two_electrode_estimate(self.value_spin.value())
                 self.result.setPlainText(f"Estimated symmetric-cell C_s = {self.value_spin.value():.4f} / 4 "
                                           f"= {out:.4f} F/g")
+                self.result_card.set_headline("Estimated symmetric-cell C_s", f"{out:.4f} F/g")
+                self.result_card.set_secondary([])
                 self.last_result = {
                     "Direction": self.direction_combo.currentText(),
                     "Known single-electrode (3e) C_s (F/g)": self.value_spin.value(),
@@ -457,6 +487,9 @@ class EnthalpyCalculator(QWidget):
         btn.clicked.connect(self.on_calculate)
         layout.addWidget(btn)
 
+        self.result_card = ResultCard()
+        layout.addWidget(self.result_card)
+
         self.result = QTextEdit()
         self.result.setReadOnly(True)
         layout.addWidget(self.result, stretch=1)
@@ -478,6 +511,8 @@ class EnthalpyCalculator(QWidget):
             QMessageBox.critical(self, "Calculation error", str(e))
             return
         self.result.setPlainText(f"Specific enthalpy ΔH = {dh:.4f} J/g")
+        self.result_card.set_headline("Specific enthalpy ΔH", f"{dh:.4f} J/g")
+        self.result_card.set_secondary([])
         self.last_result = {
             "Peak area, baseline-corrected (J)": self.area.value(),
             "Sample mass (g)": self.mass.value(),

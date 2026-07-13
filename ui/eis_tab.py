@@ -1,6 +1,8 @@
 """EIS analysis tab: load Nyquist data (Z_re, Z_im, frequency), plot
 Nyquist/Bode, compute low-frequency capacitance, ESR, ionic conductivity,
 and fit a Randles-type equivalent circuit."""
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -17,6 +19,7 @@ from core import circuit_library as circuits
 from .widgets import (
     PlotWidget, PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
+    ResultCard, show_toast, show_empty_state,
 )
 from .circuit_diagram import draw_circuit
 from . import theme, formula_sources
@@ -190,11 +193,16 @@ class EisTab(QWidget):
         right_layout = QVBoxLayout(right)
 
         self.plot = PlotPanel()
+        show_empty_state(self.plot, "Load an EIS file, then preview, compute, or fit a circuit")
         self.circuit_diagram = PlotWidget(figsize=(5, 2.6))
         self.circuit_diagram.ax.axis("off")
         self.circuit_diagram.ax.set_title("Equivalent circuit diagram (fit a circuit to draw it)",
                                            fontsize=9, color=theme.INK_DIM)
         self.circuit_diagram.draw()
+
+        self.result_card = ResultCard()
+        right_layout.addWidget(self.result_card)
+
         self.results_text = QTextEdit()
         self.results_text.setReadOnly(True)
         self.table = make_table_view()
@@ -415,6 +423,12 @@ class EisTab(QWidget):
             f"ESR (real-axis intercept at min |Z''|) = {esr:.4f} Ω",
         ]
         self.results_text.setPlainText("\n".join(lines))
+        self.result_card.set_headline("Capacitance C", f"{c:.6g} {unit}")
+        self.result_card.set_secondary([
+            ("Lowest frequency used", f"{freq[idx]:.6g} Hz"),
+            ("ESR", f"{esr:.4f} Ω"),
+        ])
+        self.result_card.set_warnings([])
 
         self.last_result = {
             "Lowest frequency used (Hz)": freq[idx],
@@ -445,6 +459,13 @@ class EisTab(QWidget):
             f"({sigma * 1000:.4f} mS/cm)",
         ]
         self.results_text.setPlainText("\n".join(lines))
+        self.result_card.set_headline("Ionic conductivity σ", f"{sigma:.6g} S/cm ({sigma * 1000:.4f} mS/cm)")
+        self.result_card.set_secondary([
+            ("Bulk resistance R", f"{r_bulk:.4f} Ω"),
+            ("Thickness L", f"{self.thickness_spin.value():.4f} cm"),
+            ("Area A", f"{self.area_spin.value():.4f} cm²"),
+        ])
+        self.result_card.set_warnings([])
 
         self.last_result = {
             "Bulk resistance R, Nyquist real-axis intercept (Ω)": r_bulk,
@@ -484,7 +505,8 @@ class EisTab(QWidget):
         self.last_result = None
         self.last_raw_df = None
         self.results_text.clear()
-        self.plot.clear_plot()
+        self.result_card.clear()
+        show_empty_state(self.plot, "Load an EIS file, then preview, compute, or fit a circuit")
         self.circuit_diagram.ax.clear()
         self.circuit_diagram.ax.axis("off")
         self.circuit_diagram.ax.set_title("Equivalent circuit diagram (fit a circuit to draw it)",
@@ -578,6 +600,22 @@ class EisTab(QWidget):
                       "overlay plot, not just χ², before trusting the fitted values.")
         self.results_text.setPlainText("\n".join(lines))
 
+        chi_ok_card = result.reduced_chi_squared < 5.0
+        self.result_card.set_headline(
+            "Fit quality" if not chi_ok_card else "Model",
+            result.display_name,
+        )
+        param_pairs = [(name, f"{val:.6g}") for name, val in result.params.items()]
+        MAX_SECONDARY_PARAMS = 6
+        secondary = [("Reduced χ²", f"{result.reduced_chi_squared:.6g}")] + param_pairs[:MAX_SECONDARY_PARAMS]
+        if len(param_pairs) > MAX_SECONDARY_PARAMS:
+            secondary.append(("", f"+ {len(param_pairs) - MAX_SECONDARY_PARAMS} more parameter(s) below"))
+        self.result_card.set_secondary(secondary)
+        card_warnings = list(result.warnings)
+        if not chi_ok_card:
+            card_warnings.append("Reduced χ² is large -- check convergence before trusting this fit.")
+        self.result_card.set_warnings(card_warnings)
+
         self.plot.ax.clear()
         self.plot.ax.plot(zre, -zim, "o", color=theme.RAW, markersize=4, label="Data (raw)")
         self.plot.ax.plot(result.z_fit_re, -result.z_fit_im, "--", color=theme.FIT, linewidth=1.5,
@@ -619,4 +657,4 @@ class EisTab(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Export failed", f"Could not save image:\n{e}")
             return
-        QMessageBox.information(self, "Exported", f"Circuit diagram saved to:\n{path}")
+        show_toast(self, f"Circuit diagram saved to {Path(path).name}")
