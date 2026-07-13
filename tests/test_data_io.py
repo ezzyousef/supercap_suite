@@ -2,11 +2,15 @@
 for DSC instrument exports that prepend a free-text title row and/or a
 separate units row before the real column-name row (unlike EC-Lab's
 single-header-row convention, which the rest of this module already
-handled fine)."""
+handled fine), and on multi-sheet-workbook sheet selection."""
+import numpy as np
 import pandas as pd
 import pytest
 
-from core.data_io import _needs_header_rescan, _find_header_row, _rescan_multirow_header, find_column
+from core.data_io import (
+    _needs_header_rescan, _find_header_row, _rescan_multirow_header, find_column,
+    find_sheet_with_recognized_columns,
+)
 
 
 def _dsc_style_raw_table() -> pd.DataFrame:
@@ -72,3 +76,46 @@ def test_rescan_multirow_header_output_is_recognized_by_find_column():
 def test_rescan_multirow_header_returns_none_when_no_header_found():
     raw = pd.DataFrame([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
     assert _rescan_multirow_header(raw) is None
+
+
+def test_needs_header_rescan_ignores_a_mostly_empty_numeric_padding_column():
+    """A real DSC export can have trailing near-empty columns padded out
+    by Excel that pandas reads as numeric (float64) dtype -- but with
+    only a couple of stray non-null values out of thousands of rows.
+    That should NOT count as "this table already has real numeric data"
+    (which would wrongly skip the rescan and leave the title row as the
+    header) -- regression for exactly this failure on a real file, where
+    a 14000-row sheet's genuine data columns stayed unrecognized because
+    one padding column happened to have 2 non-null floats in it."""
+    plain = pd.DataFrame(index=range(2000))
+    plain["Ramp title text"] = ["Temperature"] + ["-48"] * 1999
+    plain["Unnamed: 1"] = ["Heat Flow (Normalized)"] + ["5.482"] * 1999
+    plain["padding_col"] = [np.nan] * 2000
+    plain.loc[500, "padding_col"] = 1.23  # a couple of stray values
+    plain.loc[1000, "padding_col"] = 4.56
+    assert _needs_header_rescan(plain) is True
+
+
+def test_find_sheet_with_recognized_columns_skips_metadata_and_picks_richest_sheet(tmp_path):
+    """Regression for a real multi-sheet DSC workbook: sheet 0 was a
+    non-data "Details" metadata sheet, sheet 1 was a 1-row "Equilibrate"
+    stabilization point (which technically has recognizable columns), and
+    sheet 2 was the actual 14000-row "Ramp" sweep. The picked sheet must
+    be the Ramp one -- neither the metadata sheet (no usable columns) nor
+    the short Equilibrate sheet (fewer rows) should win."""
+    openpyxl = pytest.importorskip("openpyxl")
+    path = tmp_path / "multisheet.xlsx"
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        pd.DataFrame({"Filename": ["Default"], "Operator": [None]}).to_excel(
+            writer, sheet_name="Details", index=False)
+        pd.DataFrame({"Temperature": [-48.0], "Heat Flow (Normalized)": [5.482], "Time": [0.0]}).to_excel(
+            writer, sheet_name="Equilibrate", index=False)
+        n = 500
+        pd.DataFrame({
+            "Temperature": np.linspace(-48, 30, n),
+            "Heat Flow (Normalized)": np.linspace(5.5, -3.0, n),
+            "Time": np.linspace(0, 8, n),
+        }).to_excel(writer, sheet_name="Ramp", index=False)
+
+    best = find_sheet_with_recognized_columns(str(path), [["heat_flow"], ["temp_c", "time_s"]])
+    assert best == "Ramp"

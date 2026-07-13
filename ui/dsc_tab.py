@@ -18,7 +18,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from core.data_io import load_data_file, list_excel_sheets, find_column, DataLoadError
+from core.data_io import (
+    load_data_file, list_excel_sheets, find_column, find_sheet_with_recognized_columns, DataLoadError,
+)
 from core import dsc_analysis as dsc
 from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
@@ -253,7 +255,23 @@ class EnthalpyTool(QWidget):
             self.sheet_combo.addItems(sheets)
             self.sheet_combo.blockSignals(False)
             self.sheet_combo.setEnabled(True)
-            self._load_current_selection()
+            # Multi-sheet DSC exports commonly bundle a non-data "Details"
+            # metadata sheet (filename/instrument/operator/run date) plus
+            # one sheet per experiment segment (e.g. "Equilibrate...",
+            # "Ramp..."). Sheet index 0 is often the metadata sheet, which
+            # has no recognizable temperature/time/heat-flow columns at
+            # all -- defaulting to it produces a "select a column" error
+            # on an otherwise perfectly valid file. Scan for the first
+            # sheet that actually looks like usable data and jump straight
+            # to it; if none qualify, fall back to whatever sheet 0 was
+            # (unchanged prior behavior).
+            best_sheet = find_sheet_with_recognized_columns(
+                path, [["heat_flow"], ["temp_c", "time_s"]]
+            )
+            if best_sheet and best_sheet != self.sheet_combo.currentText():
+                self.sheet_combo.setCurrentText(best_sheet)  # triggers on_sheet_changed
+            else:
+                self._load_current_selection()
         else:
             self.sheet_combo.clear()
             self.sheet_combo.setEnabled(False)
@@ -341,6 +359,24 @@ class EnthalpyTool(QWidget):
         except (ValueError, TypeError):
             QMessageBox.critical(self, "Data error", "Selected columns are not numeric.")
             return None
+
+        # Drop rows where either column is missing (NaN) -- real instrument
+        # exports sometimes have scattered logging gaps (a handful of rows
+        # out of thousands). Even a tiny fraction of NaNs left in is enough
+        # to poison a np.max/np.ptp-style range calculation in peak
+        # detection to NaN, making every "is this prominent enough"
+        # comparison silently False and producing a false "No clear peak
+        # found" on data that does have a real peak. Row POSITIONS shift
+        # after this, but detect_dsc_peak's returned indices and this
+        # tab's start/end row spinboxes both index into THIS (already
+        # NaN-dropped) array consistently, since every caller goes through
+        # this same method.
+        valid = ~(np.isnan(x) | np.isnan(y))
+        if not np.any(valid):
+            QMessageBox.warning(self, "No valid data", "The selected columns contain no valid (non-missing) rows.")
+            return None
+        if not np.all(valid):
+            x, y = x[valid], y[valid]
 
         if self.x_type_combo.currentIndex() == 1:
             rate_c_per_s = self.scan_rate_spin.value() / 60.0

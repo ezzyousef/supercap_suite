@@ -100,6 +100,47 @@ def load_data_file(path: str, sheet_name=0) -> pd.DataFrame:
     )
 
 
+def find_sheet_with_recognized_columns(path: str, required_key_groups: list[list[str]]) -> str | None:
+    """Scan every sheet in a multi-sheet workbook and return the name of
+    the one with the MOST rows among those where, for every group in
+    `required_key_groups`, at least one key in that group is found via
+    find_column -- e.g. [["heat_flow"], ["temp_c", "time_s"]] means "needs
+    a heat-flow column AND (a temperature OR a time column)". Returns
+    None if no sheet qualifies, so the caller can fall back to its own
+    default (e.g. sheet index 0) instead of guessing further.
+
+    Written for instrument exports -- DSC software especially -- that
+    bundle one non-data metadata sheet (e.g. "Details": filename,
+    instrument, operator, run date) plus one sheet per experiment segment
+    (e.g. a 1-row "Equilibrate -50.00 C" stabilization point, then a
+    14000-row "Ramp 10.00 C/min to 30.00 C" sweep) in a single workbook.
+    Opening such a file and defaulting to sheet index 0 lands on the
+    metadata sheet -- which has no recognizable data columns at all --
+    instead of a usable data sheet, producing a "select a column" error
+    on a perfectly valid file. Picking the RICHEST qualifying sheet
+    (rather than just the first one in sheet order) matters here too: a
+    short segment can have valid-looking columns but not be the sheet the
+    user actually wants to analyze.
+    """
+    try:
+        sheets = list_excel_sheets(path)
+    except DataLoadError:
+        return None
+    best_name, best_rows = None, -1
+    for name in sheets:
+        try:
+            df = load_data_file(path, sheet_name=name)
+        except DataLoadError:
+            continue
+        if isinstance(df, dict):
+            continue
+        if not all(any(find_column(df, key) is not None for key in group) for group in required_key_groups):
+            continue
+        if len(df) > best_rows:
+            best_name, best_rows = name, len(df)
+    return best_name
+
+
 def list_excel_sheets(path: str) -> list[str]:
     """Return sheet names of an Excel workbook without loading all the data."""
     try:
@@ -163,10 +204,21 @@ def _needs_header_rescan(df: pd.DataFrame) -> bool:
     two data rows, leaving every column as non-numeric object dtype with
     unrecognizable names. A file that's already fine (e.g. a standard
     EC-Lab export) will have at least one recognized alias or numeric
-    column and is left untouched."""
+    column and is left untouched.
+
+    A numeric column only counts if at least HALF its rows are actually
+    filled in -- some instrument exports pad the sheet with extra
+    trailing near-empty columns that pandas reads as float64 (no
+    non-numeric string forces them to object dtype) and that can still
+    carry a handful of stray non-null values (e.g. 2 out of 14000+ rows)
+    despite being essentially blank filler, not real data. A plain
+    "has any non-NaN value at all" check would treat that as "this table
+    already has real numeric data" and wrongly skip the rescan."""
     if any(find_column(df, key) is not None for key in COLUMN_ALIASES):
         return False
-    return not any(pd.api.types.is_numeric_dtype(df[c]) for c in df.columns)
+    min_filled = max(1, int(0.5 * len(df)))
+    return not any(pd.api.types.is_numeric_dtype(df[c]) and df[c].notna().sum() >= min_filled
+                   for c in df.columns)
 
 
 def _row_looks_numeric(values) -> bool:
