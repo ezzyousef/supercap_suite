@@ -1,5 +1,5 @@
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QKeySequence, QShortcut
 from PySide6.QtWidgets import QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QLabel
 
 from .gcd_tab import GcdTab
@@ -92,6 +92,21 @@ class MainWindow(QMainWindow):
         self.accent_strip.setFixedHeight(4)
         central_layout.addWidget(self.accent_strip)
 
+        # Navigation judgment call: this app has 8 top-level tabs (two of
+        # them -- Rate Study, DSC -- already group a second level of
+        # related sub-tools in their own inner QTabWidget), each with a
+        # distinct color-dot icon. A flat single-row tab bar stays legible
+        # at that count without a secondary category rail, so it was kept
+        # as-is rather than restructured -- revisit if more top-level tabs
+        # are added later and the bar starts wrapping/crowding.
+        #
+        # Dark mode was deliberately not added this pass: the existing
+        # light "instrument panel" palette (ui/theme.py) is a deliberate,
+        # already-reviewed design choice (see that module's docstring),
+        # and a second full palette plus a runtime QSS-swap toggle is
+        # real, non-trivial scope on top of an already large visual pass
+        # -- better done as its own focused follow-up than squeezed in
+        # here at lower quality.
         tabs = QTabWidget()
         central_layout.addWidget(tabs)
         self._tabs = tabs
@@ -110,8 +125,42 @@ class MainWindow(QMainWindow):
             tabs.setTabIcon(i, theme.make_color_dot_icon(color))
 
         tabs.currentChanged.connect(self._on_tab_changed)
+
+        # Keyboard baseline: Ctrl+O opens a file in whichever tab (or
+        # nested sub-tab, for Rate Study/DSC) currently has focus, Ctrl+E
+        # triggers that tab's primary "Export to Excel..." action. Not a
+        # full accessibility audit, just the two most repetitive actions
+        # for a tool researchers use many times per session.
+        QShortcut(QKeySequence("Ctrl+O"), self, activated=self._shortcut_open_file)
+        QShortcut(QKeySequence("Ctrl+E"), self, activated=self._shortcut_export)
         self._on_tab_changed(tabs.currentIndex())
 
     def _on_tab_changed(self, index: int) -> None:
         color = theme.TAB_COLORS[index] if 0 <= index < len(theme.TAB_COLORS) else theme.RAW
         self.accent_strip.setStyleSheet(f"background-color: {color};")
+
+    def _current_leaf_tab(self) -> QWidget | None:
+        """The currently visible tab, recursing into a nested QTabWidget
+        (Rate Study and DSC each hold two sub-tools in their own inner
+        QTabWidget) so Ctrl+O/Ctrl+E act on whichever sub-tool is actually
+        on screen, not the outer container."""
+        widget = self._tabs.currentWidget()
+        while widget is not None:
+            inner = widget.findChild(QTabWidget)
+            if inner is None:
+                break
+            widget = inner.currentWidget()
+        return widget
+
+    def _shortcut_open_file(self) -> None:
+        tab = self._current_leaf_tab()
+        if tab is not None and hasattr(tab, "on_open_file"):
+            tab.on_open_file()
+
+    def _shortcut_export(self) -> None:
+        tab = self._current_leaf_tab()
+        if tab is None:
+            return
+        export_btn = getattr(tab, "export_btn", None)
+        if export_btn is not None and hasattr(export_btn, "export_button"):
+            export_btn.export_button.click()

@@ -114,6 +114,7 @@ class CyclingStabilityTab(QWidget):
 
         analyze_btn = QPushButton("▶ Analyze cycling stability")
         analyze_btn.clicked.connect(self.on_analyze)
+        analyze_btn.setDefault(True)
         left_layout.addWidget(analyze_btn)
         left_layout.addWidget(theme.make_source_button(
             self, "Cycling stability (retention & coulombic efficiency)",

@@ -171,6 +171,7 @@ class GcdTab(QWidget):
 
         analyze_btn = QPushButton("▶ Analyze discharge segment")
         analyze_btn.clicked.connect(self.on_analyze)
+        analyze_btn.setDefault(True)
         left_layout.addWidget(analyze_btn)
         clear_btn = QPushButton("Clear results")
         clear_btn.setToolTip("Resets the results panel, plot, and table so a stale result can't get exported by accident.")

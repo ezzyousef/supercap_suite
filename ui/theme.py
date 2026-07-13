@@ -301,6 +301,32 @@ QMessageBox {{
 def apply_theme(app) -> None:
     app.setStyleSheet(QSS)
     app.setFont(QFont(UI_FONT_FAMILY, 9))
+    apply_matplotlib_rcparams()
+
+
+def apply_matplotlib_rcparams() -> None:
+    """App-wide matplotlib defaults, set once at startup, so every plot
+    that doesn't explicitly override a color (most do, via RAW/FIT/GOOD --
+    but any that don't, e.g. a quick ax.plot() with no color kwarg) still
+    lands on this app's brand palette instead of matplotlib's own default
+    blue/orange cycler, plus consistent DPI/font size matching the rest of
+    the UI's type scale and gridlines at low opacity rather than
+    matplotlib's default heavier ones."""
+    import matplotlib
+    matplotlib.rcParams.update({
+        "axes.prop_cycle": matplotlib.cycler(color=[RAW, FIT, GOOD, "#7A52A6", "#B8860B", WARN]),
+        "figure.dpi": 110,
+        "savefig.dpi": 200,
+        "font.size": 9,
+        "font.family": "sans-serif",
+        "axes.titlesize": 10,
+        "axes.labelsize": 9,
+        "xtick.labelsize": 8,
+        "ytick.labelsize": 8,
+        "legend.fontsize": 8,
+        "grid.alpha": 0.35,
+        "grid.linewidth": 0.6,
+    })
 
 
 def apply_plot_style(ax) -> None:
