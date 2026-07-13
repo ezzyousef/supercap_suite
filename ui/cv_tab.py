@@ -15,7 +15,7 @@ from core import cv_analysis as cv
 from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
-    make_scrollable_panel, ResultCard, NormalizationSelector, show_toast, show_empty_state,
+    make_scrollable_panel, ResultCard, CollapsibleSection, NormalizationSelector, show_toast, show_empty_state,
 )
 from .unit_widgets import CompoundRateSpinBox
 from . import theme, formula_sources
@@ -49,8 +49,15 @@ class CvTab(QWidget):
         splitter = QSplitter(Qt.Horizontal)
         root.addWidget(splitter, stretch=1)
 
+        # --- Left: settings, organized into Data / Configure workflow
+        # stages -- Data starts expanded and auto-collapses once a file
+        # loads successfully (see _load_dataframe); Configure always
+        # stays expanded (it's what a user actually adjusts run to run).
         left = QWidget()
         left_layout = QVBoxLayout(left)
+
+        self.data_section = CollapsibleSection("1) Data", start_expanded=True)
+        left_layout.addWidget(self.data_section)
 
         col_box = QGroupBox("Column mapping")
         col_grid = QGridLayout(col_box)
@@ -60,7 +67,7 @@ class CvTab(QWidget):
         col_grid.addWidget(self.voltage_combo, 0, 1)
         col_grid.addWidget(QLabel("Current column:"), 1, 0)
         col_grid.addWidget(self.current_combo, 1, 1)
-        left_layout.addWidget(col_box)
+        self.data_section.addWidget(col_box)
 
         seg_box = QGroupBox("One CV cycle (row range, 0-indexed)")
         seg_grid = QGridLayout(seg_box)
@@ -75,7 +82,10 @@ class CvTab(QWidget):
         preview_btn = QPushButton("Preview cycle (I vs V)")
         preview_btn.clicked.connect(self.on_preview)
         seg_grid.addWidget(preview_btn, 2, 0, 1, 2)
-        left_layout.addWidget(seg_box)
+        self.data_section.addWidget(seg_box)
+
+        self.configure_section = CollapsibleSection("2) Configure", start_expanded=True)
+        left_layout.addWidget(self.configure_section)
 
         param_box = QGroupBox("Parameters")
         param_grid = QGridLayout(param_box)
@@ -87,13 +97,13 @@ class CvTab(QWidget):
         param_grid.addWidget(self.current_unit_combo, 0, 1)
         param_grid.addWidget(QLabel("Scan rate:"), 1, 0)
         param_grid.addWidget(self.scan_rate_spin, 1, 1)
-        left_layout.addWidget(param_box)
+        self.configure_section.addWidget(param_box)
 
         norm_box = QGroupBox("Capacitance basis (specific capacitance report only)")
         norm_layout = QVBoxLayout(norm_box)
         self.normalizer = NormalizationSelector(default_mass_g=0.005)
         norm_layout.addWidget(self.normalizer)
-        left_layout.addWidget(norm_box)
+        self.configure_section.addWidget(norm_box)
 
         report_box = QGroupBox("Report as")
         report_grid = QGridLayout(report_box)
@@ -103,7 +113,7 @@ class CvTab(QWidget):
             "Specific capacity (C/g) — battery-type materials",
         ])
         report_grid.addWidget(self.report_combo, 0, 0)
-        left_layout.addWidget(report_box)
+        self.configure_section.addWidget(report_box)
 
         analyze_btn = QPushButton("▶ Analyze CV cycle")
         analyze_btn.clicked.connect(self.on_analyze)
@@ -220,6 +230,9 @@ class CvTab(QWidget):
         self.table_model.set_dataframe(df.head(500))
         self.end_spin.setMaximum(max(0, len(df) - 1))
         self.end_spin.setValue(max(0, len(df) - 1))
+        # Data (column mapping + cycle row range) is done with once a
+        # file loads -- collapse it so Configure gets the attention.
+        self.data_section.set_expanded(False)
 
     def _get_cycle(self):
         if self.df is None:

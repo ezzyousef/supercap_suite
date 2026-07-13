@@ -18,7 +18,7 @@ from core import gcd_analysis as gcd
 from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
-    make_scrollable_panel, ResultCard, show_toast, show_empty_state,
+    make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
 )
 from . import theme, formula_sources
 
@@ -51,8 +51,15 @@ class CyclingStabilityTab(QWidget):
         splitter = QSplitter(Qt.Horizontal)
         root.addWidget(splitter, stretch=1)
 
+        # --- Left: settings, organized into Data / Configure workflow
+        # stages -- Data starts expanded and auto-collapses once a file
+        # loads successfully; Configure (current/mass/R² threshold)
+        # always stays expanded.
         left = QWidget()
         left_layout = QVBoxLayout(left)
+
+        self.data_section = CollapsibleSection("1) Data", start_expanded=True)
+        left_layout.addWidget(self.data_section)
 
         note = QLabel(
             "Load ONE file containing the WHOLE cycling test (many charge/"
@@ -62,7 +69,7 @@ class CyclingStabilityTab(QWidget):
         )
         note.setWordWrap(True)
         note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
-        left_layout.addWidget(note)
+        self.data_section.addWidget(note)
 
         col_box = QGroupBox("Column mapping")
         col_grid = QGridLayout(col_box)
@@ -85,7 +92,10 @@ class CyclingStabilityTab(QWidget):
         cycle_note.setWordWrap(True)
         cycle_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
         col_grid.addWidget(cycle_note, 3, 0, 1, 2)
-        left_layout.addWidget(col_box)
+        self.data_section.addWidget(col_box)
+
+        self.configure_section = CollapsibleSection("2) Configure", start_expanded=True)
+        left_layout.addWidget(self.configure_section)
 
         param_box = QGroupBox("Test parameters")
         param_grid = QGridLayout(param_box)
@@ -110,7 +120,7 @@ class CyclingStabilityTab(QWidget):
         param_grid.addWidget(self.mass_spin, 1, 1)
         param_grid.addWidget(QLabel("Linearity R² threshold (capacitance formula):"), 2, 0)
         param_grid.addWidget(self.r2_spin, 2, 1)
-        left_layout.addWidget(param_box)
+        self.configure_section.addWidget(param_box)
 
         analyze_btn = QPushButton("▶ Analyze cycling stability")
         analyze_btn.clicked.connect(self.on_analyze)
@@ -228,6 +238,9 @@ class CyclingStabilityTab(QWidget):
             )
 
         self.table_model.set_dataframe(df.head(500))
+        # Column mapping is done with once a file loads -- collapse Data
+        # so Configure gets the attention.
+        self.data_section.set_expanded(False)
 
     def on_analyze(self):
         if self.df is None:

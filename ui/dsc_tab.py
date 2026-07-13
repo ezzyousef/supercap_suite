@@ -135,8 +135,16 @@ class EnthalpyTool(QWidget):
         splitter = QSplitter(Qt.Horizontal)
         root.addWidget(splitter, stretch=1)
 
+        # --- Left: settings, organized into Data / Configure workflow
+        # stages -- Data starts expanded and auto-collapses once a peak
+        # has been auto-detected or integrated (see on_auto_detect_peak/
+        # on_analyze); Configure (sample mass + optional water-type
+        # calculation) always stays expanded.
         left = QWidget()
         left_layout = QVBoxLayout(left)
+
+        self.data_section = CollapsibleSection("1) Data", start_expanded=True)
+        left_layout.addWidget(self.data_section)
 
         col_box = QGroupBox("Column mapping")
         col_grid = QGridLayout(col_box)
@@ -150,7 +158,7 @@ class EnthalpyTool(QWidget):
         col_grid.addWidget(self.x_type_combo, 1, 1)
         col_grid.addWidget(QLabel("Heat flow column (mW):"), 2, 0)
         col_grid.addWidget(self.y_combo, 2, 1)
-        left_layout.addWidget(col_box)
+        self.data_section.addWidget(col_box)
 
         note = QLabel(
             "If your X axis is temperature rather than time, enter the scan\n"
@@ -159,7 +167,7 @@ class EnthalpyTool(QWidget):
             "a time axis because heat flow is a power (mW = mJ/s)."
         )
         note.setWordWrap(True)
-        left_layout.addWidget(note)
+        self.data_section.addWidget(note)
 
         self.scan_rate_spin = QDoubleSpinBox()
         self.scan_rate_spin.setDecimals(4)
@@ -169,7 +177,7 @@ class EnthalpyTool(QWidget):
         rate_row = QHBoxLayout()
         rate_row.addWidget(QLabel("Scan rate (if X = temperature):"))
         rate_row.addWidget(self.scan_rate_spin)
-        left_layout.addLayout(rate_row)
+        self.data_section.addLayout(rate_row)
 
         seg_box = QGroupBox("Peak region (row range, 0-indexed)")
         seg_grid = QGridLayout(seg_box)
@@ -196,7 +204,10 @@ class EnthalpyTool(QWidget):
         preview_btn = QPushButton("Preview peak + baseline")
         preview_btn.clicked.connect(self.on_preview)
         seg_grid.addWidget(preview_btn, 3, 0, 1, 2)
-        left_layout.addWidget(seg_box)
+        self.data_section.addWidget(seg_box)
+
+        self.configure_section = CollapsibleSection("2) Configure", start_expanded=True)
+        left_layout.addWidget(self.configure_section)
 
         mass_row = QHBoxLayout()
         self.mass_spin = QDoubleSpinBox()
@@ -206,12 +217,7 @@ class EnthalpyTool(QWidget):
         self.mass_spin.setSuffix(" g")
         mass_row.addWidget(QLabel("Sample mass:"))
         mass_row.addWidget(self.mass_spin)
-        left_layout.addLayout(mass_row)
-
-        analyze_btn = QPushButton("▶ Integrate peak (linear baseline)")
-        analyze_btn.clicked.connect(self.on_analyze)
-        left_layout.addWidget(analyze_btn)
-        left_layout.addWidget(theme.make_source_button(self, "DSC enthalpy", formula_sources.DSC_ENTHALPY))
+        self.configure_section.addLayout(mass_row)
 
         water_box = QGroupBox("Water-type auto-calculation (optional)")
         water_grid = QGridLayout(water_box)
@@ -250,7 +256,12 @@ class EnthalpyTool(QWidget):
         source_row.addWidget(theme.make_source_button(self, "Symmetric/total split (automated)", formula_sources.DSC_SYMMETRIC_TOTAL_SPLIT))
         source_row.addWidget(theme.make_source_button(self, "Integration accuracy check", formula_sources.DSC_INTEGRATION_ACCURACY))
         water_grid.addLayout(source_row, 4, 0, 1, 2)
-        left_layout.addWidget(water_box)
+        self.configure_section.addWidget(water_box)
+
+        analyze_btn = QPushButton("▶ Integrate peak (linear baseline)")
+        analyze_btn.clicked.connect(self.on_analyze)
+        left_layout.addWidget(analyze_btn)
+        left_layout.addWidget(theme.make_source_button(self, "DSC enthalpy", formula_sources.DSC_ENTHALPY))
 
         self.send_btn = QPushButton("Send peak area (J) to Water-type tool →")
         self.send_btn.setEnabled(False)
@@ -685,6 +696,10 @@ class EnthalpyTool(QWidget):
 
         self._last_area_j = area_j
         self.send_btn.setEnabled(True)
+        # Column mapping/peak-region setup is done with once a peak has
+        # been successfully integrated -- collapse Data so Configure
+        # (mass + optional water-type calc) gets the attention.
+        self.data_section.set_expanded(False)
 
         # Integration-accuracy self-check (method comparison + boundary-
         # choice sensitivity) -- same "quality flag" pattern as reduced

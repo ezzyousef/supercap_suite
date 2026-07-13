@@ -29,7 +29,7 @@ from core import units as unitconv
 from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
-    make_scrollable_panel, ResultCard, show_toast, show_empty_state,
+    make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
 )
 from . import theme, formula_sources
 
@@ -202,8 +202,18 @@ class CvRateTool(QWidget):
         splitter = QSplitter(Qt.Horizontal)
         root.addWidget(splitter, stretch=1)
 
+        # --- Left: settings, organized into Data / Advanced workflow
+        # stages. Unlike other tabs, Data here is NOT auto-collapsed:
+        # the capacitance/peak-current tables are the primary input a
+        # user keeps editing and re-importing into throughout a session
+        # (add a row, import another file, ...), not a one-time setup
+        # step to finish and move past -- collapsing it after the first
+        # import would hide the very tables the user is still filling in.
         left = QWidget()
         left_layout = QVBoxLayout(left)
+
+        self.data_section = CollapsibleSection("1) Data", start_expanded=True)
+        left_layout.addWidget(self.data_section)
 
         import_row = QHBoxLayout()
         import_btn = QPushButton("📂 Import from summary file…")
@@ -214,7 +224,7 @@ class CvRateTool(QWidget):
         )
         import_btn.clicked.connect(self.on_import_file)
         import_row.addWidget(import_btn)
-        left_layout.addLayout(import_row)
+        self.data_section.addLayout(import_row)
 
         batch_row = QHBoxLayout()
         batch_import_btn = QPushButton("📂 Import multiple raw CV files (one per scan rate)…")
@@ -228,7 +238,7 @@ class CvRateTool(QWidget):
         )
         batch_import_btn.clicked.connect(self.on_import_multi_files)
         batch_row.addWidget(batch_import_btn)
-        left_layout.addLayout(batch_row)
+        self.data_section.addLayout(batch_row)
 
         batch_mass_row = QHBoxLayout()
         self.batch_mass_label = QLabel("Active mass (for batch raw-file import):")
@@ -248,9 +258,9 @@ class CvRateTool(QWidget):
         self.batch_area_spin.setSuffix(" cm²")
         batch_mass_row.addWidget(self.batch_area_spin)
         batch_mass_row.addStretch()
-        left_layout.addLayout(batch_mass_row)
+        self.data_section.addLayout(batch_mass_row)
 
-        left_layout.addWidget(QLabel(
+        self.data_section.addWidget(QLabel(
             "Fills the tables below from file(s) -- or enter rows manually."
         ))
 
@@ -281,7 +291,7 @@ class CvRateTool(QWidget):
         add_row_btn = QPushButton("+ Add row")
         add_row_btn.clicked.connect(self.cap_table.add_row)
         entry_layout.addWidget(add_row_btn)
-        left_layout.addWidget(entry_box)
+        self.data_section.addWidget(entry_box)
 
         peak_box = QGroupBox("2) (Optional) Enter scan rate + peak current for b-value / Randles-Sevcik")
         peak_layout = QVBoxLayout(peak_box)
@@ -304,9 +314,12 @@ class CvRateTool(QWidget):
         add_row_btn2 = QPushButton("+ Add row")
         add_row_btn2.clicked.connect(self.peak_table.add_row)
         peak_layout.addWidget(add_row_btn2)
-        left_layout.addWidget(peak_box)
+        self.data_section.addWidget(peak_box)
 
-        rs_box = QGroupBox("3) Randles-Sevcik diffusion coefficient (redox-active/battery-type materials)")
+        rs_section = CollapsibleSection(
+            "2) Advanced: Randles-Sevcik diffusion coefficient (redox-active/battery-type materials)"
+        )
+        rs_box = QGroupBox("Randles-Sevcik parameters")
         rs_grid = QGridLayout(rs_box)
         self.n_electrons_spin = QDoubleSpinBox(); self.n_electrons_spin.setDecimals(2)
         self.n_electrons_spin.setRange(0.01, 100); self.n_electrons_spin.setValue(1.0)
@@ -330,7 +343,8 @@ class CvRateTool(QWidget):
         rs_btn = QPushButton("▶ Compute diffusion coefficient D")
         rs_btn.clicked.connect(self.on_randles_sevcik)
         rs_grid.addWidget(rs_btn, 4, 0, 1, 2)
-        left_layout.addWidget(rs_box)
+        rs_section.addWidget(rs_box)
+        left_layout.addWidget(rs_section)
 
         btn_row = QHBoxLayout()
         trasatti_btn = QPushButton("▶ Run Trasatti's method")
@@ -818,8 +832,16 @@ class GcdRateTool(QWidget):
         splitter = QSplitter(Qt.Horizontal)
         root.addWidget(splitter, stretch=1)
 
+        # --- Left: settings, organized into Data / Configure workflow
+        # stages -- Data starts expanded and auto-collapses once a file
+        # loads successfully; Configure ("add a segment" + mass) always
+        # stays expanded since segments are added repeatedly throughout a
+        # session, not configured once and left alone.
         left = QWidget()
         left_layout = QVBoxLayout(left)
+
+        self.data_section = CollapsibleSection("1) Data", start_expanded=True)
+        left_layout.addWidget(self.data_section)
 
         col_box = QGroupBox("Column mapping")
         col_grid = QGridLayout(col_box)
@@ -829,7 +851,10 @@ class GcdRateTool(QWidget):
         col_grid.addWidget(self.time_combo, 0, 1)
         col_grid.addWidget(QLabel("Voltage column:"), 1, 0)
         col_grid.addWidget(self.voltage_combo, 1, 1)
-        left_layout.addWidget(col_box)
+        self.data_section.addWidget(col_box)
+
+        self.configure_section = CollapsibleSection("2) Configure", start_expanded=True)
+        left_layout.addWidget(self.configure_section)
 
         seg_box = QGroupBox("Add one discharge segment at a time")
         seg_grid = QGridLayout(seg_box)
@@ -862,24 +887,14 @@ class GcdRateTool(QWidget):
         add_seg_btn = QPushButton("+ Add this segment to the rate study")
         add_seg_btn.clicked.connect(self.on_add_segment)
         seg_grid.addWidget(add_seg_btn, 5, 0, 1, 2)
-        left_layout.addWidget(seg_box)
-
-        list_box = QGroupBox("Segments in this rate study")
-        list_layout = QVBoxLayout(list_box)
-        self.seg_list = QListWidget()
-        self.seg_list.setSelectionMode(QAbstractItemView.SingleSelection)
-        list_layout.addWidget(self.seg_list)
-        remove_btn = QPushButton("Remove selected segment")
-        remove_btn.clicked.connect(self.on_remove_segment)
-        list_layout.addWidget(remove_btn)
-        left_layout.addWidget(list_box)
+        self.configure_section.addWidget(seg_box)
 
         mass_row = QHBoxLayout()
         self.mass_spin = QDoubleSpinBox(); self.mass_spin.setDecimals(6)
         self.mass_spin.setRange(0.000001, 1000); self.mass_spin.setValue(0.005); self.mass_spin.setSuffix(" g")
         mass_row.addWidget(QLabel("Active mass:"))
         mass_row.addWidget(self.mass_spin)
-        left_layout.addLayout(mass_row)
+        self.configure_section.addLayout(mass_row)
 
         run_btn = QPushButton("▶ Run rate-capability analysis")
         run_btn.clicked.connect(self.on_run)
@@ -891,6 +906,22 @@ class GcdRateTool(QWidget):
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
+
+        # "Segments in this rate study" is a growing log of what's been
+        # added (more segments = taller list) -- that kind of unbounded-
+        # growth content belongs in the results panel, not the
+        # fixed-width settings column on the left.
+        list_box = QGroupBox("Segments in this rate study")
+        list_layout = QVBoxLayout(list_box)
+        self.seg_list = QListWidget()
+        self.seg_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.seg_list.setMaximumHeight(110)
+        list_layout.addWidget(self.seg_list)
+        remove_btn = QPushButton("Remove selected segment")
+        remove_btn.clicked.connect(self.on_remove_segment)
+        list_layout.addWidget(remove_btn)
+        right_layout.addWidget(list_box)
+
         self.plot = PlotPanel()
         show_empty_state(self.plot, "Add discharge segments at different currents, then run the analysis")
 
@@ -977,6 +1008,9 @@ class GcdRateTool(QWidget):
         if v_guess:
             self.voltage_combo.setCurrentText(v_guess)
         self.end_spin.setMaximum(max(0, len(df) - 1))
+        # Column mapping is done with once a file loads -- collapse Data
+        # so Configure (adding segments) gets the attention.
+        self.data_section.set_expanded(False)
 
     def on_detect_segments(self):
         if self.df is None:

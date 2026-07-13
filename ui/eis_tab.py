@@ -19,7 +19,7 @@ from core import circuit_library as circuits
 from .widgets import (
     PlotWidget, PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
-    make_scrollable_panel, ResultCard, show_toast, show_empty_state,
+    make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
 )
 from .circuit_diagram import draw_circuit
 from . import theme, formula_sources
@@ -53,8 +53,16 @@ class EisTab(QWidget):
         splitter = QSplitter(Qt.Horizontal)
         root.addWidget(splitter, stretch=1)
 
+        # --- Left: settings, organized into Data / Configure workflow
+        # stages -- Data starts expanded and auto-collapses once the
+        # spectrum is first previewed/fit (see on_preview/_render_fit_result);
+        # Configure (the three analyses -- capacitance, conductivity,
+        # circuit fit -- a user picks from) always stays expanded.
         left = QWidget()
         left_layout = QVBoxLayout(left)
+
+        self.data_section = CollapsibleSection("1) Data", start_expanded=True)
+        left_layout.addWidget(self.data_section)
 
         col_box = QGroupBox("Column mapping")
         col_grid = QGridLayout(col_box)
@@ -99,7 +107,7 @@ class EisTab(QWidget):
         preview_btn = QPushButton("Load & preview Nyquist / Bode")
         preview_btn.clicked.connect(self.on_preview)
         col_grid.addWidget(preview_btn, 7, 0, 1, 2)
-        left_layout.addWidget(col_box)
+        self.data_section.addWidget(col_box)
 
         induct_box = QGroupBox("Series inductance removal (optional)")
         induct_grid = QGridLayout(induct_box)
@@ -131,7 +139,10 @@ class EisTab(QWidget):
         self.inductance_checkbox = QCheckBox("Remove this inductance from all analyses below")
         self.inductance_checkbox.toggled.connect(self._on_inductance_changed)
         induct_grid.addWidget(self.inductance_checkbox, 3, 0, 1, 2)
-        left_layout.addWidget(induct_box)
+        self.data_section.addWidget(induct_box)
+
+        self.configure_section = CollapsibleSection("2) Configure", start_expanded=True)
+        left_layout.addWidget(self.configure_section)
 
         cap_box = QGroupBox("Low-frequency capacitance")
         cap_grid = QGridLayout(cap_box)
@@ -143,7 +154,7 @@ class EisTab(QWidget):
         cap_btn.clicked.connect(self.on_capacitance)
         cap_grid.addWidget(cap_btn, 1, 0, 1, 2)
         cap_grid.addWidget(theme.make_source_button(self, "EIS capacitance", formula_sources.EIS_CAPACITANCE), 2, 0, 1, 2)
-        left_layout.addWidget(cap_box)
+        self.configure_section.addWidget(cap_box)
 
         cond_box = QGroupBox("Ionic conductivity (2-electrode ion-blocking cell)")
         cond_grid = QGridLayout(cond_box)
@@ -159,7 +170,7 @@ class EisTab(QWidget):
         cond_btn.clicked.connect(self.on_conductivity)
         cond_grid.addWidget(cond_btn, 2, 0, 1, 2)
         cond_grid.addWidget(theme.make_source_button(self, "Ionic conductivity", formula_sources.IONIC_CONDUCTIVITY), 3, 0, 1, 2)
-        left_layout.addWidget(cond_box)
+        self.configure_section.addWidget(cond_box)
 
         fit_box = QGroupBox(f"Equivalent circuit fit — {len(circuits.all_circuit_names())} preset circuits")
         fit_grid = QGridLayout(fit_box)
@@ -216,7 +227,7 @@ class EisTab(QWidget):
         clear_btn.clicked.connect(self.on_clear_results)
         fit_grid.addWidget(clear_btn, 5, 0, 1, 2)
         fit_grid.addWidget(theme.make_source_button(self, "Equivalent circuit fit", formula_sources.EIS_CIRCUIT_FIT), 6, 0, 1, 2)
-        left_layout.addWidget(fit_box)
+        self.configure_section.addWidget(fit_box)
 
         left_layout.addStretch()
         splitter.addWidget(make_scrollable_panel(left))
@@ -523,6 +534,10 @@ class EisTab(QWidget):
         theme.apply_plot_style(self.plot.ax)
         self.plot.fig.tight_layout()
         self.plot.draw()
+        # Column mapping/inductance-removal setup is done with once the
+        # spectrum has been successfully previewed -- collapse Data so
+        # Configure (pick an analysis) gets the attention.
+        self.data_section.set_expanded(False)
 
     def on_capacitance(self):
         data = self._get_eis_arrays()

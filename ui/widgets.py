@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
-from PySide6.QtCore import Qt, QAbstractTableModel, QTimer
+from PySide6.QtCore import Qt, QAbstractTableModel, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QTableView, QPushButton, QFileDialog, QInputDialog, QMessageBox, QLineEdit,
@@ -282,15 +282,27 @@ class NormalizationSelector(QWidget):
 
 
 class CollapsibleSection(QWidget):
-    """A titled, collapsed-by-default container for "Advanced" options --
-    keeps a tab's default view limited to the inputs used every time,
-    with rarely-changed parameters (a linearity threshold, a physical
-    constant override, ...) one click away instead of permanently
-    occupying space in the main form. Use `.body_layout` to add widgets/
-    layouts to the collapsible content, the same way you'd use any
-    QVBoxLayout."""
+    """A titled container that can be independently expanded/collapsed by
+    clicking its header -- used to break a tab's settings panel into
+    workflow stages (Data / Configure / Advanced) instead of one flat
+    stack of always-expanded QGroupBoxes. Multiple CollapsibleSections in
+    the same panel are INDEPENDENTLY toggleable, not a single-open
+    accordion -- a researcher may well want both Data and Configure open
+    at once while iterating on parameters, and forcing exclusivity would
+    fight that.
 
-    def __init__(self, title: str = "Advanced options", parent=None):
+    Two ways to add content, both supported (existing call sites use the
+    build-as-you-go style; either is fine going forward):
+      section = CollapsibleSection("Advanced", start_expanded=False)
+      section.addWidget(my_widget)          # or .addLayout(my_layout)
+    or, if the content already exists as one widget:
+      section = CollapsibleSection("Data", content_widget=my_widget, start_expanded=True)
+    """
+
+    toggled = Signal(bool)
+
+    def __init__(self, title: str = "Advanced options", parent=None,
+                 content_widget: QWidget | None = None, start_expanded: bool = False):
         super().__init__(parent)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -299,9 +311,9 @@ class CollapsibleSection(QWidget):
         self.toggle_btn = QToolButton()
         self.toggle_btn.setText(title)
         self.toggle_btn.setCheckable(True)
-        self.toggle_btn.setChecked(False)
+        self.toggle_btn.setChecked(start_expanded)
         self.toggle_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.toggle_btn.setArrowType(Qt.ArrowType.RightArrow)
+        self.toggle_btn.setArrowType(Qt.ArrowType.DownArrow if start_expanded else Qt.ArrowType.RightArrow)
         self.toggle_btn.setStyleSheet(
             f"QToolButton {{ border: none; font-weight: 600; color: {theme.INK_DIM}; "
             f"padding: 4px 0; background: transparent; }}"
@@ -312,19 +324,36 @@ class CollapsibleSection(QWidget):
         self.body = QWidget()
         self.body_layout = QVBoxLayout(self.body)
         self.body_layout.setContentsMargins(14, 4, 0, 4)
-        self.body.setVisible(False)
+        self.body.setVisible(start_expanded)
         outer.addWidget(self.body)
+
+        if content_widget is not None:
+            self.body_layout.addWidget(content_widget)
 
     def _on_toggled(self):
         expanded = self.toggle_btn.isChecked()
         self.body.setVisible(expanded)
         self.toggle_btn.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        self.toggled.emit(expanded)
 
     def addWidget(self, w):
         self.body_layout.addWidget(w)
 
     def addLayout(self, layout):
         self.body_layout.addLayout(layout)
+
+    def set_expanded(self, expanded: bool):
+        """Programmatically expand/collapse (e.g. auto-collapsing a Data
+        section once a file has loaded successfully). Emits `toggled`
+        exactly like a user click would, so any connected handler fires
+        consistently either way."""
+        if self.toggle_btn.isChecked() == expanded:
+            return
+        self.toggle_btn.setChecked(expanded)
+        self._on_toggled()
+
+    def is_expanded(self) -> bool:
+        return self.toggle_btn.isChecked()
 
 
 class ResultCard(QGroupBox):
