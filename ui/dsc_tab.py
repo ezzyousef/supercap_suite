@@ -59,7 +59,7 @@ class EnthalpyTool(QWidget):
         root = QVBoxLayout(self)
 
         file_row = QHBoxLayout()
-        open_btn = QPushButton("Open DSC file (Excel / CSV)…")
+        open_btn = QPushButton("📂 Open DSC file (Excel / CSV)…")
         open_btn.clicked.connect(self.on_open_file)
         self.sheet_combo = QComboBox()
         self.sheet_combo.setEnabled(False)
@@ -148,7 +148,7 @@ class EnthalpyTool(QWidget):
         mass_row.addWidget(self.mass_spin)
         left_layout.addLayout(mass_row)
 
-        analyze_btn = QPushButton("Integrate peak (linear baseline)")
+        analyze_btn = QPushButton("▶ Integrate peak (linear baseline)")
         analyze_btn.clicked.connect(self.on_analyze)
         left_layout.addWidget(analyze_btn)
         left_layout.addWidget(theme.make_source_button(self, "DSC enthalpy", formula_sources.DSC_ENTHALPY))
@@ -544,7 +544,7 @@ class WaterTypeTool(QWidget):
         note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
         root.addWidget(note)
 
-        btn = QPushButton("Classify water content")
+        btn = QPushButton("▶ Classify water content")
         btn.clicked.connect(self.on_classify)
         root.addWidget(btn)
         root.addWidget(theme.make_source_button(self, "DSC water-type classification", formula_sources.DSC_WATER_TYPE))

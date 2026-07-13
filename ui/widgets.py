@@ -437,7 +437,7 @@ class RecordLogPanel(QGroupBox):
         layout.addWidget(self.table)
 
         btn_row = QHBoxLayout()
-        self.export_log_btn = QPushButton("Export log to Excel…")
+        self.export_log_btn = QPushButton("⬇ Export log to Excel…")
         self.export_log_btn.setObjectName("exportButton")
         self.export_log_btn.setEnabled(False)
         self.export_log_btn.setToolTip(
@@ -446,7 +446,7 @@ class RecordLogPanel(QGroupBox):
         )
         self.export_log_btn.clicked.connect(lambda: self._export_log("existing"))
         btn_row.addWidget(self.export_log_btn)
-        self.save_log_as_btn = QPushButton("Save log as Excel…")
+        self.save_log_as_btn = QPushButton("⬇ Save log as Excel…")
         self.save_log_as_btn.setObjectName("exportButton")
         self.save_log_as_btn.setEnabled(False)
         self.save_log_as_btn.setToolTip("Save this comparison table as a brand-new Excel workbook.")

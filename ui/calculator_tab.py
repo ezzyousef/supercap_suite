@@ -82,7 +82,7 @@ class GcdCalculator(QWidget):
             grid.addWidget(widget, r, 1)
         layout.addLayout(grid)
 
-        btn = QPushButton("Calculate")
+        btn = QPushButton("▶ Calculate")
         btn.clicked.connect(self.on_calculate)
         layout.addWidget(btn)
 
@@ -193,7 +193,7 @@ class CvCalculator(QWidget):
             grid.addWidget(widget, r, 1)
         layout.addLayout(grid)
 
-        btn = QPushButton("Calculate")
+        btn = QPushButton("▶ Calculate")
         btn.clicked.connect(self.on_calculate)
         layout.addWidget(btn)
 
@@ -270,7 +270,7 @@ class EnergyPowerCalculator(QWidget):
             grid.addWidget(widget, r, 1)
         layout.addLayout(grid)
 
-        btn = QPushButton("Calculate")
+        btn = QPushButton("▶ Calculate")
         btn.clicked.connect(self.on_calculate)
         layout.addWidget(btn)
 
@@ -327,7 +327,7 @@ class ConductivityCalculator(QWidget):
             grid.addWidget(widget, r, 1)
         layout.addLayout(grid)
 
-        btn = QPushButton("Calculate")
+        btn = QPushButton("▶ Calculate")
         btn.clicked.connect(self.on_calculate)
         layout.addWidget(btn)
 
@@ -391,7 +391,7 @@ class ElectrodeConversionCalculator(QWidget):
         grid.addWidget(self.value_spin, 1, 1)
         layout.addLayout(grid)
 
-        btn = QPushButton("Calculate")
+        btn = QPushButton("▶ Calculate")
         btn.clicked.connect(self.on_calculate)
         layout.addWidget(btn)
 
@@ -453,7 +453,7 @@ class EnthalpyCalculator(QWidget):
         grid.addWidget(self.mass, 1, 1)
         layout.addLayout(grid)
 
-        btn = QPushButton("Calculate")
+        btn = QPushButton("▶ Calculate")
         btn.clicked.connect(self.on_calculate)
         layout.addWidget(btn)
 

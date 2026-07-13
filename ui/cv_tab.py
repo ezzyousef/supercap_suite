@@ -32,7 +32,7 @@ class CvTab(QWidget):
         root = QVBoxLayout(self)
 
         file_row = QHBoxLayout()
-        open_btn = QPushButton("Open CV file (Excel / CSV / .mpt)…")
+        open_btn = QPushButton("📂 Open CV file (Excel / CSV / .mpt)…")
         open_btn.clicked.connect(self.on_open_file)
         self.sheet_combo = QComboBox()
         self.sheet_combo.setEnabled(False)
@@ -105,7 +105,7 @@ class CvTab(QWidget):
         report_grid.addWidget(self.report_combo, 0, 0)
         left_layout.addWidget(report_box)
 
-        analyze_btn = QPushButton("Analyze CV cycle")
+        analyze_btn = QPushButton("▶ Analyze CV cycle")
         analyze_btn.clicked.connect(self.on_analyze)
         left_layout.addWidget(analyze_btn)
         clear_btn = QPushButton("Clear results")

@@ -34,7 +34,7 @@ class EisTab(QWidget):
         root = QVBoxLayout(self)
 
         file_row = QHBoxLayout()
-        open_btn = QPushButton("Open EIS file (Excel / CSV / .mpt)…")
+        open_btn = QPushButton("📂 Open EIS file (Excel / CSV / .mpt)…")
         open_btn.clicked.connect(self.on_open_file)
         self.sheet_combo = QComboBox()
         self.sheet_combo.setEnabled(False)
@@ -104,7 +104,7 @@ class EisTab(QWidget):
         self.mass_spin_cap.setRange(0, 1000); self.mass_spin_cap.setSuffix(" g (0 = report total C, not specific)")
         cap_grid.addWidget(QLabel("Active mass:"), 0, 0)
         cap_grid.addWidget(self.mass_spin_cap, 0, 1)
-        cap_btn = QPushButton("Compute C from lowest-frequency point")
+        cap_btn = QPushButton("▶ Compute C from lowest-frequency point")
         cap_btn.clicked.connect(self.on_capacitance)
         cap_grid.addWidget(cap_btn, 1, 0, 1, 2)
         cap_grid.addWidget(theme.make_source_button(self, "EIS capacitance", formula_sources.EIS_CAPACITANCE), 2, 0, 1, 2)
@@ -160,10 +160,10 @@ class EisTab(QWidget):
         # "W", which cannot reproduce the near-vertical low-frequency turn).
         self._select_circuit("supercap_Q_Wo")
 
-        fit_btn = QPushButton("Fit this circuit")
+        fit_btn = QPushButton("▶ Fit this circuit")
         fit_btn.clicked.connect(self.on_fit)
         fit_grid.addWidget(fit_btn, 3, 0, 1, 2)
-        auto_btn = QPushButton(f"Auto-detect best circuit (tries all {len(circuits.all_circuit_names())})")
+        auto_btn = QPushButton(f"▶ Auto-detect best circuit (tries all {len(circuits.all_circuit_names())})")
         auto_btn.setToolTip(
             "Fits every circuit in the library to this spectrum and keeps "
             "the one with the lowest reduced χ² -- the results panel lists "
@@ -208,7 +208,7 @@ class EisTab(QWidget):
         right_layout.addWidget(results_splitter, stretch=1)
 
         diagram_export_row = QHBoxLayout()
-        self.export_diagram_btn = QPushButton("Export circuit diagram as image…")
+        self.export_diagram_btn = QPushButton("⬇ Export circuit diagram as image…")
         self.export_diagram_btn.setEnabled(False)
         self.export_diagram_btn.clicked.connect(self.on_export_diagram)
         diagram_export_row.addWidget(self.export_diagram_btn)

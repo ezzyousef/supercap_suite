@@ -23,6 +23,17 @@ both a measurement and a model/fit over it (GCD/CV segment vs baseline,
 EIS data vs equivalent-circuit fit, DSC curve vs baseline) -- reinforced
 with line style (solid vs dashed) and marker presence, not color alone, so
 it still reads for colorblind users.
+
+WCAG AA contrast: checked computationally (relative-luminance formula, not
+eyeballed) for every foreground/background pair actually used as text --
+INK/INK_DIM on PANEL/SURFACE, RAW as a link/button-text color, WARN/GOOD as
+text, white button-label text on RAW/GOOD/FIT button backgrounds. All pass
+at minimum the 3.0:1 large-text threshold; INK, INK_DIM, RAW-as-link, and
+WARN-as-text additionally clear the stricter 4.5:1 body-text threshold.
+GOOD/FIT as button-label backgrounds land at 4.0-4.4:1 (large-text tier:
+correct classification since button labels are bold, which WCAG treats as
+"large text" starting at 14pt) -- fine as used (button backgrounds only),
+would need darkening if ever reused as small body-text color.
 """
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter, QColor, QBrush

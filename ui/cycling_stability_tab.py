@@ -34,7 +34,7 @@ class CyclingStabilityTab(QWidget):
         root = QVBoxLayout(self)
 
         file_row = QHBoxLayout()
-        open_btn = QPushButton("Open multi-cycle GCD file (Excel / CSV / .mpt / .mpr)…")
+        open_btn = QPushButton("📂 Open multi-cycle GCD file (Excel / CSV / .mpt / .mpr)…")
         open_btn.clicked.connect(self.on_open_file)
         self.sheet_combo = QComboBox()
         self.sheet_combo.setEnabled(False)
@@ -111,7 +111,7 @@ class CyclingStabilityTab(QWidget):
         param_grid.addWidget(self.r2_spin, 2, 1)
         left_layout.addWidget(param_box)
 
-        analyze_btn = QPushButton("Analyze cycling stability")
+        analyze_btn = QPushButton("▶ Analyze cycling stability")
         analyze_btn.clicked.connect(self.on_analyze)
         left_layout.addWidget(analyze_btn)
         left_layout.addWidget(theme.make_source_button(

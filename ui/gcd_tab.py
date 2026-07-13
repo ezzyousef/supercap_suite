@@ -34,7 +34,7 @@ class GcdTab(QWidget):
 
         # --- File controls ---
         file_row = QHBoxLayout()
-        open_btn = QPushButton("Open GCD file (Excel / CSV / .mpt)…")
+        open_btn = QPushButton("📂 Open GCD file (Excel / CSV / .mpt)…")
         open_btn.clicked.connect(self.on_open_file)
         self.sheet_combo = QComboBox()
         self.sheet_combo.setEnabled(False)
@@ -167,7 +167,7 @@ class GcdTab(QWidget):
         method_grid.addWidget(self.r2_spin, 1, 1)
         left_layout.addWidget(method_box)
 
-        analyze_btn = QPushButton("Analyze discharge segment")
+        analyze_btn = QPushButton("▶ Analyze discharge segment")
         analyze_btn.clicked.connect(self.on_analyze)
         left_layout.addWidget(analyze_btn)
         clear_btn = QPushButton("Clear results")

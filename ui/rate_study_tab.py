@@ -205,7 +205,7 @@ class CvRateTool(QWidget):
         left_layout = QVBoxLayout(left)
 
         import_row = QHBoxLayout()
-        import_btn = QPushButton("Import from summary file…")
+        import_btn = QPushButton("📂 Import from summary file…")
         import_btn.setToolTip(
             "Load scan rate + specific capacitance and/or peak current "
             "from a spreadsheet (one CV-summary sheet with several scan "
@@ -216,7 +216,7 @@ class CvRateTool(QWidget):
         left_layout.addLayout(import_row)
 
         batch_row = QHBoxLayout()
-        batch_import_btn = QPushButton("Import multiple raw CV files (one per scan rate)…")
+        batch_import_btn = QPushButton("📂 Import multiple raw CV files (one per scan rate)…")
         batch_import_btn.setToolTip(
             "Select several raw CV data files at once (e.g. one file per "
             "scan rate). For each file: pick the cycle to use (if it has "
@@ -263,7 +263,7 @@ class CvRateTool(QWidget):
         self.cap_table = _EditableTable("Scan rate", "Capacitance",
                                          col1_category="scan_rate", col2_category="specific_capacitance")
         entry_layout.addWidget(self.cap_table)
-        add_row_btn = QPushButton("Add row")
+        add_row_btn = QPushButton("+ Add row")
         add_row_btn.clicked.connect(self.cap_table.add_row)
         entry_layout.addWidget(add_row_btn)
         left_layout.addWidget(entry_box)
@@ -286,7 +286,7 @@ class CvRateTool(QWidget):
         self.peak_table = _EditableTable("Scan rate", "Peak current",
                                           col1_category="scan_rate", col2_category="current")
         peak_layout.addWidget(self.peak_table)
-        add_row_btn2 = QPushButton("Add row")
+        add_row_btn2 = QPushButton("+ Add row")
         add_row_btn2.clicked.connect(self.peak_table.add_row)
         peak_layout.addWidget(add_row_btn2)
         left_layout.addWidget(peak_box)
@@ -312,15 +312,15 @@ class CvRateTool(QWidget):
         rs_grid.addWidget(self.concentration_spin, 2, 1)
         rs_grid.addWidget(QLabel("Temperature, T:"), 3, 0)
         rs_grid.addWidget(self.temperature_spin, 3, 1)
-        rs_btn = QPushButton("Compute diffusion coefficient D")
+        rs_btn = QPushButton("▶ Compute diffusion coefficient D")
         rs_btn.clicked.connect(self.on_randles_sevcik)
         rs_grid.addWidget(rs_btn, 4, 0, 1, 2)
         left_layout.addWidget(rs_box)
 
         btn_row = QHBoxLayout()
-        trasatti_btn = QPushButton("Run Trasatti's method")
+        trasatti_btn = QPushButton("▶ Run Trasatti's method")
         trasatti_btn.clicked.connect(self.on_trasatti)
-        bvalue_btn = QPushButton("Run b-value analysis")
+        bvalue_btn = QPushButton("▶ Run b-value analysis")
         bvalue_btn.clicked.connect(self.on_bvalue)
         btn_row.addWidget(trasatti_btn)
         btn_row.addWidget(bvalue_btn)
@@ -701,7 +701,7 @@ class GcdRateTool(QWidget):
         root = QVBoxLayout(self)
 
         file_row = QHBoxLayout()
-        open_btn = QPushButton("Open GCD file (Excel / CSV / .mpt)…")
+        open_btn = QPushButton("📂 Open GCD file (Excel / CSV / .mpt)…")
         open_btn.clicked.connect(self.on_open_file)
         self.sheet_combo = QComboBox()
         self.sheet_combo.setEnabled(False)
@@ -758,7 +758,7 @@ class GcdRateTool(QWidget):
         seg_grid.addWidget(self.end_spin, 3, 1)
         seg_grid.addWidget(QLabel("Current for this segment:"), 4, 0)
         seg_grid.addWidget(self.current_spin, 4, 1)
-        add_seg_btn = QPushButton("Add this segment to the rate study")
+        add_seg_btn = QPushButton("+ Add this segment to the rate study")
         add_seg_btn.clicked.connect(self.on_add_segment)
         seg_grid.addWidget(add_seg_btn, 5, 0, 1, 2)
         left_layout.addWidget(seg_box)
@@ -780,7 +780,7 @@ class GcdRateTool(QWidget):
         mass_row.addWidget(self.mass_spin)
         left_layout.addLayout(mass_row)
 
-        run_btn = QPushButton("Run rate-capability analysis")
+        run_btn = QPushButton("▶ Run rate-capability analysis")
         run_btn.clicked.connect(self.on_run)
         left_layout.addWidget(run_btn)
         left_layout.addWidget(theme.make_source_button(self, "Rate capability & retention", formula_sources.RATE_CAPABILITY))
