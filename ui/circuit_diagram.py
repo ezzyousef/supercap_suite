@@ -73,7 +73,7 @@ def _draw_element(ax, node, x: float, y: float, width: float, height: float, par
         ax.plot([x, cx - gap], [cy, cy], color=theme.INK, linewidth=1.1)
         ax.plot([cx + gap, x + width], [cy, cy], color=theme.INK, linewidth=1.1)
 
-    elif kind == "L":
+    elif kind in ("L", "La"):
         span = width * 0.5
         start_x = cx - span / 2
         xs = np.linspace(start_x, start_x + span, 200)
@@ -82,7 +82,7 @@ def _draw_element(ax, node, x: float, y: float, width: float, height: float, par
         ax.plot([x, start_x], [cy, cy], color=theme.INK, linewidth=1.1)
         ax.plot([start_x + span, x + width], [cy, cy], color=theme.INK, linewidth=1.1)
 
-    elif kind in ("W", "Wo", "Ws"):
+    elif kind in ("W", "Wo", "Ws", "Winf", "Ma", "Mg"):
         box_w, box_h = width * 0.55, height * 0.4
         ax.add_patch(Rectangle((cx - box_w / 2, cy - box_h / 2), box_w, box_h,
                                 fill=False, edgecolor=theme.RAW, linewidth=1.6))
@@ -111,7 +111,7 @@ def _draw_element(ax, node, x: float, y: float, width: float, height: float, par
             ax.plot([rx, rx], [bot_y, top_y], color=theme.RAW, linewidth=1.3)
         ax.plot([start_x + span, x + width], [cy, cy], color=theme.INK, linewidth=1.1)
 
-    elif kind == "G":
+    elif kind in ("G", "Ga", "Gb"):
         box_w, box_h = width * 0.5, height * 0.4
         ax.add_patch(Rectangle((cx - box_w / 2, cy - box_h / 2), box_w, box_h,
                                 fill=False, edgecolor=theme.GOOD, linewidth=1.6))

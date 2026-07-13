@@ -11,7 +11,66 @@ from core import eis_analysis as eis
 
 
 def test_library_has_over_100_circuits():
-    assert len(cl.CIRCUITS) >= 110
+    assert len(cl.CIRCUITS) >= 130
+
+
+@pytest.mark.parametrize("kind,generalized_params,base_kind,base_params", [
+    ("La", {"x_L": 1e-6, "x_a": 1.0}, "L", {"x": 1e-6}),
+    ("Ma", {"x_R": 50.0, "x_tau": 2.0, "x_a": 1.0}, "Wo",
+     {"x_Y0": np.sqrt(2.0) / 50.0, "x_B": np.sqrt(2.0)}),
+    ("Mg", {"x_R": 50.0, "x_tau": 2.0, "x_gamma": 1.0}, "Wo",
+     {"x_Y0": np.sqrt(2.0) / 50.0, "x_B": np.sqrt(2.0)}),
+    ("Ga", {"x_R": 50.0, "x_tau": 2.0, "x_a": 1.0}, "G", {"x_R": 50.0, "x_tau": 2.0}),
+    ("Gb", {"x_R": 50.0, "x_tau": 2.0, "x_a": 1.0}, "G", {"x_R": 50.0, "x_tau": 2.0}),
+])
+def test_generalized_ec_lab_elements_reduce_to_base_element(kind, generalized_params, base_kind, base_params):
+    """The six elements added after cross-checking EC-Lab's own ZFit
+    element library (La, Winf, Ma, Mg, Ga, Gb) are each a generalization
+    of a simpler element already in this library -- at their "neutral"
+    exponent value (a=1 or gamma=1) they must reduce EXACTLY to that
+    simpler element's impedance, not just approximately."""
+    omega = np.logspace(-2, 4, 50)
+    z_generalized = cl.evaluate_circuit(("elem", kind, "x"), omega, generalized_params)
+    z_base = cl.evaluate_circuit(("elem", base_kind, "x"), omega, base_params)
+    np.testing.assert_allclose(z_generalized, z_base, rtol=1e-6)
+
+
+def test_winf_element_is_finite_and_well_defined():
+    """Winf (RDE convective-diffusion, analytical approximation) has no
+    simpler-element reduction to check against, so this just confirms it
+    evaluates to a finite, non-degenerate impedance across a realistic
+    frequency sweep."""
+    omega = np.logspace(-2, 4, 50)
+    z = cl.evaluate_circuit(("elem", "Winf", "x"), omega, {"x_Rd": 10.0, "x_gamma": 1.0, "x_tau": 1.0})
+    assert np.all(np.isfinite(z.real)) and np.all(np.isfinite(z.imag))
+    assert np.any(np.abs(z) > 1e-6)
+
+
+@pytest.mark.parametrize("name,true_params", [
+    ("supercap_Q_Ma", {"Rs": 50.0, "Rct": 50.0, "Rct_cap_Y0": 5e-3, "Rct_cap_n": 0.9,
+                        "Mb_R": 40.0, "Mb_tau": 2.0, "Mb_a": 0.8}),
+    ("gerischer_R_Ga", {"Rs": 20.0, "G_R": 50.0, "G_tau": 2.0, "G_a": 0.9}),
+    ("gerischer_R_Gb", {"Rs": 20.0, "G_R": 50.0, "G_tau": 2.0, "G_a": 0.9}),
+    ("misc_R_La", {"Rs": 20.0, "La_L": 1e-6, "La_a": 0.9}),
+    ("misc_R_Winf", {"Rs": 20.0, "zw_Rd": 30.0, "zw_gamma": 1.0, "zw_tau": 1.0}),
+    ("misc_R_Mg", {"Rs": 20.0, "zw_R": 30.0, "zw_tau": 1.0, "zw_gamma": 0.8}),
+])
+def test_new_ec_lab_sourced_circuits_recover_true_parameters(name, true_params):
+    """Preset circuits built from the six new EC-Lab-sourced elements must
+    actually be fittable, not just evaluable -- fit each to its own
+    noise-free synthetic data (with multistart, matching what the EIS
+    tab's "Fit this circuit" button does) and confirm it recovers the
+    true parameters, not a local-minimum near-miss."""
+    freq = np.logspace(4, -3, 60)
+    omega = 2 * np.pi * freq
+    spec = cl.get_circuit(name)
+    assert set(spec.param_order) == set(true_params.keys())
+    z_true = cl.evaluate_circuit(spec.tree, omega, true_params)
+
+    result = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag, model=name, multistart=True)
+    assert result.reduced_chi_squared < 1e-6
+    for pname, true_val in true_params.items():
+        assert result.params[pname] == pytest.approx(true_val, rel=0.02)
 
 
 def test_two_branch_zubieta_bonert_model_recovers_true_parameters():
@@ -84,7 +143,7 @@ def test_every_circuit_evaluates_to_finite_impedance_and_has_unique_param_names(
     automated version of the manual "check all 100+ circuits" audit."""
     freq = np.logspace(4, -2, 40)
     omega = 2 * np.pi * freq
-    true_values = {"R": 50.0, "C": 2e-4, "L": 1e-6, "Y0": 5e-3, "n": 0.9, "B": 2.0, "tau": 0.5}
+    true_values = {"R": 50.0, "C": 2e-4, "L": 1e-6, "Y0": 5e-3, "n": 0.9, "B": 2.0, "tau": 0.5, "gamma": 1.0}
 
     seen_trees = {}
     for name, spec in cl.CIRCUITS.items():

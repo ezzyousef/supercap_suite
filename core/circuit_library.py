@@ -1,4 +1,4 @@
-"""Generic equivalent-circuit engine + a ~100-circuit preset library for
+"""Generic equivalent-circuit engine + a ~140-circuit preset library for
 EIS/PEIS complex nonlinear least-squares (CNLS) fitting.
 
 Architecture
@@ -6,16 +6,18 @@ Architecture
 Every circuit -- preset or (in the future) user-built -- is represented as
 a small expression TREE of the same few node types, so ONE evaluator and
 ONE fitting routine work for all of them (this is what lets the auto-fit
-feature try ~100 topologies without ~100 hand-written impedance
+feature try ~140 topologies without ~140 hand-written impedance
 functions):
 
     ("elem", kind, prefix)      -- a leaf circuit element
     ("series", [child, ...])    -- Z = sum(Z_child)
     ("parallel", [child, ...])  -- 1/Z = sum(1/Z_child)
 
-`kind` is one of the seven element primitives below; `prefix` becomes part
-of the fitted parameter name(s) for that element instance (so the same
-circuit can contain e.g. two independent resistors "Rct1"/"Rct2").
+`kind` is one of the fifteen element primitives below (matching EC-Lab
+ZFit's own 13-element set plus this app's own T/de-Levie addition -- see
+"EC-Lab cross-validation" below); `prefix` becomes part of the fitted
+parameter name(s) for that element instance (so the same circuit can
+contain e.g. two independent resistors "Rct1"/"Rct2").
 
 Element formulas (verified against a source independent of memory before
 being finalized -- see citations below; conventions for CPE/Warburg vary
@@ -59,6 +61,33 @@ than left implicit):
                                                                     significant figures by linear
                                                                     extrapolation of the low-frequency
                                                                     tail in a numerical check.)
+    G:   Z = R / sqrt(1 + j*w*tau)                                (Gerischer -- chemical reaction
+                                                                    coupled to diffusion)
+
+    The following six were added after directly cross-checking this
+    module's element set against the locally-installed EC-Lab (BioLogic)
+    software's own manual (13 ZFit element types) -- see "EC-Lab cross-
+    validation" below and docs/EQUATIONS.md for the full sourcing:
+
+    La:  Z = L*(j*w)^a                                            (CPE-generalized inductor;
+                                                                    a=1 -> plain L)
+    Winf: Z = Rd*sqrt(g^2 + tau*j*w) / (g + tau*j*w)              (Warburg for convective/RDE
+                                                                    diffusion, analytical
+                                                                    approximation)
+    Ma:  Z = R*coth((tau*j*w)^(a/2)) / (tau*j*w)^(a/2)            (CPE-generalized restricted
+                                                                    diffusion; a=1 -> plain Wo --
+                                                                    accounts for a DISTRIBUTION of
+                                                                    pore relaxation times rather
+                                                                    than one sharp time constant)
+    Mg:  Z = R*coth((tau*j*w)^(g/2)) / (tau*j*w)^(1-g/2)          (Bisquert/anomalous diffusion;
+                                                                    g=1 -> same base form as Ma(a=1)/
+                                                                    Wo, but asymmetric exponents
+                                                                    diverge from Ma for g!=1)
+    Ga:  Z = R / sqrt(1 + (j*w*tau)^a)                            (CPE-generalized Gerischer #1;
+                                                                    a=1 -> plain G)
+    Gb:  Z = R / (1 + j*w*tau)^(a/2)                              (CPE-generalized Gerischer #2;
+                                                                    a=1 -> plain G, diverges from Ga
+                                                                    for a!=1)
 
 Q, W formulas: Gamry Instruments, "Physical Electrochemistry & Equivalent
 Circuit Elements" (Basics of EIS, Part 2/3), which gives CPE admittance
@@ -176,6 +205,85 @@ def _z_T(omega, p, prefix):
     return np.sqrt(Rp / Ydl) * _coth(x)
 
 
+def _z_La(omega, p, prefix):
+    """Modified (CPE-style) inductor -- EC-Lab "La": Z = L*(jw)^a,
+    a=1 reduces to the ideal inductor "L" above. Used to represent an
+    unusual/non-ideal inductive high-frequency loop."""
+    L = p[f"{prefix}_L"]
+    a = p[f"{prefix}_a"]
+    return L * (1j * omega) ** a
+
+
+def _z_Winf(omega, p, prefix):
+    """Warburg element for convective diffusion, analytical approximation
+    (EC-Lab "Winf") -- a better approximation than the Nernst-hypothesis
+    "Wd"/Ws form for a rotating-disk-electrode redox reaction; leads
+    directly to the diffusing species' diffusion coefficient. Mainly
+    relevant to RDE/redox-couple systems rather than porous supercapacitor
+    electrodes, but included here for completeness of the EC-Lab element
+    set: Z = Rd*sqrt(gamma^2 + tau*jw) / (gamma + tau*jw)."""
+    Rd = p[f"{prefix}_Rd"]
+    gamma = p[f"{prefix}_gamma"]
+    tau = p[f"{prefix}_tau"]
+    x = tau * 1j * omega
+    return Rd * np.sqrt(gamma ** 2 + x) / (gamma + x)
+
+
+def _z_Ma(omega, p, prefix):
+    """Modified restricted (finite-length) diffusion -- EC-Lab "Ma": a
+    CPE-generalized version of this module's "Wo" (a=1 reduces exactly to
+    Wo), replacing Wo's fixed sqrt(j*w) frequency dependence with a
+    variable-exponent (j*w)^(a/2) -- appropriate for a porous electrode
+    with a DISTRIBUTION of pore relaxation times rather than one sharp
+    time constant, which is the more realistic case for most real
+    supercapacitor carbons. Z = R*coth((tau*jw)^(a/2)) / (tau*jw)^(a/2)."""
+    R = p[f"{prefix}_R"]
+    tau = p[f"{prefix}_tau"]
+    a = p[f"{prefix}_a"]
+    half_power = (tau * 1j * omega) ** (a / 2.0)
+    x = _clip_arg(half_power)
+    return R * _coth(x) / half_power
+
+
+def _z_Mg(omega, p, prefix):
+    """Anomalous (Bisquert) diffusion -- EC-Lab "Mg": a second, differently
+    -asymmetric generalization of the restricted-diffusion element (the
+    coth argument's power gamma/2 differs from the outer denominator's
+    power 1-gamma/2, unlike "Ma" which uses the same exponent in both
+    places) -- gamma=1 reduces to the same base form as Ma(a=1)/Wo. Used
+    for anomalous/fractal transport in mesoporous films (originally
+    developed for dye-sensitized solar cell electrodes).
+    Z = R*coth((tau*jw)^(gamma/2)) / (tau*jw)^(1-gamma/2)."""
+    R = p[f"{prefix}_R"]
+    tau = p[f"{prefix}_tau"]
+    gamma = p[f"{prefix}_gamma"]
+    base = tau * 1j * omega
+    x = _clip_arg(base ** (gamma / 2.0))
+    return R * _coth(x) / (base ** (1.0 - gamma / 2.0))
+
+
+def _z_Ga(omega, p, prefix):
+    """Modified Gerischer #1 -- EC-Lab "Ga": generalizes this module's "G"
+    by raising the (j*w*tau) term itself to a variable exponent a (a=1
+    reduces exactly to G). Z = R / sqrt(1 + (j*w*tau)^a)."""
+    R = p[f"{prefix}_R"]
+    tau = p[f"{prefix}_tau"]
+    a = p[f"{prefix}_a"]
+    return R / np.sqrt(1.0 + (1j * omega * tau) ** a)
+
+
+def _z_Gb(omega, p, prefix):
+    """Modified Gerischer #2 -- EC-Lab "Gb": a second generalization of
+    "G", applying the variable exponent a/2 to the WHOLE (1+j*w*tau) term
+    instead of to (j*w*tau) alone (a=1 reduces exactly to G, same as Ga,
+    but the two behave differently for a != 1).
+    Z = R / (1 + j*w*tau)^(a/2)."""
+    R = p[f"{prefix}_R"]
+    tau = p[f"{prefix}_tau"]
+    a = p[f"{prefix}_a"]
+    return R / (1.0 + 1j * omega * tau) ** (a / 2.0)
+
+
 def _coth(x):
     return 1.0 / np.tanh(x)
 
@@ -192,7 +300,8 @@ def _clip_arg(x, max_real: float = 20.0):
 
 
 _ELEMENT_FUNCS = {"R": _z_R, "C": _z_C, "L": _z_L, "Q": _z_Q, "W": _z_W, "Wo": _z_Wo, "Ws": _z_Ws,
-                   "T": _z_T, "G": _z_G}
+                   "T": _z_T, "G": _z_G, "La": _z_La, "Winf": _z_Winf, "Ma": _z_Ma, "Mg": _z_Mg,
+                   "Ga": _z_Ga, "Gb": _z_Gb}
 
 # (param suffix, guess-kind) per element type -- guess-kind feeds
 # _initial_value_and_bounds() below. Elements with one param have suffix "".
@@ -206,6 +315,12 @@ _ELEMENT_PARAMS = {
     "Ws": [("_Y0", "Y0"), ("_B", "B")],
     "T": [("_Rp", "R"), ("_Yt", "Y0"), ("_nt", "n")],
     "G": [("_R", "R"), ("_tau", "tau")],
+    "La": [("_L", "L"), ("_a", "n")],
+    "Winf": [("_Rd", "R"), ("_gamma", "gamma"), ("_tau", "tau")],
+    "Ma": [("_R", "R"), ("_tau", "tau"), ("_a", "n")],
+    "Mg": [("_R", "R"), ("_tau", "tau"), ("_gamma", "n")],
+    "Ga": [("_R", "R"), ("_tau", "tau"), ("_a", "n")],
+    "Gb": [("_R", "R"), ("_tau", "tau"), ("_a", "n")],
 }
 
 
@@ -270,7 +385,9 @@ _GUESS_DEFAULTS = {
     "Y0": (1e-4, 1e-12, 10.0),
     "n": (0.85, 0.3, 1.0),
     "B": (1.0, 1e-6, 1e6),
-    "tau": (1.0, 1e-6, 1e6),
+    # "tau" is handled by its own data-scaled branch in
+    # initial_guess_and_bounds below, not this generic table.
+    "gamma": (1.0, 1e-3, 1e3),
 }
 
 
@@ -348,6 +465,12 @@ def initial_guess_and_bounds(spec: CircuitSpec, frequency_hz: np.ndarray,
     # curvature that actually constrains B lives, rather than off the
     # edge of the measured spectrum entirely.
     b_guess = 1.0 / np.sqrt(omega_mid)
+    # tau guess: Gerischer/restricted-diffusion time constants appear as
+    # (j*w*tau) or similar, dimensionless only if tau ~ 1/omega -- seeded
+    # from the data's own mid-frequency scale for the same reason as B
+    # above (a fixed tau=1.0 s default was only ever right by coincidence
+    # for whatever frequency range a given spectrum happened to use).
+    tau_guess = 1.0 / omega_mid
 
     param_kinds = spec.param_kinds
     x0, lo, hi = [], [], []
@@ -381,6 +504,10 @@ def initial_guess_and_bounds(spec: CircuitSpec, frequency_hz: np.ndarray,
             x0.append(b_guess)
             lo.append(b_guess * 1e-3)
             hi.append(b_guess * 1e3)
+        elif kind == "tau":
+            x0.append(tau_guess)
+            lo.append(tau_guess * 1e-3)
+            hi.append(tau_guess * 1e3)
         elif kind == "C":
             _, low, high = _GUESS_DEFAULTS[kind]
             # c_guess can blow past these FIXED bounds for a circuit with
@@ -589,6 +716,24 @@ def _build_library() -> None:
                 disp = f"{'L-' if with_l else ''}Rs(Rct-{cap})-{wb}"
                 _register(CircuitSpec(name, disp, "Supercapacitor (recommended)", tree))
 
+    # --- H1b. Generalized (CPE-exponent) restricted-diffusion variant ------
+    #        Z = Rs + (Rct || cap) + Ma -- EC-Lab's "Ma" (modified
+    #        restricted diffusion) is this library's "Wo" generalized from
+    #        a fixed sqrt(j*w) frequency dependence to a variable-exponent
+    #        (j*w)^(a/2), directly relevant to a real porous supercapacitor
+    #        electrode with a DISTRIBUTION of pore relaxation times rather
+    #        than one sharp time constant. a=1 reduces exactly to the
+    #        plain Wo-based entries above -- offering Ma lets the fit
+    #        itself discover whether that idealization is adequate for a
+    #        given electrode, at the cost of one extra free parameter.
+    for cap in cap_opts:
+        for with_l in (False, True):
+            name = f"supercap_{cap}_Ma" + ("_L" if with_l else "")
+            semicircle = _parallel(_e("R", "Rct"), _e(cap, "Rct_cap"))
+            tree = _maybe_L(_series(_e("R", "Rs"), semicircle, _e("Ma", "Mb")), with_l)
+            disp = f"{'L-' if with_l else ''}Rs(Rct-{cap})-Ma"
+            _register(CircuitSpec(name, disp, "Supercapacitor (recommended)", tree))
+
     # --- H2. Two-branch (Zubieta-Bonert) supercapacitor model -------------
     #        Z = Rs + [C1 || Rleak || (R2-C2 series)]
     #        Source: L. Zubieta and R. Bonert, "Characterization of
@@ -662,12 +807,29 @@ def _build_library() -> None:
             disp = f"{'L-' if with_l else ''}Rs(Rct({cap}-G))"
             _register(CircuitSpec(name, disp, "Gerischer (mixed conduction)", tree))
 
+    # Ga/Gb: two independent generalizations of G with a variable exponent
+    # a (a=1 reduces exactly to G in both cases, but Ga and Gb diverge from
+    # each other for a != 1 -- see the module docstring's element formula
+    # list and EQUATIONS.md for the exact forms and EC-Lab sourcing).
+    for gk in ("Ga", "Gb"):
+        _register(CircuitSpec(f"gerischer_R_{gk}", f"Rs-{gk}", "Gerischer (mixed conduction)",
+                               _series(_e("R", "Rs"), _e(gk, "G"))))
+        for cap in cap_opts:
+            for with_l in (False, True):
+                name = f"gerischer_{cap}_{gk}" + ("_L" if with_l else "")
+                branch = _parallel(_e("R", "Rct"), _series(_e(cap, "Rct_cap"), _e(gk, "zg")))
+                tree = _maybe_L(_series(_e("R", "Rs"), branch), with_l)
+                disp = f"{'L-' if with_l else ''}Rs(Rct({cap}-{gk}))"
+                _register(CircuitSpec(name, disp, "Gerischer (mixed conduction)", tree))
+
     # --- F. Miscellaneous / composite ---------------------------------------
-    for wb in ("W", "Wo", "Ws"):
+    for wb in ("W", "Wo", "Ws", "Winf", "Mg"):
         _register(CircuitSpec(f"misc_R_{wb}", f"Rs-{wb}", "Miscellaneous",
                                _series(_e("R", "Rs"), _e(wb, "zw"))))
     _register(CircuitSpec("misc_RL", "Rs-L", "Miscellaneous",
                            _series(_e("R", "Rs"), _e("L", "L"))))
+    _register(CircuitSpec("misc_R_La", "Rs-La", "Miscellaneous",
+                           _series(_e("R", "Rs"), _e("La", "La"))))
     _register(CircuitSpec("misc_RLC", "L-Rs-C", "Miscellaneous",
                            _series(_e("L", "L"), _e("R", "Rs"), _e("C", "C"))))
     _register(CircuitSpec("misc_RLQ", "L-Rs-Q", "Miscellaneous",

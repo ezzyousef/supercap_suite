@@ -247,7 +247,7 @@ circuit dataset with a known true Rs.
 
 `core/circuit_library.py` implements a generic circuit-TREE engine (every
 circuit is a nested `("elem", kind, prefix)` / `("series", [...])` /
-`("parallel", [...])` expression) with ~122 preset circuits across 8
+`("parallel", [...])` expression) with ~139 preset circuits across 8
 categories, rather than a fixed handful of named models -- one evaluator
 and one CNLS fitter (`core/eis_analysis.fit_equivalent_circuit`, via
 `scipy.optimize.least_squares` on the stacked real+imaginary residuals)
@@ -258,7 +258,7 @@ one hand-picked model. Reported per fit: fitted parameters, approximate
 chi-squared, and explicit warnings when a parameter is pinned at its
 search bound (a strong sign the model doesn't actually need that
 element -- see the Warburg discussion below). Nonlinear least squares can
-still converge to a local minimum; single-circuit fits (not the ~122
+still converge to a local minimum; single-circuit fits (not the ~139
 -circuit screening pass) additionally try a few rescaled starting points
 (`multistart=True`) and keep the best, which fixed confirmed local-minimum
 failures in several circuits during self-consistency testing (fitting
@@ -372,25 +372,40 @@ confirmation (beyond the physical-reasoning and asymptotic-limit checks
 already documented above) that this library's Warburg/Gerischer element
 conventions are correct.
 
-EC-Lab also documents several element types this library does NOT
-implement, found during the same cross-check -- noted here rather than
-silently omitted:
-- `La` (modified inductor, `Z = L*(jw)^a`) and `Winf` (an RDE/rotating-
-  disk convective-diffusion element, `Z = Rd*sqrt(g^2+td*jw)/(g+td*jw)`) --
-  both low relevance to supercapacitor characterization specifically
-  (unusual-lead-inductance and rotating-disk-electrode use cases).
+EC-Lab also documents six further element types that were found during
+the same cross-check and have since been added to this library (all
+verified via the same self-consistency sweep -- fitting each new element/
+circuit to its own noise-free synthetic data -- as every other circuit;
+all reduce EXACTLY to an existing simpler element at their "neutral"
+exponent value, checked numerically before finalizing):
+- `La` (modified inductor, `Z = L*(jw)^a`, a=1 -> plain `L`) -- represents
+  an unusual/non-ideal inductive high-frequency loop.
+- `Winf` (RDE/rotating-disk convective-diffusion element, analytical
+  approximation, `Z = Rd*sqrt(g^2+td*jw)/(g+td*jw)`) -- mainly relevant to
+  rotating-disk-electrode redox-couple systems rather than porous
+  supercapacitor electrodes, included for completeness of the EC-Lab
+  element set.
 - `Ma` (modified restricted diffusion, `Z = R*coth((t*jw)^(a/2))/
-  (t*jw)^(a/2)`) -- a genuinely useful CPE-style generalization of this
+  (t*jw)^(a/2)`, a=1 -> plain `Wo`) -- a CPE-style generalization of this
   library's "Wo" (fixed exponent 1/2 -> variable exponent a/2), directly
-  relevant to real porous supercapacitor electrodes with a distribution of
-  pore relaxation times rather than one sharp time constant -- a
-  reasonable candidate for a future addition, not implemented this pass.
-- `Mg` (Bisquert/anomalous diffusion) and `Ga`/`Gb` (two different
-  generalizations of the Gerischer element with a variable exponent) --
-  more specialized elements (mesoporous semiconductor films,
-  dye-sensitized solar cells for Mg; non-ideal Faradaic/chemical
-  relaxation for Ga/Gb), lower priority for this app's supercapacitor/DSC
-  focus, not implemented this pass.
+  relevant to real porous supercapacitor electrodes with a DISTRIBUTION of
+  pore relaxation times rather than one sharp time constant. Added to the
+  "Supercapacitor (recommended)" category as `supercap_C_Ma`/
+  `supercap_Q_Ma` (and `_L` variants), alongside the existing Wo/Ws-based
+  entries -- offering Ma lets a fit discover whether the fixed-exponent
+  idealization is adequate for a given electrode, at the cost of one
+  extra free parameter.
+- `Mg` (Bisquert/anomalous diffusion, `Z = R*coth((t*jw)^(g/2))/
+  (t*jw)^(1-g/2)`, g=1 -> same base form as Ma(a=1)/Wo, but the
+  ASYMMETRIC exponents diverge from Ma for g!=1) -- originally developed
+  for anomalous/fractal transport in mesoporous dye-sensitized-solar-cell
+  films; added as `misc_R_Mg`.
+- `Ga` (`Z = R/sqrt(1+(jwt)^a)`) and `Gb` (`Z = R/(1+jwt)^(a/2)`) -- two
+  DIFFERENT generalizations of this library's Gerischer element "G"
+  (both reduce to G at a=1, but diverge from each other and from G for
+  a!=1) -- added alongside the existing G-based entries in the
+  "Gerischer (mixed conduction)" category (`gerischer_R_Ga`,
+  `gerischer_C_Ga`, `gerischer_R_Gb`, etc.).
 
 **Not implemented this pass:**
 - An "EDL capacitance + pseudocapacitance" combined model was investigated
