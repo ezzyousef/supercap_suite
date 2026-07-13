@@ -15,7 +15,7 @@ from core import cv_analysis as cv
 from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
-    ResultCard, show_toast, show_empty_state,
+    make_scrollable_panel, ResultCard, show_toast, show_empty_state,
 )
 from .unit_widgets import CompoundRateSpinBox
 from . import theme, formula_sources
@@ -122,7 +122,7 @@ class CvTab(QWidget):
         ))
 
         left_layout.addStretch()
-        splitter.addWidget(left)
+        splitter.addWidget(make_scrollable_panel(left))
 
         right = QWidget()
         right_layout = QVBoxLayout(right)

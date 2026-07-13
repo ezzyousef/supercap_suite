@@ -25,7 +25,7 @@ from core import dsc_analysis as dsc
 from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
-    ResultCard, CollapsibleSection, show_toast, show_empty_state,
+    make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
 )
 from . import theme, formula_sources
 
@@ -195,7 +195,7 @@ class EnthalpyTool(QWidget):
         left_layout.addWidget(self.send_btn)
 
         left_layout.addStretch()
-        splitter.addWidget(left)
+        splitter.addWidget(make_scrollable_panel(left))
 
         right = QWidget()
         right_layout = QVBoxLayout(right)

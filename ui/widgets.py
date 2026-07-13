@@ -8,7 +8,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QTableView, QPushButton, QFileDialog, QInputDialog, QMessageBox, QLineEdit,
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QGroupBox, QSplitter,
-    QToolButton, QSizePolicy, QAbstractItemView
+    QToolButton, QSizePolicy, QAbstractItemView, QScrollArea
 )
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
@@ -395,6 +395,30 @@ def make_resizable_results_panel(*widgets, sizes: list[int] | None = None) -> QS
         splitter.addWidget(w)
     splitter.setSizes(sizes if sizes else [280, 140, 160][:len(real_widgets)])
     return splitter
+
+
+def make_scrollable_panel(widget: QWidget) -> QScrollArea:
+    """Wrap a settings/options panel (the LEFT side of a tab's main
+    splitter -- a QWidget with a QVBoxLayout stacking several QGroupBoxes)
+    in a vertically-scrolling QScrollArea, so its content is never
+    force-compressed below readable size.
+
+    Without this, a QSplitter pane has no scrolling of its own: if the
+    panel's natural (sizeHint) height exceeds whatever height the window
+    gives the splitter, Qt has no choice but to shrink every child widget
+    toward its minimumSizeHint to make it fit -- which can compress
+    button/label text down to unreadable, cramped controls (observed in
+    practice on the EIS tab once its settings panel grew past the
+    window's available height). Only vertical overflow scrolls; the
+    panel keeps its natural width (no horizontal scrollbar) so nothing
+    inside it needs to reflow.
+    """
+    scroll = QScrollArea()
+    scroll.setWidget(widget)
+    scroll.setWidgetResizable(True)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+    return scroll
 
 
 def configure_collapsible_main_splitter(splitter: QSplitter) -> None:

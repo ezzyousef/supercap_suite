@@ -29,7 +29,7 @@ from core import units as unitconv
 from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
-    ResultCard, show_toast, show_empty_state,
+    make_scrollable_panel, ResultCard, show_toast, show_empty_state,
 )
 from . import theme, formula_sources
 
@@ -345,7 +345,7 @@ class CvRateTool(QWidget):
         left_layout.addWidget(note)
 
         left_layout.addStretch()
-        splitter.addWidget(left)
+        splitter.addWidget(make_scrollable_panel(left))
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
@@ -837,7 +837,7 @@ class GcdRateTool(QWidget):
         left_layout.addWidget(theme.make_source_button(self, "Rate capability & retention", formula_sources.RATE_CAPABILITY))
 
         left_layout.addStretch()
-        splitter.addWidget(left)
+        splitter.addWidget(make_scrollable_panel(left))
 
         right = QWidget()
         right_layout = QVBoxLayout(right)

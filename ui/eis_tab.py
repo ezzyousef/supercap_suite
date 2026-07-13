@@ -19,7 +19,7 @@ from core import circuit_library as circuits
 from .widgets import (
     PlotWidget, PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
-    ResultCard, show_toast, show_empty_state,
+    make_scrollable_panel, ResultCard, show_toast, show_empty_state,
 )
 from .circuit_diagram import draw_circuit
 from . import theme, formula_sources
@@ -219,7 +219,7 @@ class EisTab(QWidget):
         left_layout.addWidget(fit_box)
 
         left_layout.addStretch()
-        splitter.addWidget(left)
+        splitter.addWidget(make_scrollable_panel(left))
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
