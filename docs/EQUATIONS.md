@@ -128,6 +128,33 @@ capacitance results" -- always check the individual electrode potential
 profiles (via a 2-3 synchronous/three-electrode experiment) before applying
 the symmetric-cell shortcut.
 
+## 4a. Gravimetric / areal / volumetric capacitance normalization
+
+Every GCD and CV capacitance formula above (normal, integral, and CV's
+direct/rectangular and integral forms) computes the SAME underlying total
+capacitance (Farads) regardless of what it's normalized by:
+
+```
+C_total = (I * dt) / dV                        (GCD normal)
+C_total = (2 * I * ∫V dt) / dV**2               (GCD integral)
+C_total = I / scan_rate                          (CV direct/rectangular)
+C_total = ∮I dV / (2 * scan_rate * dV)           (CV integral)
+```
+
+Dividing `C_total` by active mass (g), electrode geometric area (cm2), or
+electrode volume (cm3) gives the gravimetric (F/g), areal (F/cm2), or
+volumetric (F/cm3) capacitance respectively -- all three are standard
+ways supercapacitor capacitance is reported in the literature, and the
+GCD/CV tabs (both manual entry and file-based/automated) let you pick
+which one applies to your sample via a "Normalize by" selector. Energy
+density (Section 3) follows the same pattern: the traditional Wh/kg
+convention additionally converts g -> kg, which does NOT apply to an
+areal/volumetric basis -- `core.gcd_analysis.energy_density_wh()` (Wh per
+whatever basis, no g->kg factor) is used instead of
+`energy_density_wh_per_kg()` for those cases; power density's W/kg
+formula is dimensionally generic and reused as-is (labeled W/cm2 or
+W/cm3 as appropriate).
+
 ## 5. CV (cyclic voltammetry) capacitance
 
 ```
@@ -208,6 +235,12 @@ notation -- this matches how the source paper's own worked numbers are
 reported, in F/g). `core/trasatti_method.trasatti_analysis` implements
 this directly; needs 3+ scan rates spanning a wide range (e.g. at least
 one order of magnitude) for the extrapolation to be meaningful.
+
+The fit itself is dimensionally agnostic to whatever basis the input
+capacitance column is in -- the Rate Study tab's capacitance table lets
+you choose gravimetric (F/g) or areal (mF/cm², F/cm²) for the whole
+table (see Section 4a), and the outer/total/inner results and plots are
+labeled with whichever basis was selected.
 
 ## 6. EIS capacitance, ESR, and ionic conductivity
 

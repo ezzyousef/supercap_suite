@@ -8,7 +8,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QTableView, QPushButton, QFileDialog, QInputDialog, QMessageBox, QLineEdit,
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QGroupBox, QSplitter,
-    QToolButton, QSizePolicy, QAbstractItemView, QScrollArea
+    QToolButton, QSizePolicy, QAbstractItemView, QScrollArea, QComboBox, QDoubleSpinBox
 )
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
@@ -179,6 +179,106 @@ def show_toast(parent, text: str, kind: str = "success") -> None:
     own lifetime (auto-closes and self-deletes), so callers don't need to
     hold a reference."""
     ToastNotification(parent, text, kind)
+
+
+class NormalizationSelector(QWidget):
+    """"Normalize by" selector shared across CV/GCD manual and file-based
+    capacitance calculations: gravimetric (active mass, F/g), areal
+    (electrode geometric area, F/cm2), or volumetric (electrode volume,
+    F/cm3) -- the three standard ways supercapacitor capacitance is
+    reported in the literature. Only the input relevant to the current
+    selection is enabled; a caller computes a TOTAL capacitance in
+    Farads (e.g. via core.cv_analysis.total_capacitance_from_cv or
+    core.gcd_analysis.total_capacitance_gcd_auto) and calls `.normalize()`
+    on it rather than re-implementing the three divisions each place this
+    choice is offered.
+    """
+
+    BASES = ("gravimetric", "areal", "volumetric")
+    LABELS = (
+        "Gravimetric (active mass) → F/g",
+        "Areal (electrode area) → F/cm²",
+        "Volumetric (electrode volume) → F/cm³",
+    )
+    RESULT_UNITS = ("F/g", "F/cm²", "F/cm³")
+
+    def __init__(self, default_mass_g: float = 0.005, default_area_cm2: float = 1.0,
+                 default_volume_cm3: float = 0.001, parent=None):
+        super().__init__(parent)
+        grid = QGridLayout(self)
+        grid.setContentsMargins(0, 0, 0, 0)
+
+        self.basis_combo = QComboBox()
+        self.basis_combo.addItems(list(self.LABELS))
+        self.basis_combo.currentIndexChanged.connect(self._update_enabled)
+        grid.addWidget(QLabel("Normalize by:"), 0, 0)
+        grid.addWidget(self.basis_combo, 0, 1)
+
+        self.mass_spin = QDoubleSpinBox()
+        self.mass_spin.setDecimals(6)
+        self.mass_spin.setRange(0.000001, 1000)
+        self.mass_spin.setValue(default_mass_g)
+        self.mass_spin.setSuffix(" g")
+        grid.addWidget(QLabel("Active mass:"), 1, 0)
+        grid.addWidget(self.mass_spin, 1, 1)
+
+        self.area_spin = QDoubleSpinBox()
+        self.area_spin.setDecimals(6)
+        self.area_spin.setRange(0.000001, 10000)
+        self.area_spin.setValue(default_area_cm2)
+        self.area_spin.setSuffix(" cm²")
+        grid.addWidget(QLabel("Electrode area:"), 2, 0)
+        grid.addWidget(self.area_spin, 2, 1)
+
+        self.volume_spin = QDoubleSpinBox()
+        self.volume_spin.setDecimals(8)
+        self.volume_spin.setRange(0.00000001, 10000)
+        self.volume_spin.setValue(default_volume_cm3)
+        self.volume_spin.setSuffix(" cm³")
+        grid.addWidget(QLabel("Electrode volume:"), 3, 0)
+        grid.addWidget(self.volume_spin, 3, 1)
+
+        self._update_enabled()
+
+    def _update_enabled(self):
+        idx = self.basis_combo.currentIndex()
+        self.mass_spin.setEnabled(idx == 0)
+        self.area_spin.setEnabled(idx == 1)
+        self.volume_spin.setEnabled(idx == 2)
+
+    def basis(self) -> str:
+        return self.BASES[self.basis_combo.currentIndex()]
+
+    def normalizer_value(self) -> float:
+        """The currently-selected mass/area/volume value, in the base
+        unit the core capacitance functions expect (g / cm2 / cm3)."""
+        idx = self.basis_combo.currentIndex()
+        return (self.mass_spin.value(), self.area_spin.value(), self.volume_spin.value())[idx]
+
+    def result_unit(self) -> str:
+        return self.RESULT_UNITS[self.basis_combo.currentIndex()]
+
+    def normalize(self, c_total_f: float) -> float:
+        """Divide a TOTAL capacitance (Farads) by the currently-selected
+        normalizer. Raises ValueError with a clear message if that
+        normalizer isn't positive (mirroring the validation every
+        core.cv_analysis/core.gcd_analysis normalized-capacitance
+        function already does)."""
+        value = self.normalizer_value()
+        if value <= 0:
+            name = ("Active mass", "Electrode area", "Electrode volume")[self.basis_combo.currentIndex()]
+            raise ValueError(f"{name} must be positive")
+        return c_total_f / value
+
+    def result_entries(self) -> dict:
+        """Parameter/value pairs describing the active normalizer, for
+        folding into a tab's last_result export dict."""
+        idx = self.basis_combo.currentIndex()
+        keys = ("Active mass (g)", "Electrode area (cm²)", "Electrode volume (cm³)")
+        return {
+            "Normalization basis": self.basis_combo.currentText(),
+            keys[idx]: self.normalizer_value(),
+        }
 
 
 class CollapsibleSection(QWidget):

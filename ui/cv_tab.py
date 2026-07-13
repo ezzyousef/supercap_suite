@@ -15,7 +15,7 @@ from core import cv_analysis as cv
 from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
-    make_scrollable_panel, ResultCard, show_toast, show_empty_state,
+    make_scrollable_panel, ResultCard, NormalizationSelector, show_toast, show_empty_state,
 )
 from .unit_widgets import CompoundRateSpinBox
 from . import theme, formula_sources
@@ -83,24 +83,23 @@ class CvTab(QWidget):
         self.current_unit_combo.addItems(["A", "mA", "µA"])
         self.scan_rate_spin = CompoundRateSpinBox(numerator_value=10.0, numerator_unit="mV",
                                                     denominator_value=1.0, denominator_unit="s")
-        self.mass_spin = QDoubleSpinBox()
-        self.mass_spin.setDecimals(6)
-        self.mass_spin.setRange(0.000001, 1000)
-        self.mass_spin.setValue(0.005)
-        self.mass_spin.setSuffix(" g")
         param_grid.addWidget(QLabel("Current column unit:"), 0, 0)
         param_grid.addWidget(self.current_unit_combo, 0, 1)
         param_grid.addWidget(QLabel("Scan rate:"), 1, 0)
         param_grid.addWidget(self.scan_rate_spin, 1, 1)
-        param_grid.addWidget(QLabel("Active mass:"), 2, 0)
-        param_grid.addWidget(self.mass_spin, 2, 1)
         left_layout.addWidget(param_box)
+
+        norm_box = QGroupBox("Capacitance basis (specific capacitance report only)")
+        norm_layout = QVBoxLayout(norm_box)
+        self.normalizer = NormalizationSelector(default_mass_g=0.005)
+        norm_layout.addWidget(self.normalizer)
+        left_layout.addWidget(norm_box)
 
         report_box = QGroupBox("Report as")
         report_grid = QGridLayout(report_box)
         self.report_combo = QComboBox()
         self.report_combo.addItems([
-            "Specific capacitance (F/g) — EDLC/pseudocapacitive materials",
+            "Specific capacitance (F/g, F/cm², or F/cm³) — EDLC/pseudocapacitive materials",
             "Specific capacity (C/g) — battery-type materials",
         ])
         report_grid.addWidget(self.report_combo, 0, 0)
@@ -271,14 +270,15 @@ class CvTab(QWidget):
         if cyc is None:
             return
         v, i = cyc
-        mass_g = self.mass_spin.value()
         scan_rate = self.scan_rate_spin.value_base()
 
         try:
             if self.report_combo.currentIndex() == 0:
-                value = cv.capacitance_from_cv(v, i, scan_rate, mass_g)
-                label, unit = "Specific capacitance", "F/g"
+                c_total = cv.total_capacitance_from_cv(v, i, scan_rate)
+                value = self.normalizer.normalize(c_total)
+                label, unit = "Capacitance", self.normalizer.result_unit()
             else:
+                mass_g = self.normalizer.mass_spin.value()
                 value = cv.specific_capacity_from_cv(v, i, scan_rate, mass_g)
                 label, unit = "Specific capacity", "C/g"
         except ValueError as e:
@@ -290,7 +290,6 @@ class CvTab(QWidget):
         lines = [
             f"Potential window ΔV = {dv:.4f} V",
             f"Scan rate = {scan_rate:.6g} V/s",
-            f"Active mass = {mass_g:.6g} g",
             "",
             f"{label} = {value:.4f} {unit}",
             "",
@@ -328,8 +327,9 @@ class CvTab(QWidget):
         self.last_result = {
             "Potential window ΔV (V)": dv,
             "Scan rate ν (V/s)": scan_rate,
-            "Active mass (g)": mass_g,
             "Report form": self.report_combo.currentText(),
+            **(self.normalizer.result_entries() if self.report_combo.currentIndex() == 0
+               else {"Active mass (g)": self.normalizer.mass_spin.value()}),
             f"{label} ({unit})": value,
             "Anodic peak potential E_pa (V)": sep["e_pa_v"],
             "Cathodic peak potential E_pc (V)": sep["e_pc_v"],

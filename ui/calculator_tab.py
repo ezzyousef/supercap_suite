@@ -15,7 +15,7 @@ from core import gcd_analysis as gcd
 from core import cv_analysis as cv
 from core import eis_analysis as eis
 from core import dsc_analysis as dsc
-from .widgets import make_export_button, RecordLogPanel, ResultCard
+from .widgets import make_export_button, RecordLogPanel, ResultCard, NormalizationSelector
 from .unit_widgets import CompoundRateSpinBox
 from . import theme, formula_sources
 
@@ -65,7 +65,6 @@ class GcdCalculator(QWidget):
         self.current = _spin(6, 0, 1000, 0.001, " A")
         self.dt = _spin(4, 0, 1e6, 10.0, " s")
         self.dv = _spin(4, 0.0001, 100, 1.0, " V")
-        self.mass = _spin(6, 0.000001, 1000, 0.005, " g")
         self.integral_vdt = _spin(6, 0, 1e9, 5.0, " V·s (∫V dt over the discharge)")
 
         grid = QGridLayout()
@@ -75,12 +74,17 @@ class GcdCalculator(QWidget):
             ("Discharge time Δt:", self.dt),
             ("Voltage window ΔV:", self.dv),
             ("∫V dt (integral form only):", self.integral_vdt),
-            ("Active mass m:", self.mass),
         ]
         for r, (label, widget) in enumerate(rows):
             grid.addWidget(QLabel(label), r, 0)
             grid.addWidget(widget, r, 1)
         layout.addLayout(grid)
+
+        self.normalizer = NormalizationSelector(default_mass_g=0.005)
+        norm_box = QGroupBox("Capacitance basis")
+        norm_layout = QVBoxLayout(norm_box)
+        norm_layout.addWidget(self.normalizer)
+        layout.addWidget(norm_box)
 
         btn = QPushButton("▶ Calculate")
         btn.clicked.connect(self.on_calculate)
@@ -116,46 +120,53 @@ class GcdCalculator(QWidget):
     def on_calculate(self):
         try:
             if self.method_combo.currentIndex() == 0:
-                c = gcd.capacitance_gcd_normal(self.current.value(), self.dt.value(),
-                                                self.dv.value(), self.mass.value())
-                formula = "C_s = (I × Δt) / (m × ΔV)"
+                c_total = gcd.total_capacitance_gcd_normal(self.current.value(), self.dt.value(), self.dv.value())
+                formula = "C = (I × Δt) / ΔV"
             else:
-                if self.mass.value() <= 0:
-                    raise ValueError("mass_g must be positive")
-                c = (2.0 * self.current.value() * self.integral_vdt.value()) / (
-                    self.mass.value() * self.dv.value() ** 2)
-                formula = "C_s = (2 × I × ∫V dt) / (m × ΔV²)"
+                if self.dv.value() <= 0:
+                    raise ValueError("ΔV must be positive")
+                c_total = (2.0 * self.current.value() * self.integral_vdt.value()) / (self.dv.value() ** 2)
+                formula = "C = (2 × I × ∫V dt) / ΔV²"
+            c = self.normalizer.normalize(c_total)
         except (ValueError, ZeroDivisionError) as e:
             QMessageBox.critical(self, "Calculation error", str(e))
             return
 
-        e_wh_kg = gcd.energy_density_wh_per_kg(c, self.dv.value())
-        p_w_kg = gcd.power_density_w_per_kg(e_wh_kg, self.dt.value()) if self.dt.value() > 0 else float("nan")
+        unit = self.normalizer.result_unit()
+        basis = self.normalizer.basis()
+        if basis == "gravimetric":
+            e_density = gcd.energy_density_wh_per_kg(c, self.dv.value())
+            e_unit, p_unit = "Wh/kg", "W/kg"
+        else:
+            e_density = gcd.energy_density_wh(c, self.dv.value())
+            e_unit = "Wh/cm²" if basis == "areal" else "Wh/cm³"
+            p_unit = "W/cm²" if basis == "areal" else "W/cm³"
+        p_density = gcd.power_density_w_per_kg(e_density, self.dt.value()) if self.dt.value() > 0 else float("nan")
 
         self.result.setPlainText(
-            f"Formula used: {formula}\n\n"
-            f"Specific capacitance C_s = {c:.4f} F/g\n"
-            f"  -> Symmetric-2e single-electrode estimate (×4): {gcd.symmetric_cell_to_electrode_capacitance(c):.4f} F/g\n"
-            f"  -> 3e-to-symmetric-2e-cell estimate (÷4): {gcd.three_electrode_to_two_electrode_estimate(c):.4f} F/g\n\n"
-            f"Energy density E = {e_wh_kg:.4f} Wh/kg\n"
-            f"Power density P = {p_w_kg:.4f} W/kg"
+            f"Formula used: {formula}  (normalized -> {unit})\n\n"
+            f"Capacitance C = {c:.4f} {unit}\n"
+            f"  -> Symmetric-2e single-electrode estimate (×4): {gcd.symmetric_cell_to_electrode_capacitance(c):.4f} {unit}\n"
+            f"  -> 3e-to-symmetric-2e-cell estimate (÷4): {gcd.three_electrode_to_two_electrode_estimate(c):.4f} {unit}\n\n"
+            f"Energy density E = {e_density:.4g} {e_unit}\n"
+            f"Power density P = {p_density:.4g} {p_unit}"
         )
-        self.result_card.set_headline("Specific capacitance C_s", f"{c:.4f} F/g")
+        self.result_card.set_headline("Capacitance C", f"{c:.4f} {unit}")
         self.result_card.set_secondary([
-            ("Energy density", f"{e_wh_kg:.4f} Wh/kg"),
-            ("Power density", f"{p_w_kg:.4f} W/kg"),
+            ("Energy density", f"{e_density:.4g} {e_unit}"),
+            ("Power density", f"{p_density:.4g} {p_unit}"),
         ])
         self.last_result = {
             "Formula used": formula,
             "Current I (A)": self.current.value(),
             "Discharge time Δt (s)": self.dt.value(),
             "Voltage window ΔV (V)": self.dv.value(),
-            "Active mass m (g)": self.mass.value(),
-            "Specific capacitance C_s (F/g)": c,
-            "Symmetric-2e single-electrode estimate, ×4 (F/g)": gcd.symmetric_cell_to_electrode_capacitance(c),
-            "3e-to-symmetric-2e-cell estimate, ÷4 (F/g)": gcd.three_electrode_to_two_electrode_estimate(c),
-            "Energy density E (Wh/kg)": e_wh_kg,
-            "Power density P (W/kg)": p_w_kg,
+            **self.normalizer.result_entries(),
+            f"Capacitance C ({unit})": c,
+            f"Symmetric-2e single-electrode estimate, ×4 ({unit})": gcd.symmetric_cell_to_electrode_capacitance(c),
+            f"3e-to-symmetric-2e-cell estimate, ÷4 ({unit})": gcd.three_electrode_to_two_electrode_estimate(c),
+            f"Energy density E ({e_unit})": e_density,
+            f"Power density P ({p_unit})": p_density,
         }
         self.export_btn.setEnabled(True)
 
@@ -184,7 +195,6 @@ class CvCalculator(QWidget):
         self.scan_rate = CompoundRateSpinBox(numerator_value=50.0, numerator_unit="mV",
                                               denominator_value=1.0, denominator_unit="s")
         self.dv = _spin(4, 0.0001, 100, 1.0, " V")
-        self.mass = _spin(6, 0.000001, 1000, 0.005, " g")
         self.enclosed_area = _spin(6, 0, 1e9, 0.01, " A·V (∮I dV, enclosed loop area)")
 
         grid = QGridLayout()
@@ -194,12 +204,17 @@ class CvCalculator(QWidget):
             ("Enclosed area ∮I dV (integral form only):", self.enclosed_area),
             ("Scan rate ν:", self.scan_rate),
             ("Potential window ΔV:", self.dv),
-            ("Active mass m:", self.mass),
         ]
         for r, (label, widget) in enumerate(rows):
             grid.addWidget(QLabel(label), r, 0)
             grid.addWidget(widget, r, 1)
         layout.addLayout(grid)
+
+        self.normalizer = NormalizationSelector(default_mass_g=0.005)
+        norm_box = QGroupBox("Capacitance basis")
+        norm_layout = QVBoxLayout(norm_box)
+        norm_layout.addWidget(self.normalizer)
+        layout.addWidget(norm_box)
 
         btn = QPushButton("▶ Calculate")
         btn.clicked.connect(self.on_calculate)
@@ -232,32 +247,35 @@ class CvCalculator(QWidget):
     def on_calculate(self):
         try:
             if self.method_combo.currentIndex() == 0:
-                c = cv.capacitance_from_cv_direct(self.current.value(), self.mass.value(), self.scan_rate.value_base())
-                formula = "C_s = I / (m × ν)"
+                c_total = cv.total_capacitance_from_cv_direct(self.current.value(), self.scan_rate.value_base())
+                formula = "C = I / ν"
             else:
-                if self.mass.value() <= 0 or self.scan_rate.value_base() <= 0 or self.dv.value() <= 0:
-                    raise ValueError("mass, scan rate, and ΔV must all be positive")
-                c = self.enclosed_area.value() / (2.0 * self.mass.value() * self.scan_rate.value_base() * self.dv.value())
-                formula = "C_s = ∮I dV / (2 × m × ν × ΔV)"
+                if self.scan_rate.value_base() <= 0 or self.dv.value() <= 0:
+                    raise ValueError("scan rate and ΔV must both be positive")
+                c_total = self.enclosed_area.value() / (2.0 * self.scan_rate.value_base() * self.dv.value())
+                formula = "C = ∮I dV / (2 × ν × ΔV)"
+            c = self.normalizer.normalize(c_total)
         except (ValueError, ZeroDivisionError) as e:
             QMessageBox.critical(self, "Calculation error", str(e))
             return
+        unit = self.normalizer.result_unit()
+        norm_suffix = {"F/g": " / m", "F/cm²": " / area", "F/cm³": " / volume"}[unit]
 
         self.result.setPlainText(
-            f"Formula used: {formula}\n\n"
-            f"Specific capacitance C_s = {c:.4f} F/g\n\n"
+            f"Formula used: {formula}{norm_suffix}\n\n"
+            f"Capacitance C = {c:.4f} {unit}\n\n"
             "Reminder: the direct/rectangular form is only valid for a CV "
             "curve that is (close to) a rectangle -- if your curve has "
             "redox humps or slope, use the integral form instead."
         )
-        self.result_card.set_headline("Specific capacitance C_s", f"{c:.4f} F/g")
-        self.result_card.set_secondary([("Formula", formula)])
+        self.result_card.set_headline("Capacitance C", f"{c:.4f} {unit}")
+        self.result_card.set_secondary([("Formula", formula), ("Normalized by", self.normalizer.basis_combo.currentText())])
         self.last_result = {
             "Formula used": formula,
             "Scan rate ν (V/s)": self.scan_rate.value_base(),
             "Potential window ΔV (V)": self.dv.value(),
-            "Active mass m (g)": self.mass.value(),
-            "Specific capacitance C_s (F/g)": c,
+            **self.normalizer.result_entries(),
+            f"Capacitance C ({unit})": c,
         }
         self.export_btn.setEnabled(True)
 

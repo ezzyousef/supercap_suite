@@ -231,13 +231,22 @@ class CvRateTool(QWidget):
         left_layout.addLayout(batch_row)
 
         batch_mass_row = QHBoxLayout()
-        batch_mass_row.addWidget(QLabel("Active mass (for batch raw-file import):"))
+        self.batch_mass_label = QLabel("Active mass (for batch raw-file import):")
+        batch_mass_row.addWidget(self.batch_mass_label)
         self.batch_mass_spin = QDoubleSpinBox()
         self.batch_mass_spin.setDecimals(6)
         self.batch_mass_spin.setRange(0.000001, 1000)
         self.batch_mass_spin.setValue(0.005)
         self.batch_mass_spin.setSuffix(" g")
         batch_mass_row.addWidget(self.batch_mass_spin)
+        self.batch_area_label = QLabel("Electrode area (for batch raw-file import):")
+        batch_mass_row.addWidget(self.batch_area_label)
+        self.batch_area_spin = QDoubleSpinBox()
+        self.batch_area_spin.setDecimals(6)
+        self.batch_area_spin.setRange(0.000001, 10000)
+        self.batch_area_spin.setValue(1.0)
+        self.batch_area_spin.setSuffix(" cm²")
+        batch_mass_row.addWidget(self.batch_area_spin)
         batch_mass_row.addStretch()
         left_layout.addLayout(batch_mass_row)
 
@@ -245,7 +254,7 @@ class CvRateTool(QWidget):
             "Fills the tables below from file(s) -- or enter rows manually."
         ))
 
-        entry_box = QGroupBox("1) Enter scan rate + specific capacitance "
+        entry_box = QGroupBox("1) Enter scan rate + capacitance "
                                "per scan rate  — from individual CV analyses")
         entry_layout = QVBoxLayout(entry_box)
         entry_unit_row = QHBoxLayout()
@@ -254,7 +263,12 @@ class CvRateTool(QWidget):
         self.cap_table_rate_unit.addItems(unitconv.units_for("scan_rate"))
         self.cap_table_rate_unit.setCurrentText("V/s")
         entry_unit_row.addWidget(self.cap_table_rate_unit)
-        entry_unit_row.addWidget(QLabel("capacitance:"))
+        entry_unit_row.addWidget(QLabel("basis:"))
+        self.cap_table_basis_combo = QComboBox()
+        self.cap_table_basis_combo.addItems(["Gravimetric (F/g)", "Areal (F/cm²)"])
+        self.cap_table_basis_combo.currentIndexChanged.connect(self._on_cap_basis_changed)
+        entry_unit_row.addWidget(self.cap_table_basis_combo)
+        entry_unit_row.addWidget(QLabel("unit:"))
         self.cap_table_cap_unit = QComboBox()
         self.cap_table_cap_unit.addItems(unitconv.units_for("specific_capacitance"))
         self.cap_table_cap_unit.setCurrentText("F/g")
@@ -380,6 +394,29 @@ class CvRateTool(QWidget):
         splitter.setSizes([420, 700])
         configure_collapsible_main_splitter(splitter)
 
+        self._on_cap_basis_changed()
+
+    def _on_cap_basis_changed(self):
+        """Switch the capacitance table (and batch raw-file import) between
+        gravimetric (F/g) and areal (F/cm²) normalization -- Trasatti's and
+        Dunn's b-value methods are dimensionally agnostic to which basis is
+        used (they just fit a "capacitance" vs. scan rate/its transforms),
+        so the same analysis code works for either; only the column
+        category/unit choices and the batch-import mass-vs-area input need
+        to switch."""
+        is_areal = self.cap_table_basis_combo.currentIndex() == 1
+        category = "areal_capacitance" if is_areal else "specific_capacitance"
+        self.cap_table.col2_category = category
+        self.cap_table_cap_unit.blockSignals(True)
+        self.cap_table_cap_unit.clear()
+        self.cap_table_cap_unit.addItems(unitconv.units_for(category))
+        self.cap_table_cap_unit.setCurrentText("F/cm²" if is_areal else "F/g")
+        self.cap_table_cap_unit.blockSignals(False)
+        self.batch_mass_spin.setEnabled(not is_areal)
+        self.batch_mass_label.setEnabled(not is_areal)
+        self.batch_area_spin.setEnabled(is_areal)
+        self.batch_area_label.setEnabled(is_areal)
+
     def on_import_file(self):
         df = _load_file_for_import(self, "Import scan-rate data")
         if df is None:
@@ -438,7 +475,9 @@ class CvRateTool(QWidget):
         )
         if not paths:
             return
-        mass_g = self.batch_mass_spin.value()
+        is_areal = self.cap_table_basis_combo.currentIndex() == 1
+        normalizer_value = self.batch_area_spin.value() if is_areal else self.batch_mass_spin.value()
+        cap_category = "areal_capacitance" if is_areal else "specific_capacitance"
         rate_unit = self.cap_table_rate_unit.currentText()
 
         cap_rows, peak_rows, failures = [], [], []
@@ -501,11 +540,14 @@ class CvRateTool(QWidget):
             i_amps = i_raw * i_factor
 
             try:
-                cap = cv.capacitance_from_cv(v, i_amps, rate_base, mass_g)
+                c_total = cv.total_capacitance_from_cv(v, i_amps, rate_base)
+                if normalizer_value <= 0:
+                    raise ValueError(("Electrode area" if is_areal else "Active mass") + " must be positive")
+                cap = c_total / normalizer_value
             except ValueError as e:
                 failures.append(f"{fname}: {e}")
                 continue
-            cap_display = unitconv.from_base(cap, self.cap_table_cap_unit.currentText(), "specific_capacitance")
+            cap_display = unitconv.from_base(cap, self.cap_table_cap_unit.currentText(), cap_category)
             cap_rows.append((rate_display, cap_display))
 
             peak_current_a = float(np.max(np.abs(i_amps)))
@@ -531,6 +573,14 @@ class CvRateTool(QWidget):
             return
         rates = np.array([p[0] for p in pairs])
         caps = np.array([p[1] for p in pairs])
+        # Trasatti's method (and Dunn's b-value below) is dimensionally
+        # agnostic to whatever basis the capacitance column is in -- it's
+        # just a curve fit on "capacitance" vs. scan rate/its transforms
+        # -- so the same trasatti_analysis() call works whether `caps` is
+        # gravimetric or areal; only the display unit changes. The
+        # TrasattiResult field names say "f_per_g" for historical reasons
+        # but hold whatever basis was actually used.
+        unit = unitconv.BASE_UNIT[self.cap_table.col2_category]
         try:
             result = trasatti.trasatti_analysis(rates, caps)
         except ValueError as e:
@@ -538,9 +588,9 @@ class CvRateTool(QWidget):
             return
 
         lines = [
-            f"Outer (surface-accessible) capacitance  Q*_outer  = {result.outer_capacitance_f_per_g:.3f} F/g",
-            f"Total capacitance                        Q*_total  = {result.total_capacitance_f_per_g:.3f} F/g",
-            f"Inner (diffusion-limited) capacitance    Q*_inner  = {result.inner_capacitance_f_per_g:.3f} F/g",
+            f"Outer (surface-accessible) capacitance  Q*_outer  = {result.outer_capacitance_f_per_g:.4g} {unit}",
+            f"Total capacitance                        Q*_total  = {result.total_capacitance_f_per_g:.4g} {unit}",
+            f"Inner (diffusion-limited) capacitance    Q*_inner  = {result.inner_capacitance_f_per_g:.4g} {unit}",
             "",
             f"Outer fraction of total: {result.outer_fraction_percent:.2f} %",
             f"Inner fraction of total: {result.inner_fraction_percent:.2f} %",
@@ -553,9 +603,9 @@ class CvRateTool(QWidget):
             lines.append(f"\nWarning: {negative_note}")
             card_warnings.append(negative_note)
         self.results_text.setPlainText("\n".join(lines))
-        self.result_card.set_headline("Outer capacitance Q*_outer", f"{result.outer_capacitance_f_per_g:.3f} F/g")
+        self.result_card.set_headline("Outer capacitance Q*_outer", f"{result.outer_capacitance_f_per_g:.4g} {unit}")
         self.result_card.set_secondary([
-            ("Total capacitance Q*_total", f"{result.total_capacitance_f_per_g:.3f} F/g"),
+            ("Total capacitance Q*_total", f"{result.total_capacitance_f_per_g:.4g} {unit}"),
             ("Outer fraction", f"{result.outer_fraction_percent:.2f} %"),
         ])
         self.result_card.set_warnings(card_warnings)
@@ -565,9 +615,9 @@ class CvRateTool(QWidget):
         self.plot.ax.scatter(inv_sqrt_v, caps, color=theme.RAW, s=22, label="Q* vs v^-1/2 (data)")
         fit_line = result.outer_fit_slope * inv_sqrt_v + result.outer_fit_intercept
         self.plot.ax.plot(inv_sqrt_v, fit_line, "--", color=theme.FIT, linewidth=1.5,
-                           label=f"fit -> Q*_outer={result.outer_capacitance_f_per_g:.2f}")
+                           label=f"fit -> Q*_outer={result.outer_capacitance_f_per_g:.3g}")
         self.plot.ax.set_xlabel("v^-1/2 ((V/s)^-1/2)")
-        self.plot.ax.set_ylabel("Specific capacitance (F/g)")
+        self.plot.ax.set_ylabel(f"Capacitance ({unit})")
         self.plot.ax.set_title("Trasatti outer-capacitance extrapolation")
         self.plot.ax.legend(fontsize=8)
         theme.apply_plot_style(self.plot.ax)
@@ -575,9 +625,9 @@ class CvRateTool(QWidget):
         self.plot.draw()
 
         self.last_result = {
-            "Outer (surface-accessible) capacitance Q*_outer (F/g)": result.outer_capacitance_f_per_g,
-            "Total capacitance Q*_total (F/g)": result.total_capacitance_f_per_g,
-            "Inner (diffusion-limited) capacitance Q*_inner (F/g)": result.inner_capacitance_f_per_g,
+            f"Outer (surface-accessible) capacitance Q*_outer ({unit})": result.outer_capacitance_f_per_g,
+            f"Total capacitance Q*_total ({unit})": result.total_capacitance_f_per_g,
+            f"Inner (diffusion-limited) capacitance Q*_inner ({unit})": result.inner_capacitance_f_per_g,
             "Outer fraction of total (%)": result.outer_fraction_percent,
             "Inner fraction of total (%)": result.inner_fraction_percent,
         }

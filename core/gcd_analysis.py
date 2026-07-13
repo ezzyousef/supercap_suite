@@ -154,9 +154,26 @@ def detect_charge_discharge_segments(t_s: np.ndarray, v_v: np.ndarray,
 # Capacitance formulas
 # ---------------------------------------------------------------------------
 
+def total_capacitance_gcd_normal(current_a: float, discharge_time_s: float,
+                                  voltage_window_v: float) -> float:
+    """TOTAL (non-normalized) capacitance in Farads, linear/normal form:
+
+        C = (I * dt) / dV
+
+    Same relation as `capacitance_gcd_normal` without dividing by mass --
+    divide by mass (g), electrode area (cm2), or electrode volume (cm3)
+    for gravimetric/areal/volumetric capacitance respectively.
+    """
+    if voltage_window_v <= 0:
+        raise ValueError("voltage_window_v must be positive")
+    if discharge_time_s < 0 or current_a < 0:
+        raise ValueError("discharge_time_s and current_a must be non-negative")
+    return (current_a * discharge_time_s) / voltage_window_v
+
+
 def capacitance_gcd_normal(current_a: float, discharge_time_s: float,
                             voltage_window_v: float, mass_g: float) -> float:
-    """Specific capacitance (F/g), linear/normal form.
+    """Specific (gravimetric) capacitance (F/g), linear/normal form.
 
         C_s = (I * dt) / (m * dV)
 
@@ -168,24 +185,48 @@ def capacitance_gcd_normal(current_a: float, discharge_time_s: float,
         `estimate_ir_drop`)
       - mass_g on the intended basis (single electrode vs total active mass
         of both electrodes) -- see `convert_cell_to_electrode_capacitance`
+
+    Thin mass-normalizing wrapper around `total_capacitance_gcd_normal` --
+    see that function for areal/volumetric normalization instead of mass.
     """
-    if mass_g <= 0 or voltage_window_v <= 0:
-        raise ValueError("mass_g and voltage_window_v must be positive")
-    if discharge_time_s < 0 or current_a < 0:
-        raise ValueError("discharge_time_s and current_a must be non-negative")
-    return (current_a * discharge_time_s) / (mass_g * voltage_window_v)
+    if mass_g <= 0:
+        raise ValueError("mass_g must be positive")
+    c_total = total_capacitance_gcd_normal(current_a, discharge_time_s, voltage_window_v)
+    return c_total / mass_g
 
 
-def capacitance_gcd_integral(t_s: np.ndarray, v_v: np.ndarray, current_a: float,
-                              mass_g: float, voltage_window_v: float | None = None) -> float:
-    """Specific capacitance (F/g), integral form for non-linear discharge.
+def areal_capacitance_gcd_normal(current_a: float, discharge_time_s: float,
+                                  voltage_window_v: float, area_cm2: float) -> float:
+    """Areal capacitance (F/cm2), linear/normal form -- see
+    `capacitance_gcd_normal` for the formula/usage caveats and
+    `total_capacitance_gcd_normal` for the shared basis."""
+    if area_cm2 <= 0:
+        raise ValueError("area_cm2 must be positive")
+    c_total = total_capacitance_gcd_normal(current_a, discharge_time_s, voltage_window_v)
+    return c_total / area_cm2
 
-        C_s = (2 * I * INTEGRAL[V dt]) / (m * dV**2)
 
-    `t_s`, `v_v` must be the discharge segment only (fully charged point to
-    fully discharged point), time-ordered. `voltage_window_v` defaults to
-    max(v) - min(v) of the supplied segment if not given explicitly (e.g. to
-    exclude an IR drop deliberately).
+def volumetric_capacitance_gcd_normal(current_a: float, discharge_time_s: float,
+                                       voltage_window_v: float, volume_cm3: float) -> float:
+    """Volumetric capacitance (F/cm3), linear/normal form -- see
+    `capacitance_gcd_normal` for the formula/usage caveats and
+    `total_capacitance_gcd_normal` for the shared basis."""
+    if volume_cm3 <= 0:
+        raise ValueError("volume_cm3 must be positive")
+    c_total = total_capacitance_gcd_normal(current_a, discharge_time_s, voltage_window_v)
+    return c_total / volume_cm3
+
+
+def total_capacitance_gcd_integral(t_s: np.ndarray, v_v: np.ndarray, current_a: float,
+                                    voltage_window_v: float | None = None) -> float:
+    """TOTAL (non-normalized) capacitance in Farads, integral form for
+    non-linear discharge:
+
+        C = (2 * I * INTEGRAL[V dt]) / dV**2
+
+    Same relation as `capacitance_gcd_integral` without dividing by mass
+    -- divide by mass (g), electrode area (cm2), or electrode volume
+    (cm3) for gravimetric/areal/volumetric capacitance respectively.
     """
     t_s = np.asarray(t_s, dtype=float)
     v_v = np.asarray(v_v, dtype=float)
@@ -193,8 +234,8 @@ def capacitance_gcd_integral(t_s: np.ndarray, v_v: np.ndarray, current_a: float,
         raise ValueError("t_s and v_v must be the same length")
     if len(t_s) < 2:
         raise ValueError("Need at least 2 points to integrate")
-    if mass_g <= 0 or current_a < 0:
-        raise ValueError("mass_g must be positive and current_a non-negative")
+    if current_a < 0:
+        raise ValueError("current_a must be non-negative")
 
     dv = voltage_window_v if voltage_window_v is not None else (np.max(v_v) - np.min(v_v))
     if dv <= 0:
@@ -203,7 +244,49 @@ def capacitance_gcd_integral(t_s: np.ndarray, v_v: np.ndarray, current_a: float,
     trapz_fn = getattr(np, "trapezoid", None) or np.trapz
     integral_v_dt = trapz_fn(v_v, t_s)  # units: V*s
 
-    return (2.0 * current_a * integral_v_dt) / (mass_g * dv ** 2)
+    return (2.0 * current_a * integral_v_dt) / (dv ** 2)
+
+
+def capacitance_gcd_integral(t_s: np.ndarray, v_v: np.ndarray, current_a: float,
+                              mass_g: float, voltage_window_v: float | None = None) -> float:
+    """Specific (gravimetric) capacitance (F/g), integral form for
+    non-linear discharge.
+
+        C_s = (2 * I * INTEGRAL[V dt]) / (m * dV**2)
+
+    `t_s`, `v_v` must be the discharge segment only (fully charged point to
+    fully discharged point), time-ordered. `voltage_window_v` defaults to
+    max(v) - min(v) of the supplied segment if not given explicitly (e.g. to
+    exclude an IR drop deliberately). Thin mass-normalizing wrapper around
+    `total_capacitance_gcd_integral` -- see that function for
+    areal/volumetric normalization instead of mass.
+    """
+    if mass_g <= 0:
+        raise ValueError("mass_g must be positive")
+    c_total = total_capacitance_gcd_integral(t_s, v_v, current_a, voltage_window_v)
+    return c_total / mass_g
+
+
+def areal_capacitance_gcd_integral(t_s: np.ndarray, v_v: np.ndarray, current_a: float,
+                                    area_cm2: float, voltage_window_v: float | None = None) -> float:
+    """Areal capacitance (F/cm2), integral form -- see
+    `capacitance_gcd_integral` for the formula/usage and
+    `total_capacitance_gcd_integral` for the shared basis."""
+    if area_cm2 <= 0:
+        raise ValueError("area_cm2 must be positive")
+    c_total = total_capacitance_gcd_integral(t_s, v_v, current_a, voltage_window_v)
+    return c_total / area_cm2
+
+
+def volumetric_capacitance_gcd_integral(t_s: np.ndarray, v_v: np.ndarray, current_a: float,
+                                         volume_cm3: float, voltage_window_v: float | None = None) -> float:
+    """Volumetric capacitance (F/cm3), integral form -- see
+    `capacitance_gcd_integral` for the formula/usage and
+    `total_capacitance_gcd_integral` for the shared basis."""
+    if volume_cm3 <= 0:
+        raise ValueError("volume_cm3 must be positive")
+    c_total = total_capacitance_gcd_integral(t_s, v_v, current_a, voltage_window_v)
+    return c_total / volume_cm3
 
 
 def capacitance_gcd_auto(t_s: np.ndarray, v_v: np.ndarray, current_a: float,
@@ -231,6 +314,39 @@ def capacitance_gcd_auto(t_s: np.ndarray, v_v: np.ndarray, current_a: float,
 
     return {
         "capacitance_f_per_g": c,
+        "method": method,
+        "r_squared": lin.r_squared,
+        "voltage_window_v": dv,
+        "discharge_time_s": dt,
+    }
+
+
+def total_capacitance_gcd_auto(t_s: np.ndarray, v_v: np.ndarray, current_a: float,
+                                r2_threshold: float = 0.98):
+    """TOTAL (non-normalized, Farads) counterpart of `capacitance_gcd_auto`
+    -- same automatic normal-vs-integral method selection, without
+    requiring a mass. Divide `capacitance_f` by mass (g), electrode area
+    (cm2), or electrode volume (cm3) for gravimetric/areal/volumetric
+    capacitance.
+
+    Returns a dict: {capacitance_f, method, r_squared, voltage_window_v,
+    discharge_time_s}
+    """
+    t_s = np.asarray(t_s, dtype=float)
+    v_v = np.asarray(v_v, dtype=float)
+    lin = classify_discharge_linearity(t_s, v_v, r2_threshold=r2_threshold)
+    dv = float(np.max(v_v) - np.min(v_v))
+    dt = float(t_s[-1] - t_s[0])
+
+    if lin.is_linear:
+        c = total_capacitance_gcd_normal(current_a, dt, dv)
+        method = "normal (linear discharge)"
+    else:
+        c = total_capacitance_gcd_integral(t_s, v_v, current_a, voltage_window_v=dv)
+        method = "integral (non-linear discharge)"
+
+    return {
+        "capacitance_f": c,
         "method": method,
         "r_squared": lin.r_squared,
         "voltage_window_v": dv,
@@ -277,6 +393,25 @@ def esr_from_ir_drop(ir_drop_v: float, current_a: float) -> float:
 # Energy & power density
 # ---------------------------------------------------------------------------
 
+def energy_density_wh(capacitance_f_per_unit: float, voltage_window_v: float) -> float:
+    """Energy density in Wh per whatever basis `capacitance_f_per_unit` is
+    normalized by -- Wh/g if C is F/g, Wh/cm2 if C is F/cm2, Wh/cm3 if C
+    is F/cm3:
+
+        E = (C * dV**2) / 7200
+
+    Derived from E(J/basis) = 0.5 * C * dV**2, converted J -> Wh (divide
+    by 3600). Use `energy_density_wh_per_kg` instead for the traditional
+    gravimetric Wh/kg convention, which additionally converts g -> kg (a
+    factor that does NOT apply to an areal/volumetric basis -- reusing
+    the /7.2 (not /7200) gravimetric formula for F/cm2 or F/cm3 would
+    silently overstate the result 1000x).
+    """
+    if capacitance_f_per_unit < 0 or voltage_window_v < 0:
+        raise ValueError("Inputs must be non-negative")
+    return (capacitance_f_per_unit * voltage_window_v ** 2) / 7200.0
+
+
 def energy_density_wh_per_kg(capacitance_f_per_g: float, voltage_window_v: float) -> float:
     """Specific energy (Wh/kg).
 
@@ -284,6 +419,7 @@ def energy_density_wh_per_kg(capacitance_f_per_g: float, voltage_window_v: float
 
     Derived from E(J/g) = 0.5 * C_s * dV**2, converted J/g -> Wh/kg
     (divide by 3600 for Wh, multiply by 1000 for /kg => divide by 7.2 net).
+    Equivalent to `energy_density_wh(capacitance_f_per_g, voltage_window_v) * 1000`.
     """
     if capacitance_f_per_g < 0 or voltage_window_v < 0:
         raise ValueError("Inputs must be non-negative")

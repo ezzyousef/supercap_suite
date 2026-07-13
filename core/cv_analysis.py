@@ -6,20 +6,23 @@ Pure functions, no Qt imports.
 import numpy as np
 
 
-def capacitance_from_cv(voltage_v: np.ndarray, current_a: np.ndarray,
-                         scan_rate_v_per_s: float, mass_g: float,
-                         voltage_window_v: float | None = None) -> float:
-    """Specific capacitance (F/g) from one full CV cycle.
+def total_capacitance_from_cv(voltage_v: np.ndarray, current_a: np.ndarray,
+                               scan_rate_v_per_s: float,
+                               voltage_window_v: float | None = None) -> float:
+    """TOTAL (non-normalized) capacitance in Farads from one full CV cycle:
 
-        C_s = INTEGRAL[I dV] / (2 * m * scan_rate * dV)
+        C = INTEGRAL[I dV] / (2 * scan_rate * dV)
+
+    Same enclosed-loop integral as `capacitance_from_cv`, but without
+    dividing by mass -- this is the shared basis for gravimetric (F/g),
+    areal (F/cm2), and volumetric (F/cm3) capacitance alike: divide the
+    returned value by mass (g), electrode area (cm2), or electrode
+    volume (cm3) respectively to get whichever normalized quantity is
+    wanted, rather than duplicating this integral three times.
 
     `voltage_v`/`current_a` should be one closed cycle (forward + reverse
     sweep), aligned arrays; current in amps. `voltage_window_v` defaults to
     max(v) - min(v) of the supplied cycle.
-
-    Computed numerically via the trapezoidal rule over the closed loop
-    (the loop is closed automatically if the last point doesn't already
-    equal the first).
     """
     voltage_v = np.asarray(voltage_v, dtype=float)
     current_a = np.asarray(current_a, dtype=float)
@@ -27,8 +30,8 @@ def capacitance_from_cv(voltage_v: np.ndarray, current_a: np.ndarray,
         raise ValueError("voltage_v and current_a must be the same length")
     if len(voltage_v) < 3:
         raise ValueError("Need at least 3 points to integrate a cycle")
-    if mass_g <= 0 or scan_rate_v_per_s <= 0:
-        raise ValueError("mass_g and scan_rate_v_per_s must be positive")
+    if scan_rate_v_per_s <= 0:
+        raise ValueError("scan_rate_v_per_s must be positive")
 
     dv = voltage_window_v if voltage_window_v is not None else (np.max(voltage_v) - np.min(voltage_v))
     if dv <= 0:
@@ -40,7 +43,48 @@ def capacitance_from_cv(voltage_v: np.ndarray, current_a: np.ndarray,
     trapz_fn = getattr(np, "trapezoid", None) or np.trapz
     enclosed_area = np.abs(trapz_fn(i, v))  # units: A*V
 
-    return enclosed_area / (2.0 * mass_g * scan_rate_v_per_s * dv)
+    return enclosed_area / (2.0 * scan_rate_v_per_s * dv)
+
+
+def capacitance_from_cv(voltage_v: np.ndarray, current_a: np.ndarray,
+                         scan_rate_v_per_s: float, mass_g: float,
+                         voltage_window_v: float | None = None) -> float:
+    """Specific (gravimetric) capacitance (F/g) from one full CV cycle.
+
+        C_s = INTEGRAL[I dV] / (2 * m * scan_rate * dV)
+
+    Thin mass-normalizing wrapper around `total_capacitance_from_cv` --
+    see that function for the shared integral and for areal/volumetric
+    normalization instead of mass.
+    """
+    if mass_g <= 0:
+        raise ValueError("mass_g must be positive")
+    c_total = total_capacitance_from_cv(voltage_v, current_a, scan_rate_v_per_s, voltage_window_v)
+    return c_total / mass_g
+
+
+def areal_capacitance_from_cv(voltage_v: np.ndarray, current_a: np.ndarray,
+                               scan_rate_v_per_s: float, area_cm2: float,
+                               voltage_window_v: float | None = None) -> float:
+    """Areal capacitance (F/cm2) from one full CV cycle -- same integral as
+    `capacitance_from_cv`, normalized by electrode geometric area instead
+    of mass. See `total_capacitance_from_cv`."""
+    if area_cm2 <= 0:
+        raise ValueError("area_cm2 must be positive")
+    c_total = total_capacitance_from_cv(voltage_v, current_a, scan_rate_v_per_s, voltage_window_v)
+    return c_total / area_cm2
+
+
+def volumetric_capacitance_from_cv(voltage_v: np.ndarray, current_a: np.ndarray,
+                                    scan_rate_v_per_s: float, volume_cm3: float,
+                                    voltage_window_v: float | None = None) -> float:
+    """Volumetric capacitance (F/cm3) from one full CV cycle -- same
+    integral as `capacitance_from_cv`, normalized by electrode volume
+    instead of mass. See `total_capacitance_from_cv`."""
+    if volume_cm3 <= 0:
+        raise ValueError("volume_cm3 must be positive")
+    c_total = total_capacitance_from_cv(voltage_v, current_a, scan_rate_v_per_s, voltage_window_v)
+    return c_total / volume_cm3
 
 
 def specific_capacity_from_cv(voltage_v: np.ndarray, current_a: np.ndarray,
@@ -86,9 +130,27 @@ def b_value_from_log_log(scan_rates_v_per_s: np.ndarray, peak_currents_a: np.nda
     return float(slope)
 
 
+def total_capacitance_from_cv_direct(current_a: float, scan_rate_v_per_s: float) -> float:
+    """TOTAL (non-normalized) capacitance in Farads, DIRECT form for a
+    near-ideal RECTANGULAR CV curve:
+
+        C = I / scan_rate
+
+    Same relation as `capacitance_from_cv_direct` without dividing by
+    mass -- divide by mass (g), electrode area (cm2), or electrode
+    volume (cm3) for gravimetric/areal/volumetric capacitance.
+    """
+    if scan_rate_v_per_s <= 0:
+        raise ValueError("scan_rate_v_per_s must be positive")
+    if current_a < 0:
+        raise ValueError("current_a must be non-negative")
+    return current_a / scan_rate_v_per_s
+
+
 def capacitance_from_cv_direct(current_a: float, mass_g: float, scan_rate_v_per_s: float) -> float:
-    """Specific capacitance (F/g), DIRECT form for a near-ideal RECTANGULAR
-    CV curve (EDLC behavior, current roughly constant across the sweep):
+    """Specific (gravimetric) capacitance (F/g), DIRECT form for a
+    near-ideal RECTANGULAR CV curve (EDLC behavior, current roughly
+    constant across the sweep):
 
         C_s = I / (m * scan_rate)
 
@@ -103,13 +165,34 @@ def capacitance_from_cv_direct(current_a: float, mass_g: float, scan_rate_v_per_
     value you pick as "I".
 
     `current_a` should be a representative (e.g. average magnitude) current
-    from the flat/rectangular portion of the curve.
+    from the flat/rectangular portion of the curve. Thin mass-normalizing
+    wrapper around `total_capacitance_from_cv_direct` -- see that function
+    for areal/volumetric normalization instead of mass.
     """
-    if mass_g <= 0 or scan_rate_v_per_s <= 0:
-        raise ValueError("mass_g and scan_rate_v_per_s must be positive")
-    if current_a < 0:
-        raise ValueError("current_a must be non-negative")
-    return current_a / (mass_g * scan_rate_v_per_s)
+    if mass_g <= 0:
+        raise ValueError("mass_g must be positive")
+    c_total = total_capacitance_from_cv_direct(current_a, scan_rate_v_per_s)
+    return c_total / mass_g
+
+
+def areal_capacitance_from_cv_direct(current_a: float, area_cm2: float, scan_rate_v_per_s: float) -> float:
+    """Areal capacitance (F/cm2), DIRECT/rectangular form -- see
+    `capacitance_from_cv_direct` for the formula and its rectangularity
+    caveat, and `total_capacitance_from_cv_direct` for the shared basis."""
+    if area_cm2 <= 0:
+        raise ValueError("area_cm2 must be positive")
+    c_total = total_capacitance_from_cv_direct(current_a, scan_rate_v_per_s)
+    return c_total / area_cm2
+
+
+def volumetric_capacitance_from_cv_direct(current_a: float, volume_cm3: float, scan_rate_v_per_s: float) -> float:
+    """Volumetric capacitance (F/cm3), DIRECT/rectangular form -- see
+    `capacitance_from_cv_direct` for the formula and its rectangularity
+    caveat, and `total_capacitance_from_cv_direct` for the shared basis."""
+    if volume_cm3 <= 0:
+        raise ValueError("volume_cm3 must be positive")
+    c_total = total_capacitance_from_cv_direct(current_a, scan_rate_v_per_s)
+    return c_total / volume_cm3
 
 
 def assess_cv_rectangularity(voltage_v: np.ndarray, current_a: np.ndarray) -> float:

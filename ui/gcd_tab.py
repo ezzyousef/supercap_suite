@@ -15,7 +15,7 @@ from core import gcd_analysis as gcd
 from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
-    make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
+    make_scrollable_panel, ResultCard, CollapsibleSection, NormalizationSelector, show_toast, show_empty_state,
 )
 from . import theme, formula_sources
 
@@ -115,21 +115,19 @@ class GcdTab(QWidget):
         self.current_col_unit_combo = QComboBox()
         self.current_col_unit_combo.addItems(["A", "mA", "µA"])
 
-        self.mass_spin = QDoubleSpinBox()
-        self.mass_spin.setDecimals(6)
-        self.mass_spin.setRange(0.000001, 1000)
-        self.mass_spin.setSuffix(" g")
-        self.mass_spin.setValue(0.005)
-
         param_grid.addWidget(self.use_current_col, 0, 0, 1, 2)
         param_grid.addWidget(QLabel("  column unit:"), 0, 2)
         param_grid.addWidget(self.current_col_unit_combo, 0, 3)
         param_grid.addWidget(self.use_current_manual, 1, 0, 1, 2)
         param_grid.addWidget(QLabel("Manual current:"), 2, 0)
         param_grid.addWidget(self.current_spin, 2, 1)
-        param_grid.addWidget(QLabel("Active mass (basis below):"), 3, 0)
-        param_grid.addWidget(self.mass_spin, 3, 1)
         left_layout.addWidget(param_box)
+
+        norm_box = QGroupBox("Capacitance basis")
+        norm_layout = QVBoxLayout(norm_box)
+        self.normalizer = NormalizationSelector(default_mass_g=0.005)
+        norm_layout.addWidget(self.normalizer)
+        left_layout.addWidget(norm_box)
 
         cfg_box = QGroupBox("Cell configuration")
         cfg_grid = QGridLayout(cfg_box)
@@ -429,8 +427,6 @@ class GcdTab(QWidget):
                 "a discharge segment; re-select the row range if not."
             )
 
-        mass_g = self.mass_spin.value()
-
         if self.use_current_col.isChecked():
             if i_arr is None:
                 QMessageBox.warning(self, "No current column", "Select a current column, "
@@ -447,13 +443,13 @@ class GcdTab(QWidget):
 
         try:
             if method_choice == 0:
-                result = gcd.capacitance_gcd_auto(t, v, current_a, mass_g, r2_threshold=r2_thr)
+                result = gcd.total_capacitance_gcd_auto(t, v, current_a, r2_threshold=r2_thr)
             elif method_choice == 1:
                 dv = float(np.max(v) - np.min(v))
                 dt = float(t[-1] - t[0])
                 lin = gcd.classify_discharge_linearity(t, v, r2_threshold=r2_thr)
                 result = {
-                    "capacitance_f_per_g": gcd.capacitance_gcd_normal(current_a, dt, dv, mass_g),
+                    "capacitance_f": gcd.total_capacitance_gcd_normal(current_a, dt, dv),
                     "method": "normal (forced by user)",
                     "r_squared": lin.r_squared,
                     "voltage_window_v": dv,
@@ -464,19 +460,29 @@ class GcdTab(QWidget):
                 dt = float(t[-1] - t[0])
                 lin = gcd.classify_discharge_linearity(t, v, r2_threshold=r2_thr)
                 result = {
-                    "capacitance_f_per_g": gcd.capacitance_gcd_integral(t, v, current_a, mass_g, voltage_window_v=dv),
+                    "capacitance_f": gcd.total_capacitance_gcd_integral(t, v, current_a, voltage_window_v=dv),
                     "method": "integral (forced by user)",
                     "r_squared": lin.r_squared,
                     "voltage_window_v": dv,
                     "discharge_time_s": dt,
                 }
+            c = self.normalizer.normalize(result["capacitance_f"])
         except ValueError as e:
             QMessageBox.critical(self, "Calculation error", str(e))
             return
 
+        unit = self.normalizer.result_unit()
+        basis = self.normalizer.basis()
+
         ir_drop = gcd.estimate_ir_drop(t, v)
         esr = gcd.esr_from_ir_drop(ir_drop, current_a) if current_a > 0 else float("nan")
-        e_density = gcd.energy_density_wh_per_kg(result["capacitance_f_per_g"], result["voltage_window_v"])
+        if basis == "gravimetric":
+            e_density = gcd.energy_density_wh_per_kg(c, result["voltage_window_v"])
+            e_unit, p_unit = "Wh/kg", "W/kg"
+        else:
+            e_density = gcd.energy_density_wh(c, result["voltage_window_v"])
+            e_unit = "Wh/cm²" if basis == "areal" else "Wh/cm³"
+            p_unit = "W/cm²" if basis == "areal" else "W/cm³"
         p_density = gcd.power_density_w_per_kg(e_density, result["discharge_time_s"])
 
         lines = [
@@ -485,26 +491,25 @@ class GcdTab(QWidget):
             f"Voltage window ΔV = {result['voltage_window_v']:.4f} V",
             f"Discharge time Δt = {result['discharge_time_s']:.4f} s",
             f"Current used = {current_a:.6g} A",
-            f"Active mass = {mass_g:.6g} g",
             "",
-            f"Specific capacitance C_s = {result['capacitance_f_per_g']:.4f} F/g",
+            f"Capacitance C = {c:.4f} {unit}",
         ]
 
         cfg_idx = self.config_combo.currentIndex()
         if cfg_idx == 1:  # symmetric 2-electrode
-            c_elec = gcd.symmetric_cell_to_electrode_capacitance(result["capacitance_f_per_g"])
-            lines.append(f"  -> Estimated single-electrode C_s (symmetric ×4 convention) = {c_elec:.4f} F/g")
+            c_elec = gcd.symmetric_cell_to_electrode_capacitance(c)
+            lines.append(f"  -> Estimated single-electrode C (symmetric ×4 convention) = {c_elec:.4f} {unit}")
         elif cfg_idx == 0:  # 3-electrode
-            c_cell_est = gcd.three_electrode_to_two_electrode_estimate(result["capacitance_f_per_g"])
-            lines.append(f"  -> Estimated symmetric 2-electrode CELL C_s (÷4 convention) = {c_cell_est:.4f} F/g")
+            c_cell_est = gcd.three_electrode_to_two_electrode_estimate(c)
+            lines.append(f"  -> Estimated symmetric 2-electrode CELL C (÷4 convention) = {c_cell_est:.4f} {unit}")
 
         lines += [
             "",
             f"Estimated IR drop = {ir_drop:.5f} V",
             f"Estimated ESR (IR-drop / I) = {esr:.4f} Ω",
             "",
-            f"Specific energy density E = {e_density:.4f} Wh/kg",
-            f"Specific power density P = {p_density:.4f} W/kg",
+            f"Energy density E = {e_density:.4g} {e_unit}",
+            f"Power density P = {p_density:.4g} {p_unit}",
         ]
 
         card_warnings = []
@@ -518,13 +523,13 @@ class GcdTab(QWidget):
         self.plot.plot_xy(t, v, xlabel="Time (s)", ylabel="Voltage (V)",
                            title=f"Discharge segment — {result['method']}")
 
-        self.result_card.set_headline("Specific capacitance C_s", f"{result['capacitance_f_per_g']:.4f} F/g")
+        self.result_card.set_headline("Capacitance C", f"{c:.4f} {unit}")
         self.result_card.set_secondary([
             ("Method", result["method"]),
             ("R² of linear fit", f"{result['r_squared']:.5f}"),
             ("ESR", f"{esr:.4f} Ω"),
-            ("Energy density", f"{e_density:.3f} Wh/kg"),
-            ("Power density", f"{p_density:.3f} W/kg"),
+            ("Energy density", f"{e_density:.4g} {e_unit}"),
+            ("Power density", f"{p_density:.4g} {p_unit}"),
         ])
         self.result_card.set_warnings(card_warnings)
 
@@ -535,19 +540,19 @@ class GcdTab(QWidget):
             "Voltage window ΔV (V)": result["voltage_window_v"],
             "Discharge time Δt (s)": result["discharge_time_s"],
             "Current used (A)": current_a,
-            "Active mass (g)": mass_g,
+            **self.normalizer.result_entries(),
             "Cell configuration": self.config_combo.currentText(),
-            "Specific capacitance C_s (F/g)": result["capacitance_f_per_g"],
+            f"Capacitance C ({unit})": c,
         }
         if cfg_idx == 1:
-            self.last_result["Estimated single-electrode C_s, symmetric ×4 (F/g)"] = c_elec
+            self.last_result[f"Estimated single-electrode C, symmetric ×4 ({unit})"] = c_elec
         elif cfg_idx == 0:
-            self.last_result["Estimated symmetric 2e cell C_s, ÷4 (F/g)"] = c_cell_est
+            self.last_result[f"Estimated symmetric 2e cell C, ÷4 ({unit})"] = c_cell_est
         self.last_result.update({
             "Estimated IR drop (V)": ir_drop,
             "Estimated ESR (Ω)": esr,
-            "Specific energy density E (Wh/kg)": e_density,
-            "Specific power density P (W/kg)": p_density,
+            f"Energy density E ({e_unit})": e_density,
+            f"Power density P ({p_unit})": p_density,
         })
         self.last_raw_df = pd.DataFrame({"time_s": t, "voltage_v": v})
         self.export_btn.setEnabled(True)

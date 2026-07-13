@@ -148,3 +148,57 @@ def test_analyze_cycling_stability_raises_on_no_cycles():
     v = np.full(50, 0.5)  # flat -- no charge/discharge shape at all
     with pytest.raises(ValueError):
         gcd.analyze_cycling_stability(t, v, current_a=0.001, mass_g=0.005)
+
+
+def test_total_capacitance_gcd_normal_matches_gravimetric_areal_volumetric():
+    current_a, dt, dv = 0.001, 100.0, 1.0
+    mass_g, area_cm2, volume_cm3 = 0.005, 2.0, 0.001
+
+    c_total = gcd.total_capacitance_gcd_normal(current_a, dt, dv)
+    c_grav = gcd.capacitance_gcd_normal(current_a, dt, dv, mass_g)
+    c_areal = gcd.areal_capacitance_gcd_normal(current_a, dt, dv, area_cm2)
+    c_vol = gcd.volumetric_capacitance_gcd_normal(current_a, dt, dv, volume_cm3)
+
+    assert c_grav * mass_g == pytest.approx(c_total, rel=1e-9)
+    assert c_areal * area_cm2 == pytest.approx(c_total, rel=1e-9)
+    assert c_vol * volume_cm3 == pytest.approx(c_total, rel=1e-9)
+
+
+def test_total_capacitance_gcd_integral_matches_gravimetric_areal_volumetric():
+    t = np.linspace(0, 100, 50)
+    v = np.linspace(1.0, 0.0, 50)
+    current_a = 0.001
+    mass_g, area_cm2, volume_cm3 = 0.005, 2.0, 0.001
+
+    c_total = gcd.total_capacitance_gcd_integral(t, v, current_a)
+    c_grav = gcd.capacitance_gcd_integral(t, v, current_a, mass_g)
+    c_areal = gcd.areal_capacitance_gcd_integral(t, v, current_a, area_cm2)
+    c_vol = gcd.volumetric_capacitance_gcd_integral(t, v, current_a, volume_cm3)
+
+    assert c_grav * mass_g == pytest.approx(c_total, rel=1e-9)
+    assert c_areal * area_cm2 == pytest.approx(c_total, rel=1e-9)
+    assert c_vol * volume_cm3 == pytest.approx(c_total, rel=1e-9)
+
+
+def test_total_capacitance_gcd_auto_matches_capacitance_gcd_auto_gravimetric():
+    t = np.linspace(0, 100, 200)
+    v = 1.0 - 0.005 * t  # linear discharge
+    current_a, mass_g = 0.001, 0.005
+
+    total_result = gcd.total_capacitance_gcd_auto(t, v, current_a)
+    grav_result = gcd.capacitance_gcd_auto(t, v, current_a, mass_g)
+
+    assert total_result["method"] == grav_result["method"]
+    assert total_result["capacitance_f"] / mass_g == pytest.approx(grav_result["capacitance_f_per_g"], rel=1e-9)
+
+
+def test_energy_density_wh_is_energy_density_wh_per_kg_divided_by_1000():
+    c, dv = 40.0, 0.5
+    assert gcd.energy_density_wh(c, dv) * 1000 == pytest.approx(gcd.energy_density_wh_per_kg(c, dv), rel=1e-9)
+
+
+def test_areal_and_volumetric_capacitance_gcd_reject_non_positive_normalizer():
+    with pytest.raises(ValueError):
+        gcd.areal_capacitance_gcd_normal(0.001, 100.0, 1.0, area_cm2=0)
+    with pytest.raises(ValueError):
+        gcd.volumetric_capacitance_gcd_normal(0.001, 100.0, 1.0, volume_cm3=-1)

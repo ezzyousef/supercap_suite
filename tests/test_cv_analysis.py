@@ -73,3 +73,49 @@ def test_b_value_from_log_log_known_slope():
     peaks = a * rates ** b_true
     b_fit = cv.b_value_from_log_log(rates, peaks)
     assert b_fit == pytest.approx(b_true, rel=1e-6)
+
+
+def test_total_capacitance_from_cv_matches_gravimetric_areal_volumetric():
+    # The same enclosed-loop integral, normalized 3 different ways, must
+    # each multiply back out to the same total (Farads) -- regression for
+    # the gravimetric/areal/volumetric capacitance feature.
+    v_fwd = np.linspace(0, 1, 200)
+    v_rev = np.linspace(1, 0, 200)
+    i_fwd = np.full(200, 0.01)
+    i_rev = np.full(200, -0.01)
+    v = np.concatenate([v_fwd, v_rev])
+    i = np.concatenate([i_fwd, i_rev])
+    scan_rate = 0.02
+    mass_g, area_cm2, volume_cm3 = 0.005, 2.0, 0.001
+
+    c_total = cv.total_capacitance_from_cv(v, i, scan_rate)
+    c_grav = cv.capacitance_from_cv(v, i, scan_rate, mass_g)
+    c_areal = cv.areal_capacitance_from_cv(v, i, scan_rate, area_cm2)
+    c_vol = cv.volumetric_capacitance_from_cv(v, i, scan_rate, volume_cm3)
+
+    assert c_grav * mass_g == pytest.approx(c_total, rel=1e-9)
+    assert c_areal * area_cm2 == pytest.approx(c_total, rel=1e-9)
+    assert c_vol * volume_cm3 == pytest.approx(c_total, rel=1e-9)
+
+
+def test_total_capacitance_from_cv_direct_matches_gravimetric_areal_volumetric():
+    current_a, scan_rate = 0.01, 0.02
+    mass_g, area_cm2, volume_cm3 = 0.005, 2.0, 0.001
+
+    c_total = cv.total_capacitance_from_cv_direct(current_a, scan_rate)
+    c_grav = cv.capacitance_from_cv_direct(current_a, mass_g, scan_rate)
+    c_areal = cv.areal_capacitance_from_cv_direct(current_a, area_cm2, scan_rate)
+    c_vol = cv.volumetric_capacitance_from_cv_direct(current_a, volume_cm3, scan_rate)
+
+    assert c_grav * mass_g == pytest.approx(c_total, rel=1e-9)
+    assert c_areal * area_cm2 == pytest.approx(c_total, rel=1e-9)
+    assert c_vol * volume_cm3 == pytest.approx(c_total, rel=1e-9)
+
+
+def test_areal_and_volumetric_capacitance_from_cv_reject_non_positive_normalizer():
+    v = np.linspace(0, 1, 10)
+    i = np.ones(10) * 0.01
+    with pytest.raises(ValueError):
+        cv.areal_capacitance_from_cv(v, i, 0.02, area_cm2=0)
+    with pytest.raises(ValueError):
+        cv.volumetric_capacitance_from_cv(v, i, 0.02, volume_cm3=-1)

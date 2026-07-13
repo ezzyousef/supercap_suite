@@ -25,8 +25,14 @@ CATEGORIES: dict[str, dict[str, float]] = {
     "mass": {  # base: g
         "µg": 1e-6, "ug": 1e-6, "mg": 1e-3, "g": 1.0, "kg": 1e3,
     },
-    "specific_capacitance": {  # base: F/g
+    "specific_capacitance": {  # base: F/g -- gravimetric capacitance
         "µF/g": 1e-6, "uF/g": 1e-6, "mF/g": 1e-3, "F/g": 1.0,
+    },
+    "areal_capacitance": {  # base: F/cm2 -- areal capacitance
+        "µF/cm²": 1e-6, "uF/cm2": 1e-6, "mF/cm²": 1e-3, "F/cm²": 1.0,
+    },
+    "volumetric_capacitance": {  # base: F/cm3 -- volumetric capacitance
+        "mF/cm³": 1e-3, "F/cm³": 1.0,
     },
     "scan_rate": {  # base: V/s -- for single-column tables where the
                      # compound voltage/time widget would be overkill
