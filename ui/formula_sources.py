@@ -194,3 +194,39 @@ is the heat of fusion of water used in that paper's equation set
 (literature range: ~333.5-334 J/g) -- adjustable in this tab if your
 reference method uses a different value.
 """
+
+DSC_SYMMETRIC_TOTAL_SPLIT = """
+Automated symmetric/total peak-area split (for Eq. 4's
+area_symmetric / area_total ratio, so it doesn't require a separately
+measured or manually-entered value):<br>
+The baseline-corrected peak is mirrored about its own apex (peak time);
+the pointwise minimum of the peak and its mirror image is the
+"symmetric" (bulk-like) component, and its integral divided by the full
+peak's integral gives the split. A perfectly symmetric peak has
+symmetric_area = total_area (ratio 1, W_fb = W_f); a peak with a broader
+one-sided shoulder (physically: water melting at a different temperature
+than the sharp/bulk-like population) has a smaller ratio.<br>
+<b>Caveat:</b> this is a general signal-symmetry heuristic implemented so
+the full water-type pipeline can run without manual peak-area entry --
+it is <i>not</i> verified against the specific deconvolution procedure in
+Yousef et al., <i>Chemical Engineering Journal</i> 526 (2025) 171441.
+Cross-check a few samples by hand if you need to match that paper's exact
+methodology.
+"""
+
+DSC_INTEGRATION_ACCURACY = """
+Integration-accuracy self-check (not a literature formula -- an automated
+sanity check on the reported peak area):<br>
+<b>Method comparison:</b> the same baseline-corrected window is
+re-integrated with Simpson's rule and compared to the trapezoidal result
+normally reported; a large disagreement usually means the peak region is
+coarsely or unevenly sampled.<br>
+<b>Boundary sensitivity:</b> the start/end row is nudged by up to 3
+points in each direction (redrawing the linear baseline each time), and
+the resulting spread in area is reported as a percentage -- a peak whose
+area swings widely for a small change in where "start"/"end" was clicked
+has a poorly-anchored baseline (the flanking region isn't flat), and its
+absolute area should be treated as approximate.<br>
+Neither check replaces looking at the plotted peak + baseline overlay
+before trusting a reported enthalpy.
+"""

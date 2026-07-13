@@ -252,6 +252,162 @@ def detect_dsc_peak(time_s: np.ndarray, heat_flow_mw: np.ndarray,
     )
 
 
+@dataclass
+class PeakSymmetryResult:
+    symmetric_area_j: float   # area of the peak's symmetric ("bulk-like") core
+    total_area_j: float       # full baseline-corrected peak area (same as integrate_dsc_peak)
+    asymmetry_fraction: float  # (total - symmetric) / total; 0 = perfectly symmetric
+
+
+def symmetric_and_total_peak_areas(time_s: np.ndarray, heat_flow_mw: np.ndarray,
+                                    baseline_mw: np.ndarray, peak_index: int,
+                                    start_index: int, end_index: int) -> PeakSymmetryResult:
+    """Automatically split a (possibly asymmetric) DSC melting peak into a
+    symmetric "bulk-like" core and the full/total peak area, for use as
+    `symmetric_peak_area_j` / `total_peak_area_j` in classify_water_types
+    (Eq. 4: W_fb = W_f * area_symmetric / area_total) WITHOUT requiring
+    the user to separately measure or manually enter those two areas.
+
+    Method: mirror the baseline-corrected peak about its own apex (the
+    time of `peak_index`) and take the pointwise minimum of the peak and
+    its mirror image as the "symmetric" component -- i.e. the largest
+    subset of the peak that IS symmetric about its own apex. A truly
+    symmetric peak (e.g. bulk water's sharp melting transition) has
+    symmetric_area == total_area; a peak with a broader shoulder on one
+    side (physically: a population of more weakly-bound water melting at
+    a different temperature than the sharp/bulk-like population) has that
+    shoulder excluded from the symmetric core, so symmetric_area <
+    total_area and the gap is attributed to the asymmetric ("freezable
+    bound") contribution.
+
+    IMPORTANT CAVEAT: this is a general, assumption-light signal-symmetry
+    heuristic implemented so the full water-type pipeline (Eqs. 1-6, see
+    module docstring) can run end-to-end without manual area entry --
+    it is NOT verified against the specific deconvolution procedure used
+    in the source paper (Yousef et al., Chem. Eng. J. 526 (2025) 171441),
+    which this app does not have machine-readable access to reproduce
+    exactly. If your workflow requires matching that paper's exact
+    methodology, treat this as a starting point and cross-check a few
+    samples by hand before relying on it for publication-quality numbers.
+    """
+    t = np.asarray(time_s, dtype=float)
+    y = np.asarray(heat_flow_mw, dtype=float)
+    baseline_mw = np.asarray(baseline_mw, dtype=float)
+    if not (len(t) == len(y) == len(baseline_mw)):
+        raise ValueError("time_s, heat_flow_mw, and baseline_mw must be the same length")
+    if not (0 <= start_index <= peak_index <= end_index < len(t)):
+        raise ValueError("Require 0 <= start_index <= peak_index <= end_index < len(time_s)")
+    if end_index - start_index < 2:
+        raise ValueError("Need at least 3 points in the peak window to assess symmetry")
+
+    t_win = t[start_index:end_index + 1]
+    signal_win = np.abs(y[start_index:end_index + 1] - baseline_mw[start_index:end_index + 1])
+    t_peak = t[peak_index]
+
+    mirrored_t = 2.0 * t_peak - t_win
+    y_mirror = np.interp(mirrored_t, t_win, signal_win, left=0.0, right=0.0)
+    y_symmetric = np.minimum(signal_win, y_mirror)
+
+    trapz_fn = getattr(np, "trapezoid", None) or np.trapz
+    total_mj = float(trapz_fn(signal_win, t_win))
+    symmetric_mj = float(trapz_fn(y_symmetric, t_win))
+    total_j = total_mj / 1000.0
+    symmetric_j = symmetric_mj / 1000.0
+    asymmetry = (total_j - symmetric_j) / total_j if total_j > 0 else 0.0
+
+    return PeakSymmetryResult(
+        symmetric_area_j=symmetric_j, total_area_j=total_j,
+        asymmetry_fraction=max(0.0, asymmetry),
+    )
+
+
+@dataclass
+class IntegrationAccuracyResult:
+    trapezoid_area_j: float
+    simpson_area_j: float
+    method_difference_percent: float
+    boundary_sensitivity_percent: float
+    warnings: list
+
+
+def check_integration_accuracy(time_s: np.ndarray, heat_flow_mw: np.ndarray,
+                                start_index: int, end_index: int,
+                                boundary_nudge_points: int = 3) -> IntegrationAccuracyResult:
+    """Self-consistency check for a DSC peak-area integration, giving an
+    estimate of how much to trust the reported area -- NOT a replacement
+    for looking at the plotted peak+baseline overlay, but a quick
+    automated flag for the two most common sources of integration error:
+
+    1. Method sensitivity: re-integrates the SAME (baseline-corrected)
+       window with Simpson's rule and compares it to the trapezoidal
+       result this app normally reports (integrate_dsc_peak). These
+       should closely agree for a smoothly-sampled peak; a large
+       difference usually means the peak is coarsely/unevenly sampled.
+    2. Boundary sensitivity: nudges the start/end row by up to
+       `boundary_nudge_points` points in each direction (re-drawing the
+       linear baseline each time) and reports the resulting spread in
+       area as a percentage of the original -- a peak whose area swings
+       wildly for a +/-1-3 row change in where you clicked "start"/"end"
+       has a poorly-anchored baseline (the flanking region isn't flat),
+       and its absolute area should be treated as approximate.
+
+    Returns warnings (empty list if both checks look fine) for direct
+    display alongside the computed enthalpy, the same "quality flag"
+    pattern already used for reduced chi-squared in the EIS circuit fit.
+    """
+    from scipy.integrate import simpson
+
+    t = np.asarray(time_s, dtype=float)
+    y = np.asarray(heat_flow_mw, dtype=float)
+    n = len(y)
+    if not (0 <= start_index < end_index < n):
+        raise ValueError("Require 0 <= start_index < end_index < len(time_s)")
+
+    def _area(s: int, e: int) -> float:
+        baseline = linear_baseline(t, y, s, e)
+        return integrate_dsc_peak(t[s:e + 1], y[s:e + 1], baseline_mw=baseline[s:e + 1])
+
+    base_area = _area(start_index, end_index)
+
+    baseline_full = linear_baseline(t, y, start_index, end_index)
+    signal = np.abs(y[start_index:end_index + 1] - baseline_full[start_index:end_index + 1])
+    simpson_area_j = float(simpson(signal, x=t[start_index:end_index + 1])) / 1000.0
+    method_diff_pct = (100.0 * abs(base_area - simpson_area_j) / base_area
+                        if base_area > 0 else float("nan"))
+
+    areas = [base_area]
+    for d in range(1, boundary_nudge_points + 1):
+        for ds, de in ((-d, 0), (d, 0), (0, -d), (0, d)):
+            s2, e2 = start_index + ds, end_index + de
+            if 0 <= s2 < e2 < n:
+                try:
+                    areas.append(_area(s2, e2))
+                except ValueError:
+                    continue
+    boundary_sensitivity_pct = (100.0 * (max(areas) - min(areas)) / base_area
+                                 if base_area > 0 else float("nan"))
+
+    warnings = []
+    if not np.isnan(method_diff_pct) and method_diff_pct > 2.0:
+        warnings.append(
+            f"Trapezoidal vs. Simpson's-rule integration differ by {method_diff_pct:.2f}% -- "
+            "the peak region may be too coarsely/unevenly sampled for a precise area."
+        )
+    if not np.isnan(boundary_sensitivity_pct) and boundary_sensitivity_pct > 5.0:
+        warnings.append(
+            f"Peak area is sensitive to the exact start/end row (±{boundary_sensitivity_pct:.1f}% "
+            f"over a ±{boundary_nudge_points}-row nudge) -- the baseline endpoints may not sit on "
+            "a flat part of the curve; check the plotted baseline before trusting this area."
+        )
+
+    return IntegrationAccuracyResult(
+        trapezoid_area_j=base_area, simpson_area_j=simpson_area_j,
+        method_difference_percent=method_diff_pct,
+        boundary_sensitivity_percent=boundary_sensitivity_pct,
+        warnings=warnings,
+    )
+
+
 def enthalpy_j_per_g(peak_area_j: float, sample_mass_g: float) -> float:
     """Specific enthalpy of a DSC transition (J/g):
 

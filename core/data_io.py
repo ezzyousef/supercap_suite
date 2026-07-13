@@ -95,8 +95,11 @@ def load_data_file(path: str, sheet_name=0) -> pd.DataFrame:
     if suffix == ".mpr":
         return _load_mpr(p)
 
+    if suffix == ".pdf":
+        return _load_pdf(p)
+
     raise DataLoadError(
-        f"Unsupported file type: '{suffix}'. Expected .xlsx, .xls, .csv, .txt, .mpt, or .mpr"
+        f"Unsupported file type: '{suffix}'. Expected .xlsx, .xls, .csv, .txt, .mpt, .mpr, or .pdf"
     )
 
 
@@ -368,6 +371,70 @@ def _load_mpr(path: Path) -> pd.DataFrame:
         ) from e
 
     return pd.DataFrame(mpr.data)
+
+
+def _load_pdf(path: Path) -> pd.DataFrame:
+    """Extract a tabular data export from a PDF report (e.g. a DSC
+    software "export to PDF" of a heat-flow table) via the third-party
+    `pdfplumber` package. Most instrument-software PDF exports are
+    text-native tables (not scanned images), so this reads the
+    underlying text directly -- no OCR involved, and it will not work on
+    a scanned/image-only PDF.
+
+    Every page's table(s) are extracted and concatenated in page order,
+    then run through the SAME multi-row-header rescan used for Excel/CSV
+    (_rescan_multirow_header) -- unlike load_data_file's Excel/CSV paths,
+    there is no separate "does this even need fixing" gate here, since a
+    freshly-extracted PDF table has no pre-existing pandas header
+    assumption to preserve; _rescan_multirow_header handles both a
+    single clean header row and a title/header/units preamble correctly
+    on its own. If a repeated header (e.g. printed again on page 2 of a
+    multi-page export) ends up amid the data rows, it becomes a handful
+    of unparseable (NaN) rows rather than breaking the load -- callers
+    that already drop NaN rows before analysis (e.g. the DSC tab) are
+    unaffected.
+    """
+    try:
+        import pdfplumber
+    except ImportError as e:
+        raise DataLoadError(
+            f"Could not read '{path.name}': reading PDF files requires the "
+            f"'pdfplumber' package (pip install pdfplumber), which is not "
+            f"installed in this environment. Re-export as .xlsx or .csv "
+            f"instead, or install pdfplumber and try again."
+        ) from e
+
+    rows: list = []
+    try:
+        with pdfplumber.open(str(path)) as pdf:
+            for page in pdf.pages:
+                for table in page.extract_tables():
+                    rows.extend(table)
+    except Exception as e:
+        raise DataLoadError(f"Could not parse '{path.name}' as a PDF: {e}") from e
+
+    if not rows:
+        raise DataLoadError(
+            f"No table found in '{path.name}' -- this PDF may be a scanned "
+            f"image (not text-native) or use a layout this app can't detect "
+            f"as a table. Re-export as .xlsx or .csv instead."
+        )
+
+    max_cols = max(len(r) for r in rows)
+    padded = [list(r) + [None] * (max_cols - len(r)) for r in rows]
+    raw = pd.DataFrame(padded)
+
+    fixed = _rescan_multirow_header(raw)
+    if fixed is not None:
+        return fixed
+
+    # _rescan_multirow_header couldn't confidently identify a header row
+    # (e.g. no cell matched any known column alias) -- fall back to
+    # treating row 0 as a literal header, the simplest possible
+    # interpretation, rather than raising on an unusual-but-plausible table.
+    df = raw.copy()
+    df.columns = [str(c) if c is not None else f"col_{i}" for i, c in enumerate(df.iloc[0])]
+    return df.iloc[1:].reset_index(drop=True)
 
 
 def find_column(df: pd.DataFrame, key: str) -> str | None:

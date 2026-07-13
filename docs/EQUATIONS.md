@@ -476,6 +476,40 @@ peak start/end points -- more sophisticated curved/sigmoidal baselines
 exist in commercial DSC software but there is no single standard algorithm
 to cite, so only the linear case is implemented here).
 
+## 9a. Automated symmetric/total peak-area split (for Eq. 4 above)
+
+Section 8's `area_symmetric_peak / total_peak_area` ratio previously
+required a manually-measured or manually-entered pair of numbers. It is
+now derived automatically from the detected peak's own shape:
+`core.dsc_analysis.symmetric_and_total_peak_areas()` mirrors the
+baseline-corrected peak about its own apex (peak time) and takes the
+pointwise minimum of the peak and its mirror image as the "symmetric"
+(bulk-like) component; the ratio of that component's integral to the full
+peak's integral is the split used in Eq. 4. A perfectly symmetric peak
+gives ratio = 1 (W_fb = W_f); a peak with a one-sided shoulder (a
+population of water melting at a different temperature than the sharp/
+bulk-like population) gives a smaller ratio.
+
+**This is a general signal-symmetry heuristic, not a literature-sourced
+formula** -- it was implemented so the full water-type pipeline (Eqs. 1-6)
+can run end-to-end from just m_w/m_d without a separate symmetric/total
+peak measurement, but it has not been verified against the specific
+deconvolution procedure used in Yousef et al., *Chemical Engineering
+Journal* 526 (2025) 171441. Cross-check a few samples by hand if matching
+that paper's exact methodology matters for your results.
+
+## 9b. Integration-accuracy self-check
+
+`core.dsc_analysis.check_integration_accuracy()` is an automated sanity
+check on a reported peak area (not a literature formula): it (1) compares
+the normally-reported trapezoidal integration against Simpson's rule on
+the same baseline-corrected window, and (2) nudges the peak start/end row
+by up to 3 points in each direction (re-drawing the linear baseline each
+time) and reports the resulting spread in area as a percentage. Large
+values in either check (>2% method disagreement, >5% boundary
+sensitivity) surface as a warning alongside the enthalpy -- neither
+replaces visually checking the plotted peak + baseline overlay.
+
 ---
 
 ## What this app deliberately does NOT do

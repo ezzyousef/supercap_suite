@@ -71,3 +71,54 @@ def test_classify_water_types_flags_negative_non_freezable_bound_water():
         symmetric_peak_area_j=5.0, total_peak_area_j=10.0,
     )
     assert result.non_freezable_bound_water < 0
+
+
+def test_symmetric_and_total_peak_areas_equal_for_a_perfectly_symmetric_peak():
+    # peak_t exactly on a grid point, window exactly centered -> no
+    # boundary-alignment artifacts, so symmetric_area should equal
+    # total_area (a Gaussian is symmetric about its own apex).
+    t = np.linspace(0, 10, 201)
+    peak_idx = 100
+    assert t[peak_idx] == 5.0
+    y = 5.0 * np.exp(-0.5 * ((t - 5.0) / 0.5) ** 2)
+    baseline = np.zeros_like(t)
+    result = dsc.symmetric_and_total_peak_areas(t, y, baseline, peak_idx, 0, 200)
+    assert result.symmetric_area_j == pytest.approx(result.total_area_j, rel=1e-9)
+    assert result.asymmetry_fraction == pytest.approx(0.0, abs=1e-9)
+
+
+def test_symmetric_and_total_peak_areas_detects_a_one_sided_shoulder():
+    t = np.linspace(0, 10, 201)
+    peak_idx = 100
+    sharp = 5.0 * np.exp(-0.5 * ((t - 5.0) / 0.3) ** 2)
+    shoulder = 1.5 * np.exp(-0.5 * ((t - 6.5) / 1.0) ** 2)  # one-sided extra feature
+    y = sharp + shoulder
+    baseline = np.zeros_like(t)
+    result = dsc.symmetric_and_total_peak_areas(t, y, baseline, peak_idx, 0, 200)
+    assert result.symmetric_area_j < result.total_area_j
+    assert result.asymmetry_fraction > 0.1
+
+
+def test_check_integration_accuracy_clean_wide_window_has_no_warnings():
+    t = np.linspace(0, 100, 300)
+    y = 0.1 * t + 5.0 * np.exp(-0.5 * ((t - 50) / 3.0) ** 2)
+    peak_idx = int(np.argmin(np.abs(t - 50)))
+    dt = t[1] - t[0]
+    n_pts = int(8 * 3.0 / dt)  # +/- 8 sigma: tail fully decayed
+    result = dsc.check_integration_accuracy(t, y, peak_idx - n_pts, peak_idx + n_pts)
+    assert result.warnings == []
+    assert result.boundary_sensitivity_percent < 1.0
+    assert result.method_difference_percent < 1.0
+
+
+def test_check_integration_accuracy_flags_a_boundary_still_on_the_peak_tail():
+    # A tight window right at the auto-detected boundaries of a Gaussian
+    # (whose tail never truly reaches zero) should show meaningful
+    # boundary sensitivity and get flagged -- regression for the actual
+    # behavior this diagnostic is meant to catch.
+    t = np.linspace(0, 100, 300)
+    y = 0.1 * t + 5.0 * np.exp(-0.5 * ((t - 50) / 3.0) ** 2)
+    peak = dsc.detect_dsc_peak(t, y)
+    result = dsc.check_integration_accuracy(t, y, peak.start_index, peak.end_index)
+    assert result.boundary_sensitivity_percent > 5.0
+    assert any("sensitive to the exact start/end row" in w for w in result.warnings)

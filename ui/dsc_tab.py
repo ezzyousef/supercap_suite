@@ -8,13 +8,15 @@ Two sub-tools:
      get peak area and specific enthalpy (J/g). The resulting peak area can
      be fed into the water-type tool as A_f / symmetric / total areas.
 """
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel,
     QComboBox, QDoubleSpinBox, QSpinBox, QFileDialog, QMessageBox, QGroupBox,
-    QTextEdit, QSplitter, QTabWidget
+    QTextEdit, QSplitter, QTabWidget, QDialog, QFormLayout, QDialogButtonBox,
 )
 from PySide6.QtCore import Qt
 
@@ -48,6 +50,42 @@ class DscTab(QWidget):
 from PySide6.QtCore import Signal
 
 
+class _DscBatchMassDialog(QDialog):
+    """Per-file mass entry for batch DSC import: sample mass is required
+    (for specific enthalpy, J/g); water/dry mass are optional -- leave
+    either at 0 to skip the automated water-type breakdown for that one
+    file while still getting its peak area/enthalpy in the batch table.
+    """
+
+    def __init__(self, parent, filename: str):
+        super().__init__(parent)
+        self.setWindowTitle(f"Masses — {filename}")
+        layout = QFormLayout(self)
+
+        self.sample_mass_spin = QDoubleSpinBox()
+        self.sample_mass_spin.setDecimals(6)
+        self.sample_mass_spin.setRange(0.000001, 1000)
+        self.sample_mass_spin.setValue(0.01)
+        self.sample_mass_spin.setSuffix(" g")
+        layout.addRow("Sample mass (for enthalpy J/g):", self.sample_mass_spin)
+
+        self.water_mass_spin = QDoubleSpinBox()
+        self.water_mass_spin.setDecimals(6)
+        self.water_mass_spin.setRange(0, 1000)
+        self.water_mass_spin.setSuffix(" g")
+        layout.addRow("Mass of water m_w (0 = skip water-type calc):", self.water_mass_spin)
+
+        self.dry_mass_spin = QDoubleSpinBox()
+        self.dry_mass_spin.setDecimals(6)
+        self.dry_mass_spin.setRange(0, 1000)
+        layout.addRow("Mass of dry sample m_d:", self.dry_mass_spin)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+
 class EnthalpyTool(QWidget):
     send_to_water_tool = Signal(float)
 
@@ -56,13 +94,14 @@ class EnthalpyTool(QWidget):
         self.df: pd.DataFrame | None = None
         self.last_result: dict | None = None
         self.last_raw_df: pd.DataFrame | None = None
+        self.batch_df: pd.DataFrame | None = None
         self._build_ui()
 
     def _build_ui(self):
         root = QVBoxLayout(self)
 
         file_row = QHBoxLayout()
-        open_btn = QPushButton("📂 Open DSC file (Excel / CSV)…")
+        open_btn = QPushButton("📂 Open DSC file (Excel / CSV / PDF)…")
         open_btn.clicked.connect(self.on_open_file)
         self.sheet_combo = QComboBox()
         self.sheet_combo.setEnabled(False)
@@ -74,6 +113,24 @@ class EnthalpyTool(QWidget):
         file_row.addWidget(self.status_label)
         file_row.addStretch()
         root.addLayout(file_row)
+
+        batch_row = QHBoxLayout()
+        batch_btn = QPushButton("📚 Import multiple DSC files (batch, auto water-type)…")
+        batch_btn.setToolTip(
+            "Loads several files at once (Excel/CSV/PDF, one sample per "
+            "file); for each one, auto-detects the X/heat-flow columns, "
+            "auto-detects the peak, integrates it, runs the integration-"
+            "accuracy check, and -- if you enter water/dry mass for that "
+            "file when prompted -- the full automated water-type "
+            "breakdown, collecting one row per file in the batch results "
+            "table below. This does not replace the single-file flow "
+            "above, which stays available for closer inspection of one "
+            "curve at a time."
+        )
+        batch_btn.clicked.connect(self.on_import_multi_files)
+        batch_row.addWidget(batch_btn)
+        batch_row.addStretch()
+        root.addLayout(batch_row)
 
         splitter = QSplitter(Qt.Horizontal)
         root.addWidget(splitter, stretch=1)
@@ -159,11 +216,13 @@ class EnthalpyTool(QWidget):
         water_box = QGroupBox("Water-type auto-calculation (optional)")
         water_grid = QGridLayout(water_box)
         water_note = QLabel(
-            "Fill both masses below to also compute the free / freezable-"
-            "bound / non-freezable-bound water breakdown directly from "
-            "this peak -- leave mass of water at 0 to skip. Assumes this "
-            "one detected peak IS the melting endotherm, with no separate "
-            "symmetric/total sub-component analysis (single clean peak)."
+            "Fill both masses below to fully automatically compute the free / "
+            "freezable-bound / non-freezable-bound water breakdown from this "
+            "peak -- leave mass of water at 0 to skip. The symmetric/total "
+            "peak-area split (Eq. 4) is auto-derived from this peak's own "
+            "shape (see the 'symmetric/total split' source button below) -- "
+            "no separate measurement needed, though it's a heuristic, not a "
+            "literature-verified deconvolution; check it for an unusual peak."
         )
         water_note.setWordWrap(True)
         water_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
@@ -186,7 +245,11 @@ class EnthalpyTool(QWidget):
         self.heat_fusion_spin.setSuffix(" J/g")
         water_grid.addWidget(QLabel("Heat of fusion of water used:"), 3, 0)
         water_grid.addWidget(self.heat_fusion_spin, 3, 1)
-        water_grid.addWidget(theme.make_source_button(self, "DSC water-type classification", formula_sources.DSC_WATER_TYPE), 4, 0, 1, 2)
+        source_row = QHBoxLayout()
+        source_row.addWidget(theme.make_source_button(self, "DSC water-type classification", formula_sources.DSC_WATER_TYPE))
+        source_row.addWidget(theme.make_source_button(self, "Symmetric/total split (automated)", formula_sources.DSC_SYMMETRIC_TOTAL_SPLIT))
+        source_row.addWidget(theme.make_source_button(self, "Integration accuracy check", formula_sources.DSC_INTEGRATION_ACCURACY))
+        water_grid.addLayout(source_row, 4, 0, 1, 2)
         left_layout.addWidget(water_box)
 
         self.send_btn = QPushButton("Send peak area (J) to Water-type tool →")
@@ -229,6 +292,20 @@ class EnthalpyTool(QWidget):
         self.record_panel.bind(lambda: self.last_result)
         right_layout.addWidget(self.record_panel)
 
+        batch_section = CollapsibleSection("Batch results (multiple files)")
+        self.batch_table = make_table_view()
+        self.batch_table_model = DataFrameModel()
+        self.batch_table.setModel(self.batch_table_model)
+        self.batch_table.setMinimumHeight(160)
+        batch_section.addWidget(self.batch_table)
+        self.batch_export_btn = make_export_button(
+            self, "DSC batch", lambda: {"Files in batch table": len(self.batch_df) if self.batch_df is not None else 0},
+            lambda: self.batch_df,
+            source_note="DSC batch import (multiple files) — Supercapacitor & DSC Analysis Suite",
+        )
+        batch_section.addWidget(self.batch_export_btn)
+        right_layout.addWidget(batch_section)
+
         splitter.addWidget(right)
         splitter.setSizes([380, 700])
         configure_collapsible_main_splitter(splitter)
@@ -239,7 +316,7 @@ class EnthalpyTool(QWidget):
     def on_open_file(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Open DSC data file", "",
-            "Data files (*.xlsx *.xls *.csv *.txt);;All files (*)"
+            "Data files (*.xlsx *.xls *.csv *.txt *.pdf);;All files (*)"
         )
         if not path:
             return
@@ -339,6 +416,159 @@ class EnthalpyTool(QWidget):
         if self.x_combo.currentIndex() != 0 and self.y_combo.currentIndex() != 0:
             self.on_preview()
             self.on_auto_detect_peak()
+
+    def _auto_detect_columns(self, df: pd.DataFrame):
+        """Same column-resolution logic as _load_dataframe (alias match,
+        then first-two-numeric-columns fallback), factored out so batch
+        import can run it per-file without touching the single-file
+        combos. Returns (x_col, x_is_time, y_col) -- any of which may be
+        None if nothing could be resolved."""
+        t_guess = find_column(df, "time_s")
+        temp_guess = find_column(df, "temp_c")
+        y_col = find_column(df, "heat_flow")
+        x_col, x_is_time = (t_guess, True) if t_guess else (temp_guess, False) if temp_guess else (None, True)
+
+        if x_col is None or y_col is None:
+            numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+            if x_col is None and len(numeric_cols) >= 1:
+                x_col = str(numeric_cols[0])
+                x_is_time = "temp" not in x_col.lower()
+            if y_col is None and len(numeric_cols) >= 2:
+                y_col = str(numeric_cols[1])
+        return x_col, x_is_time, y_col
+
+    def on_import_multi_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Import multiple DSC files (batch)", "",
+            "Data files (*.xlsx *.xls *.csv *.txt *.pdf);;All files (*)"
+        )
+        if not paths:
+            return
+
+        rows = []
+        failures = []
+        for path in paths:
+            fname = Path(path).name
+            try:
+                if path.lower().endswith((".xlsx", ".xls")):
+                    best_sheet = find_sheet_with_recognized_columns(path, [["heat_flow"], ["temp_c", "time_s"]])
+                    df = load_data_file(path, sheet_name=best_sheet if best_sheet else 0)
+                else:
+                    df = load_data_file(path)
+            except DataLoadError as e:
+                failures.append(f"{fname}: {e}")
+                continue
+            if isinstance(df, dict):
+                df = list(df.values())[0]
+
+            x_col, x_is_time, y_col = self._auto_detect_columns(df)
+            if x_col is None or y_col is None:
+                failures.append(f"{fname}: could not auto-detect a usable X-axis/heat-flow column pair, skipped")
+                continue
+
+            try:
+                x = df[x_col].astype(float).to_numpy()
+                y = df[y_col].astype(float).to_numpy()
+            except (ValueError, TypeError):
+                failures.append(f"{fname}: selected columns are not numeric, skipped")
+                continue
+
+            valid = ~(np.isnan(x) | np.isnan(y))
+            if not np.any(valid):
+                failures.append(f"{fname}: no valid (non-missing) rows, skipped")
+                continue
+            x, y = x[valid], y[valid]
+
+            if x_is_time:
+                t = x - x[0]
+            else:
+                rate_c_per_s = self.scan_rate_spin.value() / 60.0
+                t = np.abs(x - x[0]) / rate_c_per_s
+
+            try:
+                peak = dsc.detect_dsc_peak(t, y)
+            except ValueError as e:
+                failures.append(f"{fname}: {e}")
+                continue
+
+            t_win = t[peak.start_index:peak.end_index + 1]
+            y_win = y[peak.start_index:peak.end_index + 1]
+            baseline = dsc.linear_baseline(t_win, y_win, 0, len(t_win) - 1)
+            try:
+                area_j = dsc.integrate_dsc_peak(t_win, y_win, baseline_mw=baseline)
+            except ValueError as e:
+                failures.append(f"{fname}: {e}")
+                continue
+
+            try:
+                accuracy = dsc.check_integration_accuracy(t_win, y_win, 0, len(t_win) - 1)
+            except ValueError:
+                accuracy = None
+            local_peak_idx = int(np.argmax(np.abs(y_win - baseline)))
+            try:
+                symmetry = dsc.symmetric_and_total_peak_areas(t_win, y_win, baseline, local_peak_idx, 0, len(t_win) - 1)
+            except ValueError:
+                symmetry = None
+
+            dlg = _DscBatchMassDialog(self, fname)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                failures.append(f"{fname}: mass entry cancelled, skipped")
+                continue
+            sample_mass = dlg.sample_mass_spin.value()
+            water_mass = dlg.water_mass_spin.value()
+            dry_mass = dlg.dry_mass_spin.value()
+
+            try:
+                dh = dsc.enthalpy_j_per_g(area_j, sample_mass)
+            except ValueError as e:
+                failures.append(f"{fname}: {e}")
+                continue
+
+            row = {
+                "File": fname,
+                "Peak area, baseline-corrected (J)": area_j,
+                "Sample mass (g)": sample_mass,
+                "Specific enthalpy ΔH (J/g)": dh,
+                "Peak time (s)": peak.peak_time_s,
+                "Direction": peak.direction,
+            }
+            if accuracy is not None:
+                row["Integration: trapz vs. Simpson diff (%)"] = accuracy.method_difference_percent
+                row["Integration: boundary sensitivity (%)"] = accuracy.boundary_sensitivity_percent
+
+            if water_mass > 0 and dry_mass > 0:
+                if symmetry is not None:
+                    symmetric_area, total_area = symmetry.symmetric_area_j, symmetry.total_area_j
+                else:
+                    symmetric_area, total_area = area_j, area_j
+                try:
+                    wr = dsc.classify_water_types(
+                        mass_water_g=water_mass, mass_dry_g=dry_mass,
+                        melting_peak_area_j=area_j, symmetric_peak_area_j=symmetric_area,
+                        total_peak_area_j=total_area, heat_of_fusion_j_per_g=self.heat_fusion_spin.value(),
+                    )
+                except ValueError as e:
+                    row["Water-type calculation error"] = str(e)
+                else:
+                    row.update({
+                        "W_t, total water (g/g)": wr.total_water_content,
+                        "W_f, freezable water (g/g)": wr.freezable_water_content,
+                        "W_nb, non-freezable bound (g/g)": wr.non_freezable_bound_water,
+                        "W_fb, freezable bound (g/g)": wr.freezable_bound_water,
+                        "W_b, total bound (g/g)": wr.total_bound_water,
+                        "W_free, free water (g/g)": wr.free_water,
+                    })
+            rows.append(row)
+
+        if rows:
+            self.batch_df = pd.DataFrame(rows)
+            self.batch_table_model.set_dataframe(self.batch_df)
+            self.batch_export_btn.setEnabled(True)
+
+        summary = f"Processed {len(rows)} of {len(paths)} file(s) -- see the batch results table."
+        if failures:
+            summary += "\n\nSkipped:\n" + "\n".join(f"  - {f}" for f in failures)
+        QMessageBox.information(self, "Batch import complete", summary)
 
     def _get_full_time_and_heatflow(self):
         """Time/heat-flow for the WHOLE loaded curve (ignores the peak
@@ -456,6 +686,28 @@ class EnthalpyTool(QWidget):
         self._last_area_j = area_j
         self.send_btn.setEnabled(True)
 
+        # Integration-accuracy self-check (method comparison + boundary-
+        # choice sensitivity) -- same "quality flag" pattern as reduced
+        # chi-squared on the EIS fit tab, computed here so it applies to
+        # every peak (auto-detected or manually selected), not just batch.
+        try:
+            accuracy = dsc.check_integration_accuracy(t, y, 0, len(t) - 1)
+        except ValueError:
+            accuracy = None
+
+        # Automated symmetric/total peak-area split (mirror-about-apex
+        # heuristic, see core.dsc_analysis.symmetric_and_total_peak_areas)
+        # so the water-type breakdown below doesn't have to fall back to
+        # the "symmetric == total == this peak" placeholder -- the local
+        # peak position is wherever THIS window deviates most from its
+        # own baseline, which works for both auto-detected and manually
+        # selected regions.
+        local_peak_idx = int(np.argmax(np.abs(y - baseline)))
+        try:
+            symmetry = dsc.symmetric_and_total_peak_areas(t, y, baseline, local_peak_idx, 0, len(t) - 1)
+        except ValueError:
+            symmetry = None
+
         lines = [
             f"Peak area (baseline-corrected) = {area_j:.6f} J",
             f"Sample mass = {self.mass_spin.value():.6g} g",
@@ -474,14 +726,41 @@ class EnthalpyTool(QWidget):
             ("Peak area (baseline-corrected)", f"{area_j:.6f} J"),
             ("Sample mass", f"{self.mass_spin.value():.6g} g"),
         ]
+
+        if accuracy is not None:
+            lines += [
+                "",
+                f"Integration accuracy check: trapezoidal={accuracy.trapezoid_area_j:.6f} J, "
+                f"Simpson's-rule={accuracy.simpson_area_j:.6f} J "
+                f"(differ by {accuracy.method_difference_percent:.3g}%); "
+                f"boundary-choice sensitivity ±{accuracy.boundary_sensitivity_percent:.2g}% "
+                "(area change from nudging the start/end row by up to 3 points).",
+            ]
+            for w in accuracy.warnings:
+                lines.append(f"  Warning: {w}")
+            card_warnings.extend(accuracy.warnings)
+            self.last_result["Integration: trapz vs. Simpson's difference (%)"] = accuracy.method_difference_percent
+            self.last_result["Integration: boundary-choice sensitivity (%)"] = accuracy.boundary_sensitivity_percent
+
         water_mass = self.water_mass_spin.value()
         dry_mass = self.dry_mass_spin.value()
         if water_mass > 0 and dry_mass > 0:
+            if symmetry is not None:
+                symmetric_area, total_area = symmetry.symmetric_area_j, symmetry.total_area_j
+                split_note = (
+                    f"symmetric/total component areas auto-split from this peak's own "
+                    f"shape ({symmetric_area:.6f} J / {total_area:.6f} J, "
+                    f"{symmetry.asymmetry_fraction:.1%} asymmetric -- see the Formula source "
+                    "button for the method and its caveat):"
+                )
+            else:
+                symmetric_area, total_area = area_j, area_j
+                split_note = "symmetric/total component areas = this peak's area (fallback: peak shape too small to auto-split):"
             try:
                 water_result = dsc.classify_water_types(
                     mass_water_g=water_mass, mass_dry_g=dry_mass,
-                    melting_peak_area_j=area_j, symmetric_peak_area_j=area_j,
-                    total_peak_area_j=area_j, heat_of_fusion_j_per_g=self.heat_fusion_spin.value(),
+                    melting_peak_area_j=area_j, symmetric_peak_area_j=symmetric_area,
+                    total_peak_area_j=total_area, heat_of_fusion_j_per_g=self.heat_fusion_spin.value(),
                 )
             except ValueError as e:
                 lines += ["", f"Water-type calculation error: {e}"]
@@ -489,8 +768,8 @@ class EnthalpyTool(QWidget):
             else:
                 lines += [
                     "",
-                    "Water-type breakdown (this peak treated as the sole melting",
-                    "endotherm -- symmetric/total component areas = this peak's area):",
+                    "Water-type breakdown (fully automated -- peak detection, integration,",
+                    f"and {split_note}",
                     f"  Total water content        W_t    = {water_result.total_water_content:.4f} g/g",
                     f"  Freezable water content     W_f    = {water_result.freezable_water_content:.4f} g/g",
                     f"  Non-freezable bound water   W_nb   = {water_result.non_freezable_bound_water:.4f} g/g",
@@ -507,6 +786,8 @@ class EnthalpyTool(QWidget):
                 self.last_result.update({
                     "Mass of water m_w (g)": water_mass,
                     "Mass of dry sample m_d (g)": dry_mass,
+                    "Symmetric (bulk-like) peak component area (J)": symmetric_area,
+                    "Total peak area (J)": total_area,
                     "Total water content W_t (g/g)": water_result.total_water_content,
                     "Freezable water content W_f (g/g)": water_result.freezable_water_content,
                     "Non-freezable bound water W_nb (g/g)": water_result.non_freezable_bound_water,
@@ -518,9 +799,9 @@ class EnthalpyTool(QWidget):
             lines += [
                 "",
                 "(Enter mass of water AND mass of dry sample above to also "
-                "compute the free/freezable-bound/non-freezable-bound water "
-                "breakdown here, or use the Water-type tab for a peak with "
-                "separately-measured symmetric/total component areas.)",
+                "automatically compute the free/freezable-bound/non-freezable-bound "
+                "water breakdown here -- symmetric/total peak-area split is automatic, "
+                "no separate measurement needed.)",
             ]
 
         self.results_text.setPlainText("\n".join(lines))

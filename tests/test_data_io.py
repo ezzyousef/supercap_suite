@@ -9,7 +9,7 @@ import pytest
 
 from core.data_io import (
     _needs_header_rescan, _find_header_row, _rescan_multirow_header, find_column,
-    find_sheet_with_recognized_columns,
+    find_sheet_with_recognized_columns, load_data_file,
 )
 
 
@@ -119,3 +119,36 @@ def test_find_sheet_with_recognized_columns_skips_metadata_and_picks_richest_she
 
     best = find_sheet_with_recognized_columns(str(path), [["heat_flow"], ["temp_c", "time_s"]])
     assert best == "Ramp"
+
+
+def test_load_pdf_extracts_title_header_units_table(tmp_path):
+    """A DSC software PDF export with the same title/header/units
+    preamble as its Excel export should load with the real column names
+    and numeric data, not the title row as header."""
+    pytest.importorskip("pdfplumber")
+    reportlab_platypus = pytest.importorskip("reportlab.platypus")
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter
+
+    path = tmp_path / "dsc_export.pdf"
+    data = [
+        ["Ramp 10.00 C/min to 30.00 C", "", ""],
+        ["Temperature", "Heat Flow (Normalized)", "Time"],
+        ["C", "W/g", "min"],
+        ["-48.00", "5.482", "0.00"],
+        ["-48.01", "5.466", "0.00"],
+        ["-48.03", "5.415", "0.01"],
+    ]
+    doc = reportlab_platypus.SimpleDocTemplate(str(path), pagesize=letter)
+    table = reportlab_platypus.Table(data)
+    table.setStyle(reportlab_platypus.TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.black)]))
+    doc.build([table])
+
+    df = load_data_file(str(path))
+    assert list(df.columns) == ["Temperature", "Heat Flow (Normalized)", "Time"]
+    assert len(df) == 3
+    assert df["Temperature"].iloc[0] == pytest.approx(-48.0)
+    assert df["Heat Flow (Normalized)"].iloc[0] == pytest.approx(5.482)
+    assert find_column(df, "temp_c") == "Temperature"
+    assert find_column(df, "heat_flow") == "Heat Flow (Normalized)"
+    assert find_column(df, "time_s") == "Time"
