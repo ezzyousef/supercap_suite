@@ -9,7 +9,7 @@ import pandas as pd
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel,
     QComboBox, QDoubleSpinBox, QFileDialog, QMessageBox, QGroupBox,
-    QTextEdit, QSplitter, QApplication
+    QTextEdit, QSplitter, QApplication, QCheckBox
 )
 from PySide6.QtCore import Qt
 
@@ -100,6 +100,38 @@ class EisTab(QWidget):
         preview_btn.clicked.connect(self.on_preview)
         col_grid.addWidget(preview_btn, 7, 0, 1, 2)
         left_layout.addWidget(col_box)
+
+        induct_box = QGroupBox("Series inductance removal (optional)")
+        induct_grid = QGridLayout(induct_box)
+        induct_note = QLabel(
+            "A stray series inductance (cable/connector artifact) adds "
+            "j*omega*L to Z, which only ever affects Im(Z) -- on a "
+            "standard -Z'' vs Z' Nyquist plot it shows up as the trace "
+            "dipping BELOW the real axis (Im(Z) becomes positive) at high "
+            "frequency. Auto-detect fits L from exactly those Im(Z) > 0 "
+            "points; if your data has no such dip, there's no inductive "
+            "artifact here to remove and auto-detect will say so. Applies "
+            "to every calculation/fit below (preview, capacitance, "
+            "conductivity, circuit fit) until unchecked -- never modifies "
+            "the loaded file/table."
+        )
+        induct_note.setWordWrap(True)
+        induct_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        induct_grid.addWidget(induct_note, 0, 0, 1, 2)
+        autodetect_l_btn = QPushButton("Auto-detect L from high-frequency loop")
+        autodetect_l_btn.clicked.connect(self.on_autodetect_inductance)
+        induct_grid.addWidget(autodetect_l_btn, 1, 0, 1, 2)
+        self.inductance_spin = QDoubleSpinBox()
+        self.inductance_spin.setDecimals(4)
+        self.inductance_spin.setRange(-1_000_000, 1_000_000)
+        self.inductance_spin.setSuffix(" µH")
+        self.inductance_spin.valueChanged.connect(self._on_inductance_changed)
+        induct_grid.addWidget(QLabel("Series inductance L:"), 2, 0)
+        induct_grid.addWidget(self.inductance_spin, 2, 1)
+        self.inductance_checkbox = QCheckBox("Remove this inductance from all analyses below")
+        self.inductance_checkbox.toggled.connect(self._on_inductance_changed)
+        induct_grid.addWidget(self.inductance_checkbox, 3, 0, 1, 2)
+        left_layout.addWidget(induct_box)
 
         cap_box = QGroupBox("Low-frequency capacitance")
         cap_grid = QGridLayout(cap_box)
@@ -215,6 +247,20 @@ class EisTab(QWidget):
         )
         right_layout.addWidget(results_splitter, stretch=1)
 
+        table_actions_row = QHBoxLayout()
+        remove_rows_btn = QPushButton("🗑 Remove selected row(s) & redraw")
+        remove_rows_btn.setToolTip(
+            "Excludes the row(s) currently selected in the table above "
+            "(click a row, Shift/Ctrl-click for more) from this file's "
+            "data -- e.g. to drop an obvious outlier point -- then "
+            "re-plots the Nyquist curve from what's left. Only affects "
+            "this loaded copy of the data, never the original file."
+        )
+        remove_rows_btn.clicked.connect(self.on_remove_selected_rows)
+        table_actions_row.addWidget(remove_rows_btn)
+        table_actions_row.addStretch()
+        right_layout.addLayout(table_actions_row)
+
         diagram_export_row = QHBoxLayout()
         self.export_diagram_btn = QPushButton("⬇ Export circuit diagram as image…")
         self.export_diagram_btn.setEnabled(False)
@@ -310,7 +356,7 @@ class EisTab(QWidget):
         else:
             self._on_cycle_column_changed()
 
-        self.table_model.set_dataframe(df.head(500))
+        self.table_model.set_dataframe(df)
 
     def _on_cycle_column_changed(self):
         self.cycle_value_combo.blockSignals(True)
@@ -336,7 +382,7 @@ class EisTab(QWidget):
             return
         df = self._current_df()
         if df is not None:
-            self.table_model.set_dataframe(df.head(500))
+            self.table_model.set_dataframe(df)
         # refresh the Nyquist preview automatically if columns are already picked
         if "-- select --" not in (self.zre_combo.currentText(), self.zim_combo.currentText(),
                                    self.freq_combo.currentText()):
@@ -356,7 +402,12 @@ class EisTab(QWidget):
         cycle_value = self.cycle_value_combo.currentData()
         return self.df[self.df[col] == cycle_value]
 
-    def _get_eis_arrays(self):
+    def _get_eis_arrays_raw(self):
+        """freq/Z_re/Z_im exactly as loaded and column-mapped, with NO
+        inductance correction applied -- used directly by
+        on_autodetect_inductance (fitting L from data that already had L
+        subtracted would be circular) and as the base for
+        _get_eis_arrays()."""
         if self.df is None:
             QMessageBox.warning(self, "No data", "Load a file first.")
             return None
@@ -385,6 +436,78 @@ class EisTab(QWidget):
 
         order = np.argsort(-freq)  # high to low frequency, standard Nyquist trace order
         return freq[order], zre[order], zim[order]
+
+    def _get_eis_arrays(self):
+        """freq/Z_re/Z_im with the series-inductance correction applied if
+        the user has checked "Remove this inductance" -- the single choke
+        point every calculation/fit in this tab reads through, so toggling
+        the checkbox transparently affects preview, capacitance,
+        conductivity, and circuit fitting alike without ever mutating
+        self.df."""
+        raw = self._get_eis_arrays_raw()
+        if raw is None:
+            return None
+        freq, zre, zim = raw
+        if self.inductance_checkbox.isChecked():
+            l_henries = self.inductance_spin.value() * 1e-6  # µH -> H
+            zre, zim = eis.remove_inductance(freq, zre, zim, l_henries)
+        return freq, zre, zim
+
+    def on_autodetect_inductance(self):
+        raw = self._get_eis_arrays_raw()
+        if raw is None:
+            return
+        freq, _zre, zim = raw
+        try:
+            l_henries = eis.fit_inductance_from_high_frequency(freq, zim)
+        except ValueError as e:
+            QMessageBox.warning(self, "No inductive loop found", str(e))
+            return
+        self.inductance_spin.blockSignals(True)
+        self.inductance_spin.setValue(l_henries * 1e6)  # H -> µH
+        self.inductance_spin.blockSignals(False)
+        self.inductance_checkbox.setChecked(True)
+        show_toast(
+            self,
+            f"Fitted series inductance L = {l_henries * 1e6:.4g} µH from the high-frequency "
+            "inductive loop -- now applied to all analyses below (uncheck to remove).",
+        )
+
+    def _on_inductance_changed(self):
+        if self.df is None:
+            return
+        if "-- select --" not in (self.zre_combo.currentText(), self.zim_combo.currentText(),
+                                   self.freq_combo.currentText()):
+            self.on_preview()
+
+    def on_remove_selected_rows(self):
+        if self.df is None:
+            QMessageBox.warning(self, "No data", "Load a file first.")
+            return
+        displayed_df = self._current_df()
+        sel = self.table.selectionModel()
+        rows = sorted({idx.row() for idx in sel.selectedIndexes()}) if sel is not None else []
+        if not rows:
+            QMessageBox.information(self, "Nothing selected", "Select one or more rows in the table first.")
+            return
+        # Drop by the ORIGINAL index labels of the selected rows, not raw
+        # positions -- when a cycle filter is active, `displayed_df` is a
+        # subset of self.df with non-contiguous labels, and those labels
+        # (not display positions) are what correctly identify the same
+        # rows back in the unfiltered self.df.
+        labels_to_drop = displayed_df.index[rows]
+        new_df = self.df.drop(index=labels_to_drop).reset_index(drop=True)
+        if new_df.empty:
+            QMessageBox.warning(self, "Cannot remove all rows", "At least one row must remain.")
+            return
+        self.df = new_df
+        self._on_cycle_column_changed()  # cycle-value list may need to shrink
+        self.table_model.set_dataframe(self._current_df())
+        self.status_label.setText(f"Loaded {len(self.df)} rows, {len(self.df.columns)} columns (rows removed)")
+        if "-- select --" not in (self.zre_combo.currentText(), self.zim_combo.currentText(),
+                                   self.freq_combo.currentText()):
+            self.on_preview()
+        show_toast(self, f"Removed {len(rows)} row(s) -- {len(self.df)} rows remain.")
 
     def on_preview(self):
         data = self._get_eis_arrays()

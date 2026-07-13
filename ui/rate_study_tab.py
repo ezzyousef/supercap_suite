@@ -581,7 +581,30 @@ class CvRateTool(QWidget):
             "Outer fraction of total (%)": result.outer_fraction_percent,
             "Inner fraction of total (%)": result.inner_fraction_percent,
         }
-        self.last_raw_df = pd.DataFrame({"scan_rate_v_per_s": rates, "capacitance_f_per_g": caps})
+        # Trasatti's method is defined by TWO linear extrapolations, not
+        # one -- the "outer" plot (Q* vs v^-1/2, extrapolated to v->inf)
+        # drawn above, AND a "total" plot (1/Q* vs v^0.5, extrapolated to
+        # v->0) that trasatti_analysis() already computes
+        # (total_fit_slope/intercept) but this tab has only ever plotted
+        # the first one on screen. Export both graphs' exact X/Y (data
+        # points AND fit line) here so "export" gives the complete
+        # Trasatti calculation, not just the raw (rate, capacitance)
+        # input pairs -- same column-count convenience the outer/total
+        # split already gets in the results text/card above.
+        sqrt_v = np.sqrt(rates)
+        inv_q = 1.0 / caps
+        fit_outer = result.outer_fit_slope * inv_sqrt_v + result.outer_fit_intercept
+        fit_total = result.total_fit_slope * sqrt_v + result.total_fit_intercept
+        self.last_raw_df = pd.DataFrame({
+            "scan_rate_v_per_s": rates,
+            "capacitance_f_per_g": caps,
+            "outer_graph_x_inv_sqrt_scan_rate": inv_sqrt_v,
+            "outer_graph_y_capacitance_f_per_g": caps,
+            "outer_graph_fit_y_capacitance_f_per_g": fit_outer,
+            "total_graph_x_sqrt_scan_rate": sqrt_v,
+            "total_graph_y_inv_capacitance_g_per_f": inv_q,
+            "total_graph_fit_y_inv_capacitance_g_per_f": fit_total,
+        })
         self.export_btn.setEnabled(True)
 
     def on_bvalue(self):
@@ -633,7 +656,18 @@ class CvRateTool(QWidget):
             "b-value": result.b_value,
             "Interpretation": interp,
         }
-        self.last_raw_df = pd.DataFrame({"scan_rate_v_per_s": rates, "peak_current_a": peaks})
+        # Export the literal plotted graph (log-log data points + the
+        # fitted line), not just the raw (rate, current) input pairs --
+        # matches what's actually drawn above so the exported sheet can
+        # reproduce the plot exactly.
+        fit_line = result.b_value * result.log_scan_rates + result.fit_intercept
+        self.last_raw_df = pd.DataFrame({
+            "scan_rate_v_per_s": rates,
+            "peak_current_a": peaks,
+            "graph_x_log_scan_rate": result.log_scan_rates,
+            "graph_y_log_peak_current_abs": result.log_peak_currents,
+            "graph_fit_y_log_peak_current_abs": fit_line,
+        })
         self.export_btn.setEnabled(True)
 
     def on_randles_sevcik(self):

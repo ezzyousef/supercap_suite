@@ -141,6 +141,90 @@ def bulk_resistance_from_nyquist(z_re_ohm: np.ndarray, z_im_ohm: np.ndarray,
 
 
 # ---------------------------------------------------------------------------
+# Series inductance removal (cable/connector high-frequency artifact)
+# ---------------------------------------------------------------------------
+#
+# A stray series inductance (test-lead/cable/connector geometry, not a
+# property of the cell) adds Z_L = j*omega*L in series with everything
+# else, which only ever affects the IMAGINARY part of the impedance --
+# Re(Z) is untouched by a pure inductor. On a standard Nyquist plot
+# (-Im(Z) vs. Re(Z)) this shows up as the trace dipping BELOW the real
+# axis at the highest frequencies (an "inductive loop"), since Im(Z)
+# becomes positive there instead of the usual negative/capacitive sign.
+# This is a well-known, standard EIS artifact -- see e.g. Metrohm/Autolab
+# Application Note AN-EIS-004 (already cited in circuit_library.py for
+# this app's optional series-L toggle on every preset circuit) and
+# BioLogic EC-Lab's own "modified inductor" element (this app's "La",
+# also cross-checked against EC-Lab's manual). Subtracting a known/fitted
+# L from the raw data is a standard preprocessing step to see the
+# underlying (semicircle/diffusion) response without it.
+
+def fit_inductance_from_high_frequency(frequency_hz: np.ndarray, z_im_ohm: np.ndarray,
+                                        min_points: int = 3) -> float:
+    """Estimate a series inductance (H) from the portion of the spectrum
+    where Im(Z) is POSITIVE -- the genuinely inductive region. This is a
+    deliberately strict criterion rather than "the top X% of points by
+    frequency": a capacitor or CPE (0 < n <= 1) can only ever contribute
+    a NEGATIVE imaginary part, so a positive Im(Z) cannot be explained by
+    anything else in a normal EDLC/pseudocapacitive circuit and is
+    unambiguous evidence of inductance. Using a fixed high-frequency
+    fraction instead was tried first and rejected: for a small inductance
+    relative to the rest of the circuit's own frequency-dependent
+    imaginary contribution, the top-N-percent window can still be
+    dominated by the CPE's own curvature rather than the inductive
+    signal, producing a badly wrong (even wrong-SIGN) fitted L --
+    confirmed by a synthetic test where "top 15% by frequency" recovered
+    L off by more than 10x with the wrong sign, while restricting to
+    Im(Z) > 0 does not have this failure mode (there simply aren't any
+    such points if the inductance is too small to matter, and the
+    function raises rather than returning a meaningless number).
+
+    Once restricted to Im(Z) > 0 points, Im(Z) ~= omega*L is fit as a
+    zero-intercept least-squares slope of Im(Z) vs. omega.
+
+    Raises ValueError if fewer than `min_points` points have Im(Z) > 0 --
+    i.e. this spectrum doesn't show a genuine inductive loop (or not
+    enough of one to fit reliably), which is itself useful information:
+    don't "remove" an inductance that was never actually there.
+    """
+    f = np.asarray(frequency_hz, dtype=float)
+    zi = np.asarray(z_im_ohm, dtype=float)
+    if len(f) != len(zi) or len(f) == 0:
+        raise ValueError("frequency_hz and z_im_ohm must be equal-length, non-empty arrays")
+
+    inductive = zi > 0
+    if int(np.sum(inductive)) < min_points:
+        raise ValueError(
+            f"No inductive loop found (need at least {min_points} points with Im(Z) > 0, "
+            f"found {int(np.sum(inductive))}) -- this spectrum doesn't show a high-frequency "
+            "inductive artifact to remove, or it's too small/noisy to fit reliably."
+        )
+    omega = 2 * np.pi * f[inductive]
+    denom = float(np.sum(omega ** 2))
+    if denom <= 0:
+        raise ValueError("Cannot fit an inductance from a single (or zero-frequency) point")
+    return float(np.sum(omega * zi[inductive]) / denom)
+
+
+def remove_inductance(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.ndarray,
+                       inductance_h: float) -> tuple[np.ndarray, np.ndarray]:
+    """Subtract a series inductance's contribution from measured impedance
+    data: Z_corrected = Z_measured - j*omega*L. Re(Z) is returned
+    unchanged (a pure inductor has no real part); only Im(Z) is corrected.
+    `inductance_h` may be negative (subtracting a negative L adds
+    impedance back) -- this function does not assume its sign.
+    """
+    f = np.asarray(frequency_hz, dtype=float)
+    zre = np.asarray(z_re_ohm, dtype=float)
+    zim = np.asarray(z_im_ohm, dtype=float)
+    if not (len(f) == len(zre) == len(zim)):
+        raise ValueError("frequency_hz, z_re_ohm, and z_im_ohm must be equal-length arrays")
+    omega = 2 * np.pi * f
+    zim_corrected = zim - omega * inductance_h
+    return zre.copy(), zim_corrected
+
+
+# ---------------------------------------------------------------------------
 # Equivalent circuit fitting (complex nonlinear least squares)
 # ---------------------------------------------------------------------------
 #

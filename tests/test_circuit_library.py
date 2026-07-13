@@ -347,3 +347,55 @@ def test_cpe_reduces_to_ideal_capacitor_when_n_equals_one():
     z_q = cl.evaluate_circuit(("elem", "Q", "x"), omega, {"x_Y0": 1e-4, "x_n": 1.0})
     z_c = cl.evaluate_circuit(("elem", "C", "x"), omega, {"x": 1e-4})
     np.testing.assert_allclose(z_q, z_c, rtol=1e-9)
+
+
+# ---------------------------------------------------------------- inductance removal
+
+def test_fit_inductance_from_high_frequency_recovers_known_inductance():
+    """A Randles-type circuit with a REAL series inductance large enough to
+    make Im(Z) cross positive at high frequency (the physically-required
+    signature of inductance -- a capacitor/CPE alone can never do this)
+    should have that inductance recovered by fit_inductance_from_high_frequency,
+    which restricts its fit to exactly the Im(Z) > 0 points."""
+    freq = np.logspace(5, -1, 80)
+    omega = 2 * np.pi * freq
+    L_true = 2e-6  # 2 microhenries -- large enough to show a visible loop
+    spec = cl.get_circuit("randles1_Q_none")
+    z = cl.evaluate_circuit(
+        spec.tree, omega,
+        {"Rs": 2.0, "Rct": 50.0, "Rct_cap_Y0": 5e-4, "Rct_cap_n": 0.92},
+    )
+    z_im_with_L = z.imag + omega * L_true
+    assert np.any(z_im_with_L > 0), "test setup should produce a visible inductive loop"
+
+    fitted_L = eis.fit_inductance_from_high_frequency(freq, z_im_with_L)
+    assert fitted_L == pytest.approx(L_true, rel=0.1)
+
+
+def test_fit_inductance_from_high_frequency_raises_without_an_inductive_loop():
+    """No positive Im(Z) anywhere (a pure capacitive/CPE spectrum, no stray
+    inductance) must raise rather than silently returning a meaningless
+    (and previously observed to be wrong-signed) number."""
+    freq = np.logspace(5, -1, 80)
+    omega = 2 * np.pi * freq
+    spec = cl.get_circuit("randles1_Q_none")
+    z = cl.evaluate_circuit(
+        spec.tree, omega,
+        {"Rs": 2.0, "Rct": 50.0, "Rct_cap_Y0": 5e-4, "Rct_cap_n": 0.92},
+    )
+    assert not np.any(z.imag > 0)
+    with pytest.raises(ValueError, match="No inductive loop"):
+        eis.fit_inductance_from_high_frequency(freq, z.imag)
+
+
+def test_remove_inductance_zeroes_out_a_pure_inductive_contribution():
+    freq = np.array([1e3, 1e4, 1e5])
+    omega = 2 * np.pi * freq
+    L = 5e-7
+    z_re = np.array([2.0, 2.0, 2.0])
+    z_im_baseline = np.array([-1.0, -0.5, -0.2])
+    z_im_with_L = z_im_baseline + omega * L
+
+    re_out, im_out = eis.remove_inductance(freq, z_re, z_im_with_L, L)
+    np.testing.assert_allclose(re_out, z_re)
+    np.testing.assert_allclose(im_out, z_im_baseline, atol=1e-9)

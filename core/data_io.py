@@ -69,7 +69,7 @@ def load_data_file(path: str, sheet_name=0) -> pd.DataFrame:
 
     if suffix in (".xlsx", ".xls"):
         try:
-            return pd.read_excel(p, sheet_name=sheet_name)
+            df = pd.read_excel(p, sheet_name=sheet_name)
         except ImportError as e:
             missing = "xlrd" if suffix == ".xls" else "openpyxl"
             raise DataLoadError(
@@ -81,6 +81,10 @@ def load_data_file(path: str, sheet_name=0) -> pd.DataFrame:
             ) from e
         except Exception as e:
             raise DataLoadError(f"Could not read Excel file '{p.name}': {e}") from e
+
+        if isinstance(df, dict):
+            return {name: _maybe_fix_multirow_header_excel(p, name, d) for name, d in df.items()}
+        return _maybe_fix_multirow_header_excel(p, sheet_name, df)
 
     if suffix in (".csv", ".txt"):
         return _load_csv(p)
@@ -112,12 +116,126 @@ def _load_csv(path: Path) -> pd.DataFrame:
         try:
             df = pd.read_csv(path, sep=sep, engine="python")
             if df.shape[1] > 1:
+                if _needs_header_rescan(df):
+                    try:
+                        raw = pd.read_csv(path, sep=sep, engine="python", header=None)
+                        fixed = _rescan_multirow_header(raw)
+                    except Exception:
+                        fixed = None
+                    if fixed is not None:
+                        return fixed
                 return df
         except Exception:
             continue
     raise DataLoadError(
         f"Could not parse '{path.name}' as comma-, tab-, or semicolon-delimited text."
     )
+
+
+def _maybe_fix_multirow_header_excel(path: Path, sheet_name, df: pd.DataFrame) -> pd.DataFrame:
+    """See _needs_header_rescan / _rescan_multirow_header: rebuilds `df`
+    from scratch (re-reading the sheet with header=None) if a plain
+    header=0 read looks like it landed on a free-text title row instead
+    of the real column headers. Falls back to the original `df` untouched
+    if the rescan can't confidently identify a header row, or if the
+    plain read already looks fine -- never makes an already-working file
+    worse."""
+    if not _needs_header_rescan(df):
+        return df
+    try:
+        raw = pd.read_excel(path, sheet_name=sheet_name, header=None)
+    except Exception:
+        return df
+    fixed = _rescan_multirow_header(raw)
+    return fixed if fixed is not None else df
+
+
+def _needs_header_rescan(df: pd.DataFrame) -> bool:
+    """True if a plain header=0 read produced a table where we don't
+    recognize any known logical column (time/voltage/current/heat-flow/
+    etc -- see COLUMN_ALIASES) AND no column parsed as numeric. That
+    combination is the fingerprint of an instrument export (common from
+    DSC software -- TA, Netzsch, Mettler-Toledo, ...) that puts a
+    free-text title row (e.g. "Ramp 10.00 C/min to 30.00 C") and/or a
+    separate units row ("C", "W/g", "min") before the real header row --
+    a plain header=0 read ends up using the title as column names and
+    swallowing the real header + units rows as if they were the first
+    two data rows, leaving every column as non-numeric object dtype with
+    unrecognizable names. A file that's already fine (e.g. a standard
+    EC-Lab export) will have at least one recognized alias or numeric
+    column and is left untouched."""
+    if any(find_column(df, key) is not None for key in COLUMN_ALIASES):
+        return False
+    return not any(pd.api.types.is_numeric_dtype(df[c]) for c in df.columns)
+
+
+def _row_looks_numeric(values) -> bool:
+    """True if all but at most one non-empty cell in this row parses as
+    a float -- used to detect a units row ("C", "W/g", "min") sitting
+    between the real header row and the actual numeric data."""
+    cells = [v for v in values if not (v is None or (isinstance(v, float) and pd.isna(v)) or str(v).strip() == "")]
+    if not cells:
+        return False
+    numeric = 0
+    for v in cells:
+        try:
+            float(v)
+            numeric += 1
+        except (TypeError, ValueError):
+            pass
+    return numeric >= max(1, len(cells) - 1)
+
+
+def _find_header_row(raw: pd.DataFrame, max_scan: int = 15) -> int | None:
+    """Scan the first `max_scan` rows of a header=None-read table for the
+    row most likely to be the real column-name row, scored by how many
+    cells match a known column alias (COLUMN_ALIASES), case-insensitively
+    and substring-tolerant. Returns None if no row scores above zero, in
+    which case the caller should leave the original table alone rather
+    than guess."""
+    all_aliases = set()
+    for alias_list in COLUMN_ALIASES.values():
+        all_aliases.update(alias_list)
+    all_aliases.update({"temperature", "heat flow", "time"})
+
+    best_row, best_score = None, 0
+    for i in range(min(max_scan, len(raw))):
+        score = 0
+        for v in raw.iloc[i]:
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                continue
+            text = str(v).strip().lower()
+            if not text:
+                continue
+            if any(alias == text or alias in text for alias in all_aliases):
+                score += 1
+        if score > best_score:
+            best_row, best_score = i, score
+    return best_row
+
+
+def _rescan_multirow_header(raw: pd.DataFrame) -> pd.DataFrame | None:
+    """Given a header=None-read raw table, locate the real header row
+    (_find_header_row) and rebuild a proper DataFrame from it, skipping a
+    units row immediately below the header if present (numeric data
+    doesn't start until after it). Returns None if no header row could
+    be confidently identified."""
+    header_idx = _find_header_row(raw)
+    if header_idx is None:
+        return None
+    columns = [str(c).strip() if not pd.isna(c) else f"col_{i}" for i, c in enumerate(raw.iloc[header_idx])]
+    data_start = header_idx + 1
+    if data_start < len(raw) and not _row_looks_numeric(raw.iloc[data_start]):
+        data_start += 1
+    body = raw.iloc[data_start:].reset_index(drop=True).copy()
+    body.columns = columns
+    for col in body.columns:
+        converted = pd.to_numeric(body[col], errors="coerce")
+        non_null = body[col].notna().sum()
+        if non_null > 0 and converted.notna().sum() >= max(1, int(0.5 * non_null)):
+            body[col] = converted
+    body = body.dropna(axis=0, how="all")
+    return body
 
 
 def _load_mpt(path: Path) -> pd.DataFrame:

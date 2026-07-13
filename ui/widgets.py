@@ -8,7 +8,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QTableView, QPushButton, QFileDialog, QInputDialog, QMessageBox, QLineEdit,
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QGroupBox, QSplitter,
-    QToolButton, QSizePolicy
+    QToolButton, QSizePolicy, QAbstractItemView
 )
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
@@ -356,7 +356,28 @@ def make_table_view() -> QTableView:
     tv.setAlternatingRowColors(True)
     tv.setFont(QFont("Consolas", 10))
     tv.horizontalHeader().setStretchLastSection(False)
+    # Row-based multi-select (click, Shift-click, Ctrl-click) rather than
+    # cell-based -- makes "select a bad data point's row" the natural
+    # gesture, and is what remove_selected_table_rows() below expects.
+    tv.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    tv.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
     return tv
+
+
+def remove_selected_table_rows(table: QTableView, df: pd.DataFrame) -> pd.DataFrame | None:
+    """Drop the rows currently selected in `table` (a view over `df`,
+    e.g. via DataFrameModel) from `df` and return the result with a fresh
+    0..N-1 index -- or None if nothing was selected, so callers can skip
+    re-drawing/re-fitting when there's nothing to do. Row POSITIONS
+    (iloc), not index labels, are used, since the table always displays
+    `df` in order starting at row 0."""
+    sel = table.selectionModel()
+    if sel is None:
+        return None
+    rows = sorted({idx.row() for idx in sel.selectedIndexes()}, reverse=True)
+    if not rows:
+        return None
+    return df.drop(df.index[rows]).reset_index(drop=True)
 
 
 def make_resizable_results_panel(*widgets, sizes: list[int] | None = None) -> QSplitter:
