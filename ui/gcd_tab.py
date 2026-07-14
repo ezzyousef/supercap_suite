@@ -449,6 +449,10 @@ class GcdTab(QWidget):
             QMessageBox.warning(self, "Invalid range", "End row must be greater than start row.")
             return None
         sub = self.df.iloc[start:end + 1]
+        # Keep the data table in sync with whichever segment/row-range is
+        # currently active, instead of always showing the whole raw file
+        # -- matches the CV/EIS tabs' cycle-filtered table behavior.
+        self.table_model.set_dataframe(sub)
         try:
             t = sub[tcol].astype(float).to_numpy()
             v = sub[vcol].astype(float).to_numpy()
