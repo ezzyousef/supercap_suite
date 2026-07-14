@@ -162,6 +162,19 @@ class EnthalpyTool(QWidget):
         col_grid.addWidget(self.x_type_combo, 1, 1)
         col_grid.addWidget(QLabel("Heat flow column (mW):"), 2, 0)
         col_grid.addWidget(self.y_combo, 2, 1)
+        self.temp_col_combo = QComboBox()
+        self.temp_col_combo.setToolTip(
+            "Only needed for the water-type breakdown below, and only if "
+            "X axis (above) isn't already Temperature: the free/freezable-"
+            "bound water split needs to know which part of the melting "
+            "peak occurs below 0 °C (depressed melting point = bound "
+            "water) vs. at/above it (free water) -- see the 'Symmetric/"
+            "total split' source button. If left unset and X axis isn't "
+            "Temperature, that split falls back to a less-accurate shape-"
+            "based heuristic."
+        )
+        col_grid.addWidget(QLabel("Temperature column (for water-type split):"), 3, 0)
+        col_grid.addWidget(self.temp_col_combo, 3, 1)
         col_section.addLayout(col_grid)
         self.data_section.addWidget(col_section)
 
@@ -206,9 +219,30 @@ class EnthalpyTool(QWidget):
         seg_grid.addWidget(self.start_spin, 1, 1)
         seg_grid.addWidget(QLabel("Peak end row:"), 2, 0)
         seg_grid.addWidget(self.end_spin, 2, 1)
+        self.baseline_avg_spin = QSpinBox()
+        self.baseline_avg_spin.setRange(1, 50)
+        self.baseline_avg_spin.setValue(5)
+        self.baseline_avg_spin.setToolTip(
+            "Number of points averaged at each end of the peak region to "
+            "anchor the straight-line baseline, instead of reading a "
+            "single raw sample exactly at the start/end row. Anchoring a "
+            "baseline to one noisy sample is a common cause of erratic "
+            "peak areas -- commercial DSC software avoids this by "
+            "averaging a small flanking span instead. Set to 1 to restore "
+            "the old single-point behavior. This is a genuine trade-off, "
+            "not a one-directional fix: a larger span rejects more anchor "
+            "noise, but only helps if the flanking region you selected is "
+            "actually flat -- if the start/end row still sits on the "
+            "peak's tail, a larger average reaches further into that "
+            "tail and biases the baseline. Judge it from the plotted "
+            "baseline overlay (Preview button), not just from a single "
+            "number going up or down."
+        )
+        seg_grid.addWidget(QLabel("Baseline anchor averaging (points):"), 3, 0)
+        seg_grid.addWidget(self.baseline_avg_spin, 3, 1)
         preview_btn = QPushButton("Preview peak + baseline")
         preview_btn.clicked.connect(self.on_preview)
-        seg_grid.addWidget(preview_btn, 3, 0, 1, 2)
+        seg_grid.addWidget(preview_btn, 4, 0, 1, 2)
         seg_section.addLayout(seg_grid)
         self.data_section.addWidget(seg_section)
 
@@ -395,6 +429,9 @@ class EnthalpyTool(QWidget):
             combo.clear()
             combo.addItem("-- select --")
             combo.addItems([str(c) for c in cols])
+        self.temp_col_combo.clear()
+        self.temp_col_combo.addItem("-- none / same as X axis --")
+        self.temp_col_combo.addItems([str(c) for c in cols])
         t_guess = find_column(df, "time_s")
         temp_guess = find_column(df, "temp_c")
         y_guess = find_column(df, "heat_flow")
@@ -406,6 +443,8 @@ class EnthalpyTool(QWidget):
             self.x_type_combo.setCurrentIndex(1)
         if y_guess:
             self.y_combo.setCurrentText(y_guess)
+        if temp_guess:
+            self.temp_col_combo.setCurrentText(temp_guess)
 
         if self.x_combo.currentIndex() == 0 or self.y_combo.currentIndex() == 0:
             # Header text didn't match any known alias -- DSC instrument
@@ -497,6 +536,28 @@ class EnthalpyTool(QWidget):
                 continue
             x, y = x[valid], y[valid]
 
+            # Temperature array for the zero/subzero water-type split (see
+            # dsc.zero_and_subzero_peak_areas): if X axis already IS
+            # temperature, reuse it directly (still in its own original
+            # units/positions, since only `t` gets recomputed below); if
+            # X axis is time, look for a separate temperature column by
+            # the same alias search each file's own columns were resolved
+            # with. None if neither is available -- the water-type block
+            # below falls back to the shape-based heuristic in that case,
+            # same as the single-file EnthalpyTool.
+            if x_is_time:
+                temp_col_name = find_column(df, "temp_c")
+                temp = None
+                if temp_col_name:
+                    try:
+                        temp_raw = df[temp_col_name].astype(float).to_numpy()
+                    except (ValueError, TypeError):
+                        temp_raw = None
+                    if temp_raw is not None and len(temp_raw) == len(valid):
+                        temp = temp_raw[valid]
+            else:
+                temp = x
+
             if x_is_time:
                 t = x - x[0]
             else:
@@ -511,7 +572,9 @@ class EnthalpyTool(QWidget):
 
             t_win = t[peak.start_index:peak.end_index + 1]
             y_win = y[peak.start_index:peak.end_index + 1]
-            baseline = dsc.linear_baseline(t_win, y_win, 0, len(t_win) - 1)
+            temp_win = temp[peak.start_index:peak.end_index + 1] if temp is not None else None
+            baseline_avg = self.baseline_avg_spin.value()
+            baseline = dsc.linear_baseline(t_win, y_win, 0, len(t_win) - 1, anchor_avg_points=baseline_avg)
             try:
                 area_j = dsc.integrate_dsc_peak(t_win, y_win, baseline_mw=baseline)
             except ValueError as e:
@@ -519,14 +582,23 @@ class EnthalpyTool(QWidget):
                 continue
 
             try:
-                accuracy = dsc.check_integration_accuracy(t_win, y_win, 0, len(t_win) - 1)
+                accuracy = dsc.check_integration_accuracy(t_win, y_win, 0, len(t_win) - 1, anchor_avg_points=baseline_avg)
             except ValueError:
                 accuracy = None
-            local_peak_idx = int(np.argmax(np.abs(y_win - baseline)))
-            try:
-                symmetry = dsc.symmetric_and_total_peak_areas(t_win, y_win, baseline, local_peak_idx, 0, len(t_win) - 1)
-            except ValueError:
-                symmetry = None
+
+            zero_subzero = None
+            if temp_win is not None:
+                try:
+                    zero_subzero = dsc.zero_and_subzero_peak_areas(t_win, y_win, baseline, temp_win, 0, len(t_win) - 1)
+                except ValueError:
+                    zero_subzero = None
+            symmetry = None
+            if zero_subzero is None:
+                local_peak_idx = int(np.argmax(np.abs(y_win - baseline)))
+                try:
+                    symmetry = dsc.symmetric_and_total_peak_areas(t_win, y_win, baseline, local_peak_idx, 0, len(t_win) - 1)
+                except ValueError:
+                    symmetry = None
 
             dlg = _DscBatchMassDialog(self, fname)
             if dlg.exec() != QDialog.DialogCode.Accepted:
@@ -555,7 +627,9 @@ class EnthalpyTool(QWidget):
                 row["Integration: boundary sensitivity (%)"] = accuracy.boundary_sensitivity_percent
 
             if water_mass > 0 and dry_mass > 0:
-                if symmetry is not None:
+                if zero_subzero is not None:
+                    symmetric_area, total_area = zero_subzero.subzero_area_j, zero_subzero.total_area_j
+                elif symmetry is not None:
                     symmetric_area, total_area = symmetry.symmetric_area_j, symmetry.total_area_j
                 else:
                     symmetric_area, total_area = area_j, area_j
@@ -569,6 +643,10 @@ class EnthalpyTool(QWidget):
                     row["Water-type calculation error"] = str(e)
                 else:
                     row.update({
+                        "Water-type split method": (
+                            "temperature-threshold (0°C)" if zero_subzero is not None
+                            else "shape-based heuristic (fallback)"
+                        ),
                         "W_t, total water (g/g)": wr.total_water_content,
                         "W_f, freezable water (g/g)": wr.freezable_water_content,
                         "W_nb, non-freezable bound (g/g)": wr.non_freezable_bound_water,
@@ -589,11 +667,15 @@ class EnthalpyTool(QWidget):
         QMessageBox.information(self, "Batch import complete", summary)
 
     def _get_full_time_and_heatflow(self):
-        """Time/heat-flow for the WHOLE loaded curve (ignores the peak
-        start/end row spinboxes) -- used by auto-peak-detection, which
-        needs to search the entire curve, not just an already-selected
-        sub-range. Row indices returned by detection are directly valid
-        as `self.df` row numbers (same convention the spinboxes use)."""
+        """Time/heat-flow (+ temperature, for the water-type zero/subzero
+        split) for the WHOLE loaded curve (ignores the peak start/end row
+        spinboxes) -- used by auto-peak-detection, which needs to search
+        the entire curve, not just an already-selected sub-range. Row
+        indices returned by detection are directly valid as `self.df` row
+        numbers (same convention the spinboxes use). Returns (t, y, temp)
+        -- temp is None if X axis isn't Temperature and no separate
+        temperature column was selected (callers needing it for the
+        water-type split must handle that fallback explicitly)."""
         if self.df is None:
             QMessageBox.warning(self, "No data", "Load a file first.")
             return None
@@ -608,25 +690,43 @@ class EnthalpyTool(QWidget):
             QMessageBox.critical(self, "Data error", "Selected columns are not numeric.")
             return None
 
-        # Drop rows where either column is missing (NaN) -- real instrument
-        # exports sometimes have scattered logging gaps (a handful of rows
-        # out of thousands). Even a tiny fraction of NaNs left in is enough
-        # to poison a np.max/np.ptp-style range calculation in peak
-        # detection to NaN, making every "is this prominent enough"
-        # comparison silently False and producing a false "No clear peak
-        # found" on data that does have a real peak. Row POSITIONS shift
-        # after this, but detect_dsc_peak's returned indices and this
-        # tab's start/end row spinboxes both index into THIS (already
-        # NaN-dropped) array consistently, since every caller goes through
-        # this same method.
+        x_is_temp = self.x_type_combo.currentIndex() == 1
+        temp_col = self.temp_col_combo.currentText()
+        temp = None
+        if x_is_temp:
+            temp = x.copy()
+        elif temp_col not in ("-- none / same as X axis --", "-- select --", ""):
+            try:
+                temp = self.df[temp_col].astype(float).to_numpy()
+            except (ValueError, TypeError):
+                temp = None
+
+        # Drop rows where any REQUIRED column is missing (NaN) -- real
+        # instrument exports sometimes have scattered logging gaps (a
+        # handful of rows out of thousands). Even a tiny fraction of NaNs
+        # left in is enough to poison a np.max/np.ptp-style range
+        # calculation in peak detection to NaN, making every "is this
+        # prominent enough" comparison silently False and producing a
+        # false "No clear peak found" on data that does have a real peak.
+        # Row POSITIONS shift after this, but detect_dsc_peak's returned
+        # indices and this tab's start/end row spinboxes both index into
+        # THIS (already NaN-dropped) array consistently, since every
+        # caller goes through this same method. Temperature is NOT part
+        # of the validity mask on its own (a NaN gap in a separately-
+        # selected temperature column shouldn't throw away otherwise-good
+        # x/y rows) -- it's simply carried along at whatever positions
+        # survive the x/y mask, and set to None entirely if it can't be
+        # aligned.
         valid = ~(np.isnan(x) | np.isnan(y))
         if not np.any(valid):
             QMessageBox.warning(self, "No valid data", "The selected columns contain no valid (non-missing) rows.")
             return None
         if not np.all(valid):
             x, y = x[valid], y[valid]
+            if temp is not None:
+                temp = temp[valid]
 
-        if self.x_type_combo.currentIndex() == 1:
+        if x_is_temp:
             rate_c_per_s = self.scan_rate_spin.value() / 60.0
             if rate_c_per_s <= 0:
                 QMessageBox.warning(self, "Invalid scan rate", "Scan rate must be positive.")
@@ -634,7 +734,7 @@ class EnthalpyTool(QWidget):
             t = np.abs(x - x[0]) / rate_c_per_s
         else:
             t = x - x[0]
-        return t, y
+        return t, y, temp
 
     def _get_time_and_heatflow(self):
         if self.df is None:
@@ -647,15 +747,16 @@ class EnthalpyTool(QWidget):
         full = self._get_full_time_and_heatflow()
         if full is None:
             return None
-        t, y = full
-        return t[start:end + 1], y[start:end + 1]
+        t, y, temp = full
+        temp_slice = temp[start:end + 1] if temp is not None else None
+        return t[start:end + 1], y[start:end + 1], temp_slice
 
     def on_preview(self):
         data = self._get_time_and_heatflow()
         if data is None:
             return
-        t, y = data
-        baseline = dsc.linear_baseline(t, y, 0, len(t) - 1)
+        t, y, _temp = data
+        baseline = dsc.linear_baseline(t, y, 0, len(t) - 1, anchor_avg_points=self.baseline_avg_spin.value())
         self.plot.ax.clear()
         self.plot.ax.plot(t, y, "-", color=theme.RAW, linewidth=1.3, label="Heat flow (raw)")
         self.plot.ax.plot(t, baseline, "--", color=theme.FIT, linewidth=1.3, label="Linear baseline")
@@ -670,7 +771,7 @@ class EnthalpyTool(QWidget):
         full = self._get_full_time_and_heatflow()
         if full is None:
             return
-        t_full, y_full = full
+        t_full, y_full, _temp_full = full
         try:
             peak = dsc.detect_dsc_peak(t_full, y_full)
         except ValueError as e:
@@ -692,8 +793,8 @@ class EnthalpyTool(QWidget):
         data = self._get_time_and_heatflow()
         if data is None:
             return
-        t, y = data
-        baseline = dsc.linear_baseline(t, y, 0, len(t) - 1)
+        t, y, temp = data
+        baseline = dsc.linear_baseline(t, y, 0, len(t) - 1, anchor_avg_points=self.baseline_avg_spin.value())
         try:
             area_j = dsc.integrate_dsc_peak(t, y, baseline_mw=baseline)
             dh = dsc.enthalpy_j_per_g(area_j, self.mass_spin.value())
@@ -713,22 +814,44 @@ class EnthalpyTool(QWidget):
         # chi-squared on the EIS fit tab, computed here so it applies to
         # every peak (auto-detected or manually selected), not just batch.
         try:
-            accuracy = dsc.check_integration_accuracy(t, y, 0, len(t) - 1)
+            accuracy = dsc.check_integration_accuracy(t, y, 0, len(t) - 1, anchor_avg_points=self.baseline_avg_spin.value())
         except ValueError:
             accuracy = None
 
-        # Automated symmetric/total peak-area split (mirror-about-apex
-        # heuristic, see core.dsc_analysis.symmetric_and_total_peak_areas)
-        # so the water-type breakdown below doesn't have to fall back to
-        # the "symmetric == total == this peak" placeholder -- the local
-        # peak position is wherever THIS window deviates most from its
-        # own baseline, which works for both auto-detected and manually
-        # selected regions.
-        local_peak_idx = int(np.argmax(np.abs(y - baseline)))
-        try:
-            symmetry = dsc.symmetric_and_total_peak_areas(t, y, baseline, local_peak_idx, 0, len(t) - 1)
-        except ValueError:
-            symmetry = None
+        # Water-type peak-area split: prefer the temperature-thresholded
+        # zero/subzero split (validated to 5-6 significant figures against
+        # the source paper's own worked spreadsheet, D:\AUC\PPA-PAM
+        # Paper\Excells\Calculations of water (version 1).xlsx -- the
+        # portion of the melting endotherm occurring BELOW 0 degC is
+        # freezable BOUND water, via melting-point depression/Gibbs-
+        # Thomson confinement, and the portion AT/ABOVE 0 degC is free
+        # water) whenever a temperature array is available. Only fall
+        # back to the older shape-based mirror-about-apex heuristic (see
+        # core.dsc_analysis.symmetric_and_total_peak_areas) when no
+        # temperature data was selected, and flag that fallback explicitly
+        # rather than silently using the less-accurate method.
+        symmetry = None
+        zero_subzero = None
+        split_method_warning = None
+        if temp is not None:
+            try:
+                zero_subzero = dsc.zero_and_subzero_peak_areas(t, y, baseline, temp, 0, len(t) - 1)
+            except ValueError:
+                zero_subzero = None
+        if zero_subzero is None:
+            local_peak_idx = int(np.argmax(np.abs(y - baseline)))
+            try:
+                symmetry = dsc.symmetric_and_total_peak_areas(t, y, baseline, local_peak_idx, 0, len(t) - 1)
+            except ValueError:
+                symmetry = None
+            if temp is None:
+                split_method_warning = (
+                    "No temperature data available -- the free/freezable-bound water "
+                    "split below uses a less-accurate shape-based heuristic instead of "
+                    "the validated temperature-threshold (0°C) method. Select a "
+                    "Temperature column (or set X axis = Temperature) above for the "
+                    "accurate split."
+                )
 
         lines = [
             f"Peak area (baseline-corrected) = {area_j:.6f} J",
@@ -767,7 +890,15 @@ class EnthalpyTool(QWidget):
         water_mass = self.water_mass_spin.value()
         dry_mass = self.dry_mass_spin.value()
         if water_mass > 0 and dry_mass > 0:
-            if symmetry is not None:
+            if zero_subzero is not None:
+                symmetric_area, total_area = zero_subzero.subzero_area_j, zero_subzero.total_area_j
+                split_note = (
+                    f"free/bound split from the melting peak's temperature profile "
+                    f"(subzero={symmetric_area:.6f} J, total={total_area:.6f} J, "
+                    f"{zero_subzero.subzero_fraction:.1%} of the peak area occurs below "
+                    "0°C -- see the Formula source button for the method):"
+                )
+            elif symmetry is not None:
                 symmetric_area, total_area = symmetry.symmetric_area_j, symmetry.total_area_j
                 split_note = (
                     f"symmetric/total component areas auto-split from this peak's own "
@@ -778,6 +909,13 @@ class EnthalpyTool(QWidget):
             else:
                 symmetric_area, total_area = area_j, area_j
                 split_note = "symmetric/total component areas = this peak's area (fallback: peak shape too small to auto-split):"
+            split_area_label = (
+                "Subzero (bound-water) peak component area (J)" if zero_subzero is not None
+                else "Symmetric (bulk-like) peak component area (J)"
+            )
+            if split_method_warning:
+                lines.append(f"  Note: {split_method_warning}")
+                card_warnings.append(split_method_warning)
             try:
                 water_result = dsc.classify_water_types(
                     mass_water_g=water_mass, mass_dry_g=dry_mass,
@@ -808,7 +946,11 @@ class EnthalpyTool(QWidget):
                 self.last_result.update({
                     "Mass of water m_w (g)": water_mass,
                     "Mass of dry sample m_d (g)": dry_mass,
-                    "Symmetric (bulk-like) peak component area (J)": symmetric_area,
+                    "Water-type split method": (
+                        "temperature-threshold (0°C)" if zero_subzero is not None
+                        else "shape-based heuristic (fallback)"
+                    ),
+                    split_area_label: symmetric_area,
                     "Total peak area (J)": total_area,
                     "Total water content W_t (g/g)": water_result.total_water_content,
                     "Freezable water content W_f (g/g)": water_result.freezable_water_content,
@@ -843,7 +985,10 @@ class EnthalpyTool(QWidget):
         self.plot.fig.tight_layout()
         self.plot.draw()
 
-        self.last_raw_df = pd.DataFrame({"time_s": t, "heat_flow_mw": y, "baseline_mw": baseline})
+        raw_cols = {"time_s": t, "heat_flow_mw": y, "baseline_mw": baseline}
+        if temp is not None:
+            raw_cols["temperature_c"] = temp
+        self.last_raw_df = pd.DataFrame(raw_cols)
         self.export_btn.setEnabled(True)
 
     def _emit_peak_area(self):

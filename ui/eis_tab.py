@@ -9,7 +9,7 @@ import pandas as pd
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel,
     QComboBox, QDoubleSpinBox, QFileDialog, QMessageBox, QGroupBox,
-    QTextEdit, QSplitter, QApplication, QCheckBox
+    QTextEdit, QSplitter, QApplication, QCheckBox, QInputDialog
 )
 from PySide6.QtCore import Qt
 
@@ -32,6 +32,7 @@ class EisTab(QWidget):
         self.df: pd.DataFrame | None = None
         self.last_result: dict | None = None
         self.last_raw_df: pd.DataFrame | None = None
+        self.batch_df: pd.DataFrame | None = None
         # Keep a reference to whichever fit worker is currently running --
         # QThread objects with no live Python reference can be garbage-
         # collected mid-run, which would silently kill the fit.
@@ -54,6 +55,26 @@ class EisTab(QWidget):
         file_row.addWidget(self.status_label)
         file_row.addStretch()
         root.addLayout(file_row)
+
+        batch_row = QHBoxLayout()
+        self.batch_btn = QPushButton("📚 Import multiple EIS files (batch fit)…")
+        self.batch_btn.setToolTip(
+            "Loads several EIS spectra at once (one sample/run per file); "
+            "for each one, auto-detects Z real/Z imaginary/frequency "
+            "columns (prompting for which cycle to use if the file has "
+            "more than one spectrum stacked in it), then fits the "
+            "CURRENTLY SELECTED circuit below to every spectrum -- "
+            "collecting one row per file (fitted parameters + reduced "
+            "χ²) in the batch results table. Runs in the background, the "
+            "window stays responsive. Uses the same series-inductance-"
+            "removal and Im(Z) sign-convention settings as the single-"
+            "file flow above, which stays available for closer "
+            "inspection of one spectrum at a time."
+        )
+        self.batch_btn.clicked.connect(self.on_import_multi_files)
+        batch_row.addWidget(self.batch_btn)
+        batch_row.addStretch()
+        root.addLayout(batch_row)
 
         splitter = QSplitter(Qt.Horizontal)
         root.addWidget(splitter, stretch=1)
@@ -307,6 +328,20 @@ class EisTab(QWidget):
         self.record_panel = RecordLogPanel("EIS")
         self.record_panel.bind(lambda: self.last_result)
         right_layout.addWidget(self.record_panel)
+
+        batch_section = CollapsibleSection("Batch results (multiple files)")
+        self.batch_table = make_table_view()
+        self.batch_table_model = DataFrameModel()
+        self.batch_table.setModel(self.batch_table_model)
+        self.batch_table.setMinimumHeight(160)
+        batch_section.addWidget(self.batch_table)
+        self.batch_export_btn = make_export_button(
+            self, "EIS batch", lambda: {"Files in batch table": len(self.batch_df) if self.batch_df is not None else 0},
+            lambda: self.batch_df,
+            source_note="EIS batch import (multiple files) — Supercapacitor & DSC Analysis Suite",
+        )
+        batch_section.addWidget(self.batch_export_btn)
+        right_layout.addWidget(batch_section)
 
         splitter.addWidget(right)
         splitter.setSizes([420, 700])
@@ -671,7 +706,7 @@ class EisTab(QWidget):
         self.export_diagram_btn.setEnabled(False)
 
     def _fit_control_buttons(self) -> list:
-        return [self.fit_btn, self.auto_btn, self.clear_btn]
+        return [self.fit_btn, self.auto_btn, self.clear_btn, self.batch_btn]
 
     def on_fit(self):
         if self._fit_worker is not None:
@@ -823,6 +858,129 @@ class EisTab(QWidget):
         draw_circuit(self.circuit_diagram.fig, spec, params=result.params)
         self.circuit_diagram.draw()
         self.export_diagram_btn.setEnabled(True)
+
+    def on_import_multi_files(self):
+        if self._fit_worker is not None:
+            QMessageBox.information(self, "Fit already running", "Wait for the current fit/auto-fit to finish first.")
+            return
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Import multiple EIS files (batch)", "",
+            "Data files (*.xlsx *.xls *.csv *.txt *.mpt *.mpr);;All files (*)"
+        )
+        if not paths:
+            return
+        model = self.model_combo.currentData()
+        if not model:
+            QMessageBox.warning(self, "No circuit selected", "Choose a circuit from the list first.")
+            return
+
+        zim_sign_idx = self.zim_sign_combo.currentIndex()
+        inductance_on = self.inductance_checkbox.isChecked()
+        l_henries = self.inductance_spin.value() * 1e-6
+
+        # Loading files, auto-detecting columns, and any per-file cycle
+        # dialog all touch Qt widgets/dialogs, so this whole pass runs on
+        # the MAIN thread first; only the numerically-heavy circuit fits
+        # (pure numpy/scipy, no Qt) run inside the background worker below.
+        prepared, failures = [], []
+        for path in paths:
+            fname = Path(path).name
+            try:
+                df = load_data_file(path, sheet_name=0)
+            except DataLoadError as e:
+                failures.append(f"{fname}: {e}")
+                continue
+            if isinstance(df, dict):
+                df = list(df.values())[0]
+
+            zre_col = find_column(df, "z_re")
+            zim_col = find_column(df, "z_im")
+            f_col = find_column(df, "freq")
+            if not (zre_col and zim_col and f_col):
+                failures.append(f"{fname}: could not auto-detect Z real/Z imaginary/frequency columns, skipped")
+                continue
+
+            sub = df
+            cycle_col = find_column(df, "cycle")
+            if cycle_col:
+                cycle_values = sorted(df[cycle_col].dropna().unique().tolist())
+                if len(cycle_values) > 1:
+                    labels = [f"Cycle {v:g}" if isinstance(v, float) else f"Cycle {v}" for v in cycle_values]
+                    label, ok = QInputDialog.getItem(
+                        self, f"Select cycle — {fname}",
+                        f"'{fname}' has {len(cycle_values)} spectra -- pick one to use:",
+                        labels, 0, False,
+                    )
+                    if not ok:
+                        failures.append(f"{fname}: cycle selection cancelled, skipped")
+                        continue
+                    chosen = cycle_values[labels.index(label)]
+                    sub = df[df[cycle_col] == chosen]
+
+            try:
+                zre = sub[zre_col].astype(float).to_numpy()
+                zim_raw = sub[zim_col].astype(float).to_numpy()
+                freq = sub[f_col].astype(float).to_numpy()
+            except (ValueError, TypeError):
+                failures.append(f"{fname}: selected columns are not numeric, skipped")
+                continue
+
+            zim = -zim_raw if zim_sign_idx == 0 else zim_raw
+            order = np.argsort(-freq)
+            freq, zre, zim = freq[order], zre[order], zim[order]
+            if inductance_on:
+                zre, zim = eis.remove_inductance(freq, zre, zim, l_henries)
+
+            prepared.append((fname, freq, zre, zim))
+
+        if not prepared:
+            summary = f"Processed 0 of {len(paths)} file(s)."
+            if failures:
+                summary += "\n\nSkipped:\n" + "\n".join(f"  - {f}" for f in failures)
+            QMessageBox.information(self, "Batch import complete", summary)
+            return
+
+        set_controls_busy(self._fit_control_buttons(), True,
+                           busy_texts={self.batch_btn: f"Batch-fitting {len(prepared)} file(s)…"})
+        self.status_label.setText(
+            f"Batch-fitting {len(prepared)} file(s) with {eis.CIRCUIT_DISPLAY_NAMES.get(model, model)}… "
+            "(window stays responsive)"
+        )
+
+        def _run_batch():
+            rows, errs = [], []
+            for fname, freq, zre, zim in prepared:
+                try:
+                    r = eis.fit_equivalent_circuit(freq, zre, zim, model=model, multistart=True)
+                except Exception as e:  # noqa: BLE001 -- report per-file, don't abort the whole batch
+                    errs.append(f"{fname}: {e}")
+                    continue
+                row = {"File": fname, "Model": r.display_name, "Reduced χ²": r.reduced_chi_squared}
+                for name, val in r.params.items():
+                    row[f"{name} (fitted)"] = val
+                if r.warnings:
+                    row["Warnings"] = "; ".join(r.warnings)
+                rows.append(row)
+            return rows, errs
+
+        worker = AnalysisWorker(_run_batch)
+        self._fit_worker = worker
+        worker.succeeded.connect(lambda result: self._on_batch_fit_done(result, failures))
+        worker.failed.connect(lambda msg: QMessageBox.critical(self, "Batch fit error", msg))
+        worker.finished.connect(self._on_fit_worker_finished)
+        worker.start()
+
+    def _on_batch_fit_done(self, result, pre_failures):
+        rows, errs = result
+        all_failures = pre_failures + errs
+        if rows:
+            self.batch_df = pd.DataFrame(rows)
+            self.batch_table_model.set_dataframe(self.batch_df)
+            self.batch_export_btn.setEnabled(True)
+        summary = f"Fitted {len(rows)} file(s) -- see the batch results table."
+        if all_failures:
+            summary += "\n\nSkipped:\n" + "\n".join(f"  - {f}" for f in all_failures)
+        QMessageBox.information(self, "Batch import complete", summary)
 
     def on_export_diagram(self):
         path, _ = QFileDialog.getSaveFileName(

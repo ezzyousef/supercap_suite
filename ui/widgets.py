@@ -8,13 +8,14 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QTableView, QPushButton, QFileDialog, QInputDialog, QMessageBox, QLineEdit,
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QGroupBox, QSplitter,
-    QToolButton, QSizePolicy, QAbstractItemView, QScrollArea, QComboBox, QDoubleSpinBox
+    QToolButton, QSizePolicy, QAbstractItemView, QScrollArea, QComboBox, QDoubleSpinBox, QMenu
 )
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from matplotlib.figure import Figure
 
 from core import export_io
+from core import origin_export
 from . import theme
 
 MONO_FAMILY = "Consolas, 'Cascadia Mono', 'JetBrains Mono', 'Courier New', monospace"
@@ -590,62 +591,96 @@ def make_maximize_results_button(main_splitter: QSplitter) -> QPushButton:
 
 
 class ExportButtonPair(QWidget):
-    """Two buttons that replace the old single dialog-first "Export
-    results to Excel…" button:
-      - "Export to Excel…"  -- adds to an EXISTING workbook (as a new
-        sheet, or appended rows if you name a sheet that's already there)
-      - "Save as Excel…"    -- creates a brand-new workbook
+    """ONE "Export ▾" button with a dropdown menu covering every
+    destination a result set can go to -- Excel (an existing workbook,
+    or a brand-new one) and, if OriginLab is installed on this PC,
+    directly into a live Origin session -- instead of a separate button
+    per destination sitting side by side. Consolidating what used to be
+    2-3 individually-labeled buttons into one destination-picker button
+    is the same "combine buttons that should be combined" reasoning as
+    the Data/Configure/Advanced section restructuring: this widget is
+    used identically on every tab, so the fix lands everywhere at once.
 
-    Each jumps straight to its own file dialog instead of asking
-    "existing or new?" first. The container's enable/disable state
-    propagates to both buttons automatically (Qt's normal parent->child
-    behavior), so existing call sites doing
-    `self.export_btn.setEnabled(True)` keep working unchanged.
+    `.export_button` (the dropdown button itself) and `.setEnabled()`
+    are kept as the same public surface existing call sites already use
+    (`self.export_btn.setEnabled(True)`, main_window.py's Ctrl+E
+    shortcut), so nothing calling into this widget needed to change.
     """
 
-    def __init__(self, parent, get_payload, dialog_fn, export_label="Export to Excel…",
-                 save_as_label="Save as Excel…"):
+    def __init__(self, parent, get_payload, dialog_fn, origin_fn=None, export_label="Export ▾"):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        def _click(mode):
+        def _guarded(fn):
             payload = get_payload()
             if not payload:
                 QMessageBox.warning(parent, "Nothing to export", "Run an analysis first.")
                 return
-            dialog_fn(mode)
+            fn()
 
-        self.export_button = QPushButton(export_label)
+        self.export_button = QToolButton()
         self.export_button.setObjectName("exportButton")
-        self.export_button.setToolTip(
-            "Add these results to a workbook you already have -- as a new "
-            "sheet, or as appended rows if you name an existing sheet."
-        )
-        self.export_button.clicked.connect(lambda: _click("existing"))
+        self.export_button.setText(export_label)
+        self.export_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.export_button.setToolTip("Export these results to Excel, or send them to OriginLab.")
 
-        self.save_as_button = QPushButton(save_as_label)
-        self.save_as_button.setObjectName("exportButton")
-        self.save_as_button.setToolTip("Save these results as a brand-new Excel workbook.")
-        self.save_as_button.clicked.connect(lambda: _click("new"))
+        menu = QMenu(self.export_button)
+        menu.addAction("📊 Export to Excel (existing workbook)…",
+                        lambda: _guarded(lambda: dialog_fn("existing")))
+        menu.addAction("💾 Save as new Excel workbook…",
+                        lambda: _guarded(lambda: dialog_fn("new")))
+        if origin_fn is not None:
+            menu.addSeparator()
+            menu.addAction("🔬 Send to OriginLab", lambda: _guarded(origin_fn))
+        self.export_button.setMenu(menu)
 
         layout.addWidget(self.export_button)
-        layout.addWidget(self.save_as_button)
         self.setEnabled(False)
+
+    def showMenu(self):
+        """Explicit, reliable way to pop the menu open programmatically
+        (e.g. from a keyboard shortcut) -- a simulated .click() on an
+        InstantPopup QToolButton isn't guaranteed to reproduce the same
+        popup-on-press behavior a real mouse click gets."""
+        self.export_button.showMenu()
 
 
 def make_export_button(parent, sheet_prefix: str, get_results, get_raw_data=None,
                         source_note: str | None = None) -> ExportButtonPair:
-    """Build the "Export to Excel… / Save as Excel…" button pair for a
-    single Parameter/Value result set. `get_results` / `get_raw_data` are
-    zero-arg callables so the buttons always export whatever the LATEST
-    analysis produced, not a value captured at button-creation time.
+    """Build the combined "Export ▾" button (Excel existing/new, plus
+    OriginLab if available) for a single Parameter/Value result set.
+    `get_results` / `get_raw_data` are zero-arg callables so the menu
+    always exports whatever the LATEST analysis produced, not a value
+    captured at button-creation time.
     """
     def _dialog(mode):
         raw_data = get_raw_data() if get_raw_data else None
         run_export_dialog(parent, sheet_prefix, get_results(), raw_data, source_note, mode=mode)
 
-    return ExportButtonPair(parent, get_results, _dialog)
+    def _send_to_origin():
+        raw_data = get_raw_data() if get_raw_data else None
+        _run_origin_send(parent, sheet_prefix, get_results(), raw_data, source_note)
+
+    origin_fn = _send_to_origin if origin_export.is_available() else None
+    return ExportButtonPair(parent, get_results, _dialog, origin_fn=origin_fn)
+
+
+def _run_origin_send(parent, sheet_prefix: str, results: dict, raw_data, source_note: str | None) -> None:
+    """Shared "Send to OriginLab" click handler -- pushes into whatever
+    Origin session is already open (launching one, visibly, on the
+    first send of the app run) and reports success/failure the same way
+    every other action in this app does: a toast for success, a clear
+    dialog for failure, never a silent no-op."""
+    try:
+        sheet_name = origin_export.send_to_origin(sheet_prefix, results, raw_data, source_note)
+    except origin_export.OriginNotAvailableError as e:
+        QMessageBox.critical(parent, "OriginLab not available", str(e))
+        return
+    except Exception as e:
+        QMessageBox.critical(parent, "Send to OriginLab failed", str(e))
+        return
+    show_toast(parent, f"Sent to OriginLab -- worksheet '{sheet_name}'.")
 
 
 def _prompt_workbook_and_sheet(parent, sheet_prefix: str, mode: str = "ask"):

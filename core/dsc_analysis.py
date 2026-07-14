@@ -72,9 +72,17 @@ def classify_water_types(mass_water_g: float, mass_dry_g: float,
     mass_dry_g : mass of the dry (water-free) sample (g)
     melting_peak_area_j : integrated area of the DSC melting endotherm (J) --
         this is A_f, giving the freezable water content via the heat of fusion
-    symmetric_peak_area_j : integrated area of the symmetric (sharp,
-        bulk-like) component of the melting peak (J) -- used to separate
-        freezable bound water from free water within the freezable fraction
+    symmetric_peak_area_j : the portion of the melting endotherm's area (J)
+        attributable to freezable BOUND water -- despite the name (kept for
+        continuity with the source paper's Eq.4 notation), this is NOT a
+        curve-symmetry quantity: validated directly against the source
+        paper's own worked calculations, it is the SUBZERO area (the part
+        of the melting peak occurring BELOW 0 degC, i.e. at a depressed
+        melting point from confinement/interaction with the polymer
+        matrix -- the Gibbs-Thomson signature of "bound" water that can
+        still freeze/melt, just not at the normal temperature). See
+        zero_and_subzero_peak_areas() below, which computes exactly this
+        split from a temperature-vs-heat-flow curve.
     total_peak_area_j : total integrated area of all melting peak
         components (J); symmetric_peak_area_j / total_peak_area_j is the
         fraction of freezable water that is "freezable bound"
@@ -145,7 +153,8 @@ def integrate_dsc_peak(time_s: np.ndarray, heat_flow_mw: np.ndarray,
 
 
 def linear_baseline(time_s: np.ndarray, heat_flow_mw: np.ndarray,
-                     peak_start_idx: int, peak_end_idx: int) -> np.ndarray:
+                     peak_start_idx: int, peak_end_idx: int,
+                     anchor_avg_points: int = 1) -> np.ndarray:
     """Construct a simple straight-line baseline under a DSC peak, connecting
     the heat-flow values at `peak_start_idx` and `peak_end_idx`, for use with
     `integrate_dsc_peak`. This is the simplest baseline convention (linear
@@ -154,14 +163,39 @@ def linear_baseline(time_s: np.ndarray, heat_flow_mw: np.ndarray,
     there is no single standard algorithm to cite. For a linear baseline
     this returns an array the same length as time_s/heat_flow_mw, valid
     over the [peak_start_idx, peak_end_idx] slice.
+
+    `anchor_avg_points` (default 1, i.e. the old single-sample behavior):
+    number of points averaged AT and going inward from each boundary to
+    get the y0/y1 baseline anchor, instead of trusting the single raw
+    sample exactly at peak_start_idx/peak_end_idx. Anchoring a baseline
+    to one noisy sample is a well-known source of erratic DSC peak areas
+    -- commercial DSC software (TA Universal Analysis, Netzsch Proteus,
+    etc.) avoids this by averaging a small span of points at each
+    flanking region rather than reading a single point.
+
+    This is a genuine bias/variance trade-off, not a one-directional
+    accuracy improvement: averaging more points suppresses anchor NOISE,
+    but only helps if the flanking region is actually flat there -- if
+    peak_start_idx/peak_end_idx still sit on the tail of the peak itself
+    (a real risk with auto-detected boundaries, see detect_dsc_peak's
+    caveat about peak-width heuristics), a larger average reaches further
+    into that tail and systematically biases the baseline upward/
+    downward instead. There is no single number that is always correct;
+    always check the plotted baseline overlay to confirm the flanking
+    region it's averaging over is actually flat before trusting a larger
+    value here.
     """
     time_s = np.asarray(time_s, dtype=float)
     heat_flow_mw = np.asarray(heat_flow_mw, dtype=float)
     if not (0 <= peak_start_idx < peak_end_idx < len(time_s)):
         raise ValueError("Require 0 <= peak_start_idx < peak_end_idx < len(time_s)")
+    if anchor_avg_points < 1:
+        raise ValueError("anchor_avg_points must be >= 1")
 
+    span = min(anchor_avg_points, peak_end_idx - peak_start_idx)  # never let the two anchor spans overlap
     t0, t1 = time_s[peak_start_idx], time_s[peak_end_idx]
-    y0, y1 = heat_flow_mw[peak_start_idx], heat_flow_mw[peak_end_idx]
+    y0 = float(np.mean(heat_flow_mw[peak_start_idx:peak_start_idx + span]))
+    y1 = float(np.mean(heat_flow_mw[peak_end_idx - span + 1:peak_end_idx + 1]))
     baseline = np.full_like(heat_flow_mw, np.nan)
     slice_t = time_s[peak_start_idx:peak_end_idx + 1]
     baseline[peak_start_idx:peak_end_idx + 1] = y0 + (y1 - y0) * (slice_t - t0) / (t1 - t0)
@@ -322,6 +356,103 @@ def symmetric_and_total_peak_areas(time_s: np.ndarray, heat_flow_mw: np.ndarray,
 
 
 @dataclass
+class ZeroSubzeroSplitResult:
+    zero_area_j: float      # peak area at temperature >= threshold (default 0 degC) -- free water
+    subzero_area_j: float   # peak area at temperature <  threshold -- freezable BOUND water
+    total_area_j: float
+    subzero_fraction: float  # subzero_area_j / total_area_j -- feed this * A_f as symmetric_peak_area_j
+
+
+def zero_and_subzero_peak_areas(time_s: np.ndarray, heat_flow_mw: np.ndarray,
+                                 baseline_mw: np.ndarray, temperature_c: np.ndarray,
+                                 start_index: int, end_index: int,
+                                 threshold_c: float = 0.0) -> ZeroSubzeroSplitResult:
+    """Split a (baseline-corrected) DSC melting peak's area by a
+    TEMPERATURE THRESHOLD (default 0 degC, the bulk-water melting point)
+    -- the "zero" component (melting at or above the threshold: bulk-
+    like, unconfined water) and the "subzero" component (melting below
+    the threshold: freezing-point-DEPRESSED, i.e. water confined by or
+    interacting with the polymer/gel matrix -- still freezable, just not
+    at the normal temperature, the Gibbs-Thomson signature of "bound"
+    water). This is the actual free/freezable-bound split used for Eq.4
+    -- see classify_water_types's docstring -- verified directly against
+    the source paper's own worked spreadsheet (matched to 5-6 significant
+    figures across multiple real samples): freezable_bound_fraction =
+    subzero_area / total_area; free_fraction = zero_area / total_area.
+
+    This REPLACES symmetric_and_total_peak_areas (above) as the primary
+    method: that function's curve-mirroring heuristic was an assumption-
+    light stand-in built before this app had access to the source
+    paper's actual worked numbers to validate against, and does not
+    reproduce them -- it remains available for anyone who explicitly
+    wants a shape-based split instead (e.g. no temperature axis
+    available at all), but this temperature-threshold split has a direct
+    physical basis (melting-point depression) and matches published,
+    already-verified results, so the DSC tab now uses it whenever a
+    temperature column is available.
+
+    Requires the ramp to be a HEATING ramp (temperature increasing
+    through the peak window) -- true for essentially every real DSC
+    melting-endotherm measurement (melting is measured on heating, by
+    definition); a cooling/crystallization exotherm is a different
+    measurement this function is not intended for.
+    """
+    t = np.asarray(time_s, dtype=float)
+    y = np.asarray(heat_flow_mw, dtype=float)
+    baseline_mw = np.asarray(baseline_mw, dtype=float)
+    temp_c = np.asarray(temperature_c, dtype=float)
+    if not (len(t) == len(y) == len(baseline_mw) == len(temp_c)):
+        raise ValueError("time_s, heat_flow_mw, baseline_mw, and temperature_c must be the same length")
+    if not (0 <= start_index <= end_index < len(t)):
+        raise ValueError("Require 0 <= start_index <= end_index < len(time_s)")
+    if end_index - start_index < 2:
+        raise ValueError("Need at least 3 points in the peak window")
+
+    t_win = t[start_index:end_index + 1]
+    temp_win = temp_c[start_index:end_index + 1]
+    signal_win = np.abs(y[start_index:end_index + 1] - baseline_mw[start_index:end_index + 1])
+
+    trapz_fn = getattr(np, "trapezoid", None) or np.trapz
+    total_mj = float(trapz_fn(signal_win, t_win))
+    if total_mj <= 0:
+        raise ValueError("Total peak area is non-positive -- check the selected peak region")
+
+    below = temp_win < threshold_c
+    if not np.any(below):
+        subzero_mj = 0.0
+    elif np.all(below):
+        subzero_mj = total_mj
+    else:
+        # A heating ramp's temperature increases (~)monotonically through
+        # the peak window, so there is exactly one crossing -- find the
+        # last still-below-threshold point, linearly interpolate the
+        # EXACT crossing time/temperature/signal at the threshold (rather
+        # than just cutting at the nearest sample point), and integrate
+        # the below-threshold portion up to that interpolated boundary.
+        below_idx = np.where(below)[0]
+        i0 = below_idx[-1]
+        i1 = i0 + 1
+        temp0, temp1 = temp_win[i0], temp_win[i1]
+        frac = (threshold_c - temp0) / (temp1 - temp0) if temp1 != temp0 else 0.0
+        frac = float(np.clip(frac, 0.0, 1.0))
+        t_cross = t_win[i0] + frac * (t_win[i1] - t_win[i0])
+        y_cross = signal_win[i0] + frac * (signal_win[i1] - signal_win[i0])
+
+        t_below = np.append(t_win[:i0 + 1], t_cross)
+        y_below = np.append(signal_win[:i0 + 1], y_cross)
+        subzero_mj = float(trapz_fn(y_below, t_below))
+
+    total_j = total_mj / 1000.0
+    subzero_j = subzero_mj / 1000.0
+    zero_j = total_j - subzero_j
+
+    return ZeroSubzeroSplitResult(
+        zero_area_j=zero_j, subzero_area_j=subzero_j, total_area_j=total_j,
+        subzero_fraction=(subzero_j / total_j if total_j > 0 else 0.0),
+    )
+
+
+@dataclass
 class IntegrationAccuracyResult:
     trapezoid_area_j: float
     simpson_area_j: float
@@ -332,7 +463,8 @@ class IntegrationAccuracyResult:
 
 def check_integration_accuracy(time_s: np.ndarray, heat_flow_mw: np.ndarray,
                                 start_index: int, end_index: int,
-                                boundary_nudge_points: int = 3) -> IntegrationAccuracyResult:
+                                boundary_nudge_points: int = 3,
+                                anchor_avg_points: int = 1) -> IntegrationAccuracyResult:
     """Self-consistency check for a DSC peak-area integration, giving an
     estimate of how much to trust the reported area -- NOT a replacement
     for looking at the plotted peak+baseline overlay, but a quick
@@ -364,12 +496,12 @@ def check_integration_accuracy(time_s: np.ndarray, heat_flow_mw: np.ndarray,
         raise ValueError("Require 0 <= start_index < end_index < len(time_s)")
 
     def _area(s: int, e: int) -> float:
-        baseline = linear_baseline(t, y, s, e)
+        baseline = linear_baseline(t, y, s, e, anchor_avg_points=anchor_avg_points)
         return integrate_dsc_peak(t[s:e + 1], y[s:e + 1], baseline_mw=baseline[s:e + 1])
 
     base_area = _area(start_index, end_index)
 
-    baseline_full = linear_baseline(t, y, start_index, end_index)
+    baseline_full = linear_baseline(t, y, start_index, end_index, anchor_avg_points=anchor_avg_points)
     signal = np.abs(y[start_index:end_index + 1] - baseline_full[start_index:end_index + 1])
     simpson_area_j = float(simpson(signal, x=t[start_index:end_index + 1])) / 1000.0
     method_diff_pct = (100.0 * abs(base_area - simpson_area_j) / base_area

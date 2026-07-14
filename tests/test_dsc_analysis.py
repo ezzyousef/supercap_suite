@@ -36,6 +36,81 @@ def test_integrate_dsc_peak_known_rectangular_area():
     assert area == pytest.approx(0.01, rel=1e-3)
 
 
+def test_linear_baseline_anchor_averaging_matches_single_point_on_flat_noiseless_flanks():
+    # With NO noise, averaging N points at a perfectly flat flanking
+    # region must give the identical baseline as reading a single point
+    # -- the averaging span should only matter once real per-sample
+    # noise is present.
+    t = np.linspace(0, 10, 200)
+    y = np.zeros_like(t)
+    y[80:121] = 5.0  # flat-topped "peak" over a flat-zero baseline
+    b1 = dsc.linear_baseline(t, y, 60, 140, anchor_avg_points=1)
+    b8 = dsc.linear_baseline(t, y, 60, 140, anchor_avg_points=8)
+    assert np.allclose(b1[60:141], b8[60:141])
+
+
+def test_linear_baseline_anchor_averaging_rejects_a_single_noisy_outlier():
+    # One noisy outlier sample sitting exactly at the chosen boundary
+    # anchors the ENTIRE single-point baseline to that outlier; averaging
+    # a handful of the (otherwise clean/flat) surrounding points should
+    # recover a value close to the true flat baseline instead.
+    t = np.linspace(0, 10, 200)
+    y = np.zeros_like(t)
+    y[100] = 5.0  # a lone spike, not a real peak
+    y[60] = 3.0   # noisy outlier sample sitting exactly at the left anchor row
+
+    b1 = dsc.linear_baseline(t, y, 60, 140, anchor_avg_points=1)
+    b5 = dsc.linear_baseline(t, y, 60, 140, anchor_avg_points=5)
+    # single-point anchor is pinned to the y[60]=3.0 outlier
+    assert b1[60] == pytest.approx(3.0)
+    # averaged anchor is pulled back down toward the true flat baseline (0)
+    assert b5[60] < 1.0
+
+
+def test_linear_baseline_anchor_averaging_spans_never_overlap():
+    # A short window with anchor_avg_points larger than half the window
+    # must not let the two averaging spans overlap each other.
+    t = np.linspace(0, 1, 10)
+    y = np.arange(10, dtype=float)
+    baseline = dsc.linear_baseline(t, y, 2, 5, anchor_avg_points=50)
+    assert not np.any(np.isnan(baseline[2:6]))
+
+
+def test_check_integration_accuracy_accepts_anchor_avg_points():
+    t = np.linspace(0, 100, 1000)
+    y = 6.0 * np.exp(-0.5 * ((t - 50) / 3.0) ** 2)
+    result = dsc.check_integration_accuracy(t, y, 300, 700, anchor_avg_points=5)
+    assert result.trapezoid_area_j > 0
+
+
+def test_zero_and_subzero_peak_areas_splits_by_temperature_threshold():
+    # Linear temperature ramp from -10 to +5 degC over a flat-signal
+    # window: exactly 2/3 of the (time-uniform) window sits below 0 degC,
+    # so a UNIFORM signal should give subzero_fraction == 2/3 regardless
+    # of the (flat) signal's magnitude -- this is the same relationship
+    # verified against the user's own reference spreadsheet (Calculations
+    # of water (version 1).xlsx).
+    n = 150
+    t = np.linspace(0, 10, n)
+    temp = np.linspace(-10, 5, n)
+    y = np.full(n, 2.0)
+    baseline = np.zeros(n)
+    result = dsc.zero_and_subzero_peak_areas(t, y, baseline, temp, 0, n - 1)
+    assert result.subzero_fraction == pytest.approx(2 / 3, abs=1e-3)
+    assert result.zero_area_j + result.subzero_area_j == pytest.approx(result.total_area_j, rel=1e-9)
+
+
+def test_zero_and_subzero_peak_areas_all_above_threshold_gives_zero_subzero():
+    n = 100
+    t = np.linspace(0, 10, n)
+    temp = np.linspace(1, 20, n)  # entirely above 0 degC
+    y = np.full(n, 3.0)
+    baseline = np.zeros(n)
+    result = dsc.zero_and_subzero_peak_areas(t, y, baseline, temp, 0, n - 1)
+    assert result.subzero_area_j == pytest.approx(0.0, abs=1e-9)
+    assert result.subzero_fraction == pytest.approx(0.0, abs=1e-9)
+
+
 def test_detect_dsc_peak_finds_known_gaussian_peak():
     t = np.linspace(0, 100, 1000)
     y = -0.05 + (-8.0 * np.exp(-0.5 * ((t - 60) / 3.0) ** 2))

@@ -1,12 +1,14 @@
 """CV analysis tab: load data, select one cycle, compute specific
 capacitance / capacity from voltammogram integration."""
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel,
     QComboBox, QDoubleSpinBox, QSpinBox, QFileDialog, QMessageBox, QGroupBox,
-    QTextEdit, QSplitter
+    QTextEdit, QSplitter, QInputDialog
 )
 from PySide6.QtCore import Qt
 
@@ -27,6 +29,7 @@ class CvTab(QWidget):
         self.df: pd.DataFrame | None = None
         self.last_result: dict | None = None
         self.last_raw_df: pd.DataFrame | None = None
+        self.batch_df: pd.DataFrame | None = None
         self._build_ui()
 
     def _build_ui(self):
@@ -45,6 +48,27 @@ class CvTab(QWidget):
         file_row.addWidget(self.status_label)
         file_row.addStretch()
         root.addLayout(file_row)
+
+        batch_row = QHBoxLayout()
+        batch_btn = QPushButton("📚 Import multiple CV files (batch)…")
+        batch_btn.setToolTip(
+            "Loads several CV files at once (one sample/run per file); "
+            "for each one, auto-detects voltage/current columns, prompts "
+            "for which cycle to use if the file has more than one, and "
+            "computes the same result this tab's 'Report as' setting "
+            "produces (specific capacitance or capacity) using this "
+            "tab's current scan rate/current-unit settings -- collecting "
+            "one row per file in the batch results table below. Prompts "
+            "once per file for the active mass/area/volume (whichever "
+            "the current basis needs), since that's the one value that "
+            "legitimately differs sample to sample. This does not "
+            "replace the single-file flow above, which stays available "
+            "for closer inspection of one curve at a time."
+        )
+        batch_btn.clicked.connect(self.on_import_multi_files)
+        batch_row.addWidget(batch_btn)
+        batch_row.addStretch()
+        root.addLayout(batch_row)
 
         splitter = QSplitter(Qt.Horizontal)
         root.addWidget(splitter, stretch=1)
@@ -193,6 +217,20 @@ class CvTab(QWidget):
         self.record_panel = RecordLogPanel("CV")
         self.record_panel.bind(lambda: self.last_result)
         right_layout.addWidget(self.record_panel)
+
+        batch_section = CollapsibleSection("Batch results (multiple files)")
+        self.batch_table = make_table_view()
+        self.batch_table_model = DataFrameModel()
+        self.batch_table.setModel(self.batch_table_model)
+        self.batch_table.setMinimumHeight(160)
+        batch_section.addWidget(self.batch_table)
+        self.batch_export_btn = make_export_button(
+            self, "CV batch", lambda: {"Files in batch table": len(self.batch_df) if self.batch_df is not None else 0},
+            lambda: self.batch_df,
+            source_note="CV batch import (multiple files) — Supercapacitor & DSC Analysis Suite",
+        )
+        batch_section.addWidget(self.batch_export_btn)
+        right_layout.addWidget(batch_section)
 
         splitter.addWidget(right)
         splitter.setSizes([380, 700])
@@ -351,6 +389,113 @@ class CvTab(QWidget):
         v, i = cyc
         self.plot.plot_xy(v, i, xlabel="Potential (V)", ylabel="Current (A)",
                            title="CV cycle preview")
+
+    def on_import_multi_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Import multiple CV files (batch)", "",
+            "Data files (*.xlsx *.xls *.csv *.txt *.mpt *.mpr);;All files (*)"
+        )
+        if not paths:
+            return
+
+        scan_rate = self.scan_rate_spin.value_base()
+        current_unit = self.current_unit_combo.currentText()
+        current_factor = {"A": 1.0, "mA": 1e-3, "µA": 1e-6}[current_unit]
+        report_specific_capacity = self.report_combo.currentIndex() == 1
+        basis = self.normalizer.basis()
+        basis_names = {"gravimetric": "Active mass (g)", "areal": "Electrode area (cm²)",
+                       "volumetric": "Electrode volume (cm³)"}
+        basis_defaults = {"gravimetric": self.normalizer.mass_spin.value(),
+                           "areal": self.normalizer.area_spin.value(),
+                           "volumetric": self.normalizer.volume_spin.value()}
+
+        rows, failures = [], []
+        for path in paths:
+            fname = Path(path).name
+            try:
+                df = load_data_file(path, sheet_name=0)
+            except DataLoadError as e:
+                failures.append(f"{fname}: {e}")
+                continue
+            if isinstance(df, dict):
+                df = list(df.values())[0]
+
+            v_col = find_column(df, "ewe_v")
+            i_col = find_column(df, "i_ma") or find_column(df, "i_a")
+            if not v_col or not i_col:
+                failures.append(f"{fname}: could not auto-detect voltage/current columns, skipped")
+                continue
+
+            sub = df
+            cycle_col = find_column(df, "cycle")
+            if cycle_col:
+                cycle_values = sorted(df[cycle_col].dropna().unique().tolist())
+                if len(cycle_values) > 1:
+                    labels = [f"Cycle {v:g}" if isinstance(v, float) else f"Cycle {v}" for v in cycle_values]
+                    label, ok = QInputDialog.getItem(
+                        self, f"Select cycle — {fname}",
+                        f"'{fname}' has {len(cycle_values)} cycles -- pick one to use:",
+                        labels, 0, False,
+                    )
+                    if not ok:
+                        failures.append(f"{fname}: cycle selection cancelled, skipped")
+                        continue
+                    chosen = cycle_values[labels.index(label)]
+                    sub = df[df[cycle_col] == chosen]
+
+            try:
+                v = sub[v_col].astype(float).to_numpy()
+                i = sub[i_col].astype(float).to_numpy() * current_factor
+            except (ValueError, TypeError):
+                failures.append(f"{fname}: voltage/current columns are not numeric, skipped")
+                continue
+
+            normalizer_label = "Active mass (g)" if report_specific_capacity else basis_names[basis]
+            normalizer_default = (self.normalizer.mass_spin.value() if report_specific_capacity
+                                   else basis_defaults[basis])
+            normalizer_value, ok = QInputDialog.getDouble(
+                self, f"{normalizer_label} — {fname}",
+                f"{normalizer_label} for '{fname}':",
+                normalizer_default, 0.000001, 1e9, 6,
+            )
+            if not ok:
+                failures.append(f"{fname}: {normalizer_label} entry cancelled, skipped")
+                continue
+
+            try:
+                if report_specific_capacity:
+                    value = cv.specific_capacity_from_cv(v, i, scan_rate, normalizer_value)
+                    label, unit = "Specific capacity", "C/g"
+                else:
+                    c_total = cv.total_capacitance_from_cv(v, i, scan_rate)
+                    value = c_total / normalizer_value
+                    label, unit = "Capacitance", self.normalizer.result_unit()
+                sep = cv.peak_to_peak_separation(v, i)
+            except (ValueError, ZeroDivisionError) as e:
+                failures.append(f"{fname}: {e}")
+                continue
+
+            dv = float(np.max(v) - np.min(v))
+            rows.append({
+                "File": fname,
+                "Potential window ΔV (V)": dv,
+                "Scan rate ν (V/s)": scan_rate,
+                normalizer_label: normalizer_value,
+                f"{label} ({unit})": value,
+                "Anodic peak potential E_pa (V)": sep["e_pa_v"],
+                "Cathodic peak potential E_pc (V)": sep["e_pc_v"],
+                "Peak-to-peak separation ΔEp (mV)": sep["delta_ep_v"] * 1000,
+            })
+
+        if rows:
+            self.batch_df = pd.DataFrame(rows)
+            self.batch_table_model.set_dataframe(self.batch_df)
+            self.batch_export_btn.setEnabled(True)
+
+        summary = f"Processed {len(rows)} of {len(paths)} file(s) -- see the batch results table."
+        if failures:
+            summary += "\n\nSkipped:\n" + "\n".join(f"  - {f}" for f in failures)
+        QMessageBox.information(self, "Batch import complete", summary)
 
     def on_clear_results(self):
         # self.table shows the loaded FILE's raw data (unrelated to the

@@ -162,5 +162,5 @@ class MainWindow(QMainWindow):
         if tab is None:
             return
         export_btn = getattr(tab, "export_btn", None)
-        if export_btn is not None and hasattr(export_btn, "export_button"):
-            export_btn.export_button.click()
+        if export_btn is not None and hasattr(export_btn, "showMenu"):
+            export_btn.showMenu()

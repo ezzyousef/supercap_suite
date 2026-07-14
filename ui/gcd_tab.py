@@ -1,12 +1,14 @@
 """GCD analysis tab: load data, pick discharge segment, compute capacitance
 (auto normal/integral), ESR, energy & power density, 2e/3e conversions."""
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel,
     QComboBox, QDoubleSpinBox, QSpinBox, QFileDialog, QMessageBox, QGroupBox,
-    QRadioButton, QButtonGroup, QTextEdit, QSplitter
+    QRadioButton, QButtonGroup, QTextEdit, QSplitter, QInputDialog
 )
 from PySide6.QtCore import Qt
 
@@ -26,6 +28,7 @@ class GcdTab(QWidget):
         self.df: pd.DataFrame | None = None
         self.last_result: dict | None = None
         self.last_raw_df: pd.DataFrame | None = None
+        self.batch_df: pd.DataFrame | None = None
         self._detected_segments: list = []
         self._build_ui()
 
@@ -47,6 +50,27 @@ class GcdTab(QWidget):
         file_row.addWidget(self.status_label)
         file_row.addStretch()
         root.addLayout(file_row)
+
+        batch_row = QHBoxLayout()
+        batch_btn = QPushButton("📚 Import multiple GCD files (batch)…")
+        batch_btn.setToolTip(
+            "Loads several discharge files at once (one sample/run per "
+            "file); for each one, auto-detects time/voltage/current "
+            "columns, auto-picks the longest discharge segment, and "
+            "computes capacitance/ESR/energy/power density using this "
+            "tab's current method/threshold/cell-configuration settings "
+            "-- collecting one row per file in the batch results table "
+            "below. Prompts once per file for the active mass/area/"
+            "volume (whichever the current 'Normalize by' basis needs), "
+            "since that's the one value that legitimately differs "
+            "sample to sample. This does not replace the single-file "
+            "flow above, which stays available for closer inspection of "
+            "one curve at a time."
+        )
+        batch_btn.clicked.connect(self.on_import_multi_files)
+        batch_row.addWidget(batch_btn)
+        batch_row.addStretch()
+        root.addLayout(batch_row)
 
         splitter = QSplitter(Qt.Horizontal)
         root.addWidget(splitter, stretch=1)
@@ -237,6 +261,20 @@ class GcdTab(QWidget):
         self.record_panel.bind(lambda: self.last_result)
         right_layout.addWidget(self.record_panel)
 
+        batch_section = CollapsibleSection("Batch results (multiple files)")
+        self.batch_table = make_table_view()
+        self.batch_table_model = DataFrameModel()
+        self.batch_table.setModel(self.batch_table_model)
+        self.batch_table.setMinimumHeight(160)
+        batch_section.addWidget(self.batch_table)
+        self.batch_export_btn = make_export_button(
+            self, "GCD batch", lambda: {"Files in batch table": len(self.batch_df) if self.batch_df is not None else 0},
+            lambda: self.batch_df,
+            source_note="GCD batch import (multiple files) — Supercapacitor & DSC Analysis Suite",
+        )
+        batch_section.addWidget(self.batch_export_btn)
+        right_layout.addWidget(batch_section)
+
         splitter.addWidget(right)
         splitter.setSizes([380, 700])
         configure_collapsible_main_splitter(splitter)
@@ -422,6 +460,136 @@ class GcdTab(QWidget):
             except (ValueError, TypeError):
                 i_arr = None
         return t, v, i_arr
+
+    def on_import_multi_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Import multiple GCD files (batch)", "",
+            "Data files (*.xlsx *.xls *.csv *.txt *.mpt *.mpr);;All files (*)"
+        )
+        if not paths:
+            return
+
+        basis = self.normalizer.basis()
+        basis_names = {"gravimetric": "Active mass (g)", "areal": "Electrode area (cm²)",
+                       "volumetric": "Electrode volume (cm³)"}
+        basis_defaults = {"gravimetric": self.normalizer.mass_spin.value(),
+                           "areal": self.normalizer.area_spin.value(),
+                           "volumetric": self.normalizer.volume_spin.value()}
+        unit = self.normalizer.result_unit()
+        r2_thr = self.r2_spin.value()
+        cfg_idx = self.config_combo.currentIndex()
+
+        rows, failures = [], []
+        for path in paths:
+            fname = Path(path).name
+            try:
+                df = load_data_file(path, sheet_name=0)
+            except DataLoadError as e:
+                failures.append(f"{fname}: {e}")
+                continue
+            if isinstance(df, dict):
+                df = list(df.values())[0]
+
+            t_col = find_column(df, "time_s")
+            v_col = find_column(df, "ewe_v")
+            a_col = find_column(df, "i_a")
+            i_col = a_col or find_column(df, "i_ma")
+            i_factor = 1.0 if a_col else 1e-3
+            if not t_col or not v_col:
+                failures.append(f"{fname}: could not auto-detect time/voltage columns, skipped")
+                continue
+
+            try:
+                t = df[t_col].astype(float).to_numpy()
+                v = df[v_col].astype(float).to_numpy()
+            except (ValueError, TypeError):
+                failures.append(f"{fname}: time/voltage columns are not numeric, skipped")
+                continue
+
+            try:
+                segments = gcd.detect_charge_discharge_segments(t, v)
+            except ValueError as e:
+                failures.append(f"{fname}: {e}")
+                continue
+            discharge_segs = [s for s in segments if s.kind == "discharge"]
+            if not discharge_segs:
+                failures.append(f"{fname}: no discharge segment auto-detected, skipped")
+                continue
+            seg = max(discharge_segs, key=lambda s: s.end - s.start)  # longest discharge segment
+            t_seg = t[seg.start:seg.end + 1] - t[seg.start]
+            v_seg = v[seg.start:seg.end + 1]
+
+            if i_col:
+                try:
+                    i_seg = df[i_col].astype(float).to_numpy()[seg.start:seg.end + 1]
+                    current_a = float(np.mean(np.abs(i_seg))) * i_factor
+                except (ValueError, TypeError):
+                    current_a = self.current_spin.value()
+            else:
+                current_a = self.current_spin.value()
+
+            try:
+                result = gcd.total_capacitance_gcd_auto(t_seg, v_seg, current_a, r2_threshold=r2_thr)
+            except ValueError as e:
+                failures.append(f"{fname}: {e}")
+                continue
+
+            normalizer_label = basis_names[basis]
+            normalizer_value, ok = QInputDialog.getDouble(
+                self, f"{normalizer_label} — {fname}",
+                f"{normalizer_label} for '{fname}':",
+                basis_defaults[basis], 0.000001, 1e9, 6,
+            )
+            if not ok:
+                failures.append(f"{fname}: {normalizer_label} entry cancelled, skipped")
+                continue
+
+            try:
+                c = result["capacitance_f"] / normalizer_value
+            except ZeroDivisionError:
+                failures.append(f"{fname}: {normalizer_label} must be positive, skipped")
+                continue
+
+            ir_drop = gcd.estimate_ir_drop(t_seg, v_seg)
+            esr = gcd.esr_from_ir_drop(ir_drop, current_a) if current_a > 0 else float("nan")
+            if basis == "gravimetric":
+                e_density = gcd.energy_density_wh_per_kg(c, result["voltage_window_v"])
+                e_unit, p_unit = "Wh/kg", "W/kg"
+            else:
+                e_density = gcd.energy_density_wh(c, result["voltage_window_v"])
+                e_unit = "Wh/cm²" if basis == "areal" else "Wh/cm³"
+                p_unit = "W/cm²" if basis == "areal" else "W/cm³"
+            p_density = gcd.power_density_w_per_kg(e_density, result["discharge_time_s"])
+
+            row = {
+                "File": fname,
+                "Method": result["method"],
+                "R² of linear fit": result["r_squared"],
+                "Voltage window ΔV (V)": result["voltage_window_v"],
+                "Discharge time Δt (s)": result["discharge_time_s"],
+                "Current used (A)": current_a,
+                normalizer_label: normalizer_value,
+                f"Capacitance C ({unit})": c,
+                "Estimated IR drop (V)": ir_drop,
+                "Estimated ESR (Ω)": esr,
+                f"Energy density ({e_unit})": e_density,
+                f"Power density ({p_unit})": p_density,
+            }
+            if cfg_idx == 1:
+                row[f"Estimated single-electrode C, symmetric ×4 ({unit})"] = gcd.symmetric_cell_to_electrode_capacitance(c)
+            elif cfg_idx == 0:
+                row[f"Estimated symmetric 2e cell C, ÷4 ({unit})"] = gcd.three_electrode_to_two_electrode_estimate(c)
+            rows.append(row)
+
+        if rows:
+            self.batch_df = pd.DataFrame(rows)
+            self.batch_table_model.set_dataframe(self.batch_df)
+            self.batch_export_btn.setEnabled(True)
+
+        summary = f"Processed {len(rows)} of {len(paths)} file(s) -- see the batch results table."
+        if failures:
+            summary += "\n\nSkipped:\n" + "\n".join(f"  - {f}" for f in failures)
+        QMessageBox.information(self, "Batch import complete", summary)
 
     def on_clear_results(self):
         # self.table shows the loaded FILE's raw data (unrelated to the

@@ -7,3 +7,11 @@ matplotlib>=3.7
 scipy>=1.10
 galvani>=0.5
 pdfplumber>=0.11
+
+# "Send to OriginLab" export (core/origin_export.py) -- optional at
+# runtime (the app checks originpro.is_available() and simply omits the
+# menu option if missing/Origin isn't installed), bundled by default so
+# the packaged exe has the capability whenever the user's PC happens to
+# have Origin/OriginPro installed. Windows-only, same as this whole app.
+originpro>=1.0
+pywin32>=306
