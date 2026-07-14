@@ -1,13 +1,36 @@
-"""Generic equivalent-circuit engine + a ~140-circuit preset library for
-EIS/PEIS complex nonlinear least-squares (CNLS) fitting.
+"""Generic equivalent-circuit engine + a ~50-circuit preset library for
+supercapacitor EIS/PEIS complex nonlinear least-squares (CNLS) fitting.
+
+Scope: supercapacitor-only. This library previously also carried a much
+larger set of generic multi-time-constant Randles-type circuits
+("Two time constants" / "Three time constants", a combinatorial sweep
+not individually sourced for any specific system), a Gerischer-element
+category (mixed ionic/electronic conduction -- battery/SOFC insertion
+electrodes, not supercapacitors), and a "Miscellaneous" grab-bag of
+single-element diagnostic circuits with no Rct term at all -- i.e. not
+physically representable as a supercapacitor electrode. All three were
+removed: every circuit remaining here is either a standard supercapacitor
+charge-transfer model (Baseline, One-time-constant Randles-type), the
+porous-electrode transmission-line model (a supercapacitor's actual
+electrode geometry), or in the purpose-built, literature-and-EC-Lab-
+sourced "Supercapacitor (recommended)" category (see that section below
+for citations: Gamry/ScienceDirect Randles-derived models, Cruz-Manzo &
+Greenwood 2020's bounded-Warburg model, the Zubieta-Bonert two-branch
+leakage model, and BioLogic Application Note 34's own published
+supercapacitor circuit). The six generalized EC-Lab elements (La, Winf,
+Ma, Mg, Ga, Gb) added for EC-Lab ZFit cross-validation are still fully
+implemented below (their formulas are still used inside the
+Supercapacitor category's Ma-based circuits) even though the standalone
+non-supercapacitor circuits that used to showcase Winf/Mg/Ga/Gb/La in
+isolation were removed along with Gerischer/Miscellaneous.
 
 Architecture
 ------------
 Every circuit -- preset or (in the future) user-built -- is represented as
 a small expression TREE of the same few node types, so ONE evaluator and
 ONE fitting routine work for all of them (this is what lets the auto-fit
-feature try ~140 topologies without ~140 hand-written impedance
-functions):
+feature try every topology in the library without one hand-written
+impedance function per circuit):
 
     ("elem", kind, prefix)      -- a leaf circuit element
     ("series", [child, ...])    -- Z = sum(Z_child)
@@ -606,35 +629,6 @@ def _build_library() -> None:
                 disp = f"{'L-' if with_l else ''}Rs(Rct({cap}{wb_disp}))"
                 _register(CircuitSpec(name, disp, "One time constant (Randles-type)", tree))
 
-    # --- C. Two time constants ----------------------------------------------
-    for cap1 in cap_opts:
-        for cap2 in cap_opts:
-            for wb in warburg_opts:
-                for with_l in (False, True):
-                    wb_tag = wb or "none"
-                    name = f"randles2_{cap1}_{cap2}_{wb_tag}" + ("_L" if with_l else "")
-                    branch1 = _randles_branch("R1", cap1, None)
-                    branch2 = _randles_branch("R2", cap2, wb)
-                    tree = _maybe_L(_series(_e("R", "Rs"), branch1, branch2), with_l)
-                    wb_disp = "" if wb is None else f"-{wb}"
-                    disp = f"{'L-' if with_l else ''}Rs(R1{cap1})(R2({cap2}{wb_disp}))"
-                    _register(CircuitSpec(name, disp, "Two time constants", tree))
-
-    # --- D. Three time constants (curated stage patterns) -------------------
-    patterns = [("C", "C", "C"), ("Q", "Q", "Q"), ("C", "Q", "C"), ("Q", "C", "Q")]
-    for pat in patterns:
-        for wb in warburg_opts:
-            for with_l in (False, True):
-                wb_tag = wb or "none"
-                name = f"randles3_{'_'.join(pat)}_{wb_tag}" + ("_L" if with_l else "")
-                branch1 = _randles_branch("R1", pat[0], None)
-                branch2 = _randles_branch("R2", pat[1], None)
-                branch3 = _randles_branch("R3", pat[2], wb)
-                tree = _maybe_L(_series(_e("R", "Rs"), branch1, branch2, branch3), with_l)
-                wb_disp = "" if wb is None else f"-{wb}"
-                disp = f"{'L-' if with_l else ''}Rs(R1{pat[0]})(R2{pat[1]})(R3({pat[2]}{wb_disp}))"
-                _register(CircuitSpec(name, disp, "Three time constants", tree))
-
     # --- E. Transmission line (de Levie, porous electrode) -----------------
     for with_l in (False, True):
         name = f"tlm_semiinf" + ("_L" if with_l else "")
@@ -794,46 +788,6 @@ def _build_library() -> None:
             tree = _maybe_L(_series(_e("R", "Rs"), branch), with_l)
             disp = f"{'L-' if with_l else ''}Rs({cap}2||(R2-M2))  [BioLogic AN34]"
             _register(CircuitSpec(name, disp, "Supercapacitor (recommended)", tree))
-
-    # --- G. Gerischer element (mixed ionic/electronic conduction, battery-
-    #        type insertion electrodes with a coupled chemical reaction) ----
-    _register(CircuitSpec("gerischer_R", "Rs-G", "Gerischer (mixed conduction)",
-                           _series(_e("R", "Rs"), _e("G", "G"))))
-    for cap in cap_opts:
-        for with_l in (False, True):
-            name = f"gerischer_{cap}" + ("_L" if with_l else "")
-            branch = _parallel(_e("R", "Rct"), _series(_e(cap, "Rct_cap"), _e("G", "zg")))
-            tree = _maybe_L(_series(_e("R", "Rs"), branch), with_l)
-            disp = f"{'L-' if with_l else ''}Rs(Rct({cap}-G))"
-            _register(CircuitSpec(name, disp, "Gerischer (mixed conduction)", tree))
-
-    # Ga/Gb: two independent generalizations of G with a variable exponent
-    # a (a=1 reduces exactly to G in both cases, but Ga and Gb diverge from
-    # each other for a != 1 -- see the module docstring's element formula
-    # list and EQUATIONS.md for the exact forms and EC-Lab sourcing).
-    for gk in ("Ga", "Gb"):
-        _register(CircuitSpec(f"gerischer_R_{gk}", f"Rs-{gk}", "Gerischer (mixed conduction)",
-                               _series(_e("R", "Rs"), _e(gk, "G"))))
-        for cap in cap_opts:
-            for with_l in (False, True):
-                name = f"gerischer_{cap}_{gk}" + ("_L" if with_l else "")
-                branch = _parallel(_e("R", "Rct"), _series(_e(cap, "Rct_cap"), _e(gk, "zg")))
-                tree = _maybe_L(_series(_e("R", "Rs"), branch), with_l)
-                disp = f"{'L-' if with_l else ''}Rs(Rct({cap}-{gk}))"
-                _register(CircuitSpec(name, disp, "Gerischer (mixed conduction)", tree))
-
-    # --- F. Miscellaneous / composite ---------------------------------------
-    for wb in ("W", "Wo", "Ws", "Winf", "Mg"):
-        _register(CircuitSpec(f"misc_R_{wb}", f"Rs-{wb}", "Miscellaneous",
-                               _series(_e("R", "Rs"), _e(wb, "zw"))))
-    _register(CircuitSpec("misc_RL", "Rs-L", "Miscellaneous",
-                           _series(_e("R", "Rs"), _e("L", "L"))))
-    _register(CircuitSpec("misc_R_La", "Rs-La", "Miscellaneous",
-                           _series(_e("R", "Rs"), _e("La", "La"))))
-    _register(CircuitSpec("misc_RLC", "L-Rs-C", "Miscellaneous",
-                           _series(_e("L", "L"), _e("R", "Rs"), _e("C", "C"))))
-    _register(CircuitSpec("misc_RLQ", "L-Rs-Q", "Miscellaneous",
-                           _series(_e("L", "L"), _e("R", "Rs"), _e("Q", "Q"))))
 
 
 _build_library()

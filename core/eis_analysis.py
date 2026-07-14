@@ -405,6 +405,42 @@ def fit_equivalent_circuit(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_
                 f"caution."
             )
 
+    # Resistance-overestimation diagnostic: this catches a DIFFERENT, more
+    # dangerous failure mode than bound-pinning above -- one where the
+    # optimizer converges to a genuine (non-boundary) local optimum that's
+    # still wildly unphysical. Reproduced directly: fitting a circuit with
+    # NO Warburg/diffusion element to data that has a real low-frequency
+    # diffusion tail which hasn't fully resolved within the measured
+    # frequency range returned Rct = 4447 Ohm for a true value of 50 Ohm
+    # (89x) -- with NO bound-pinning warning, since 4447 was nowhere near
+    # any search-bound ceiling. Physically: without a Warburg term, the
+    # only way an Rct||CPE branch can mimic a still-rising (not yet
+    # saturated) low-frequency curve is to push Rct far beyond the
+    # semicircle's actual diameter, moving the RC knee below the measured
+    # range entirely. A resistance parameter that's wildly larger than the
+    # data's own real-axis span is the concrete, checkable signature of
+    # this -- a genuinely large, well-resolved Rct instead lands close to
+    # (not many multiples of) the measured span (verified: ratio ~1.0 for
+    # a correct large-Rct fit vs. ~32x for the reproduced failure above).
+    # Rleak is excluded: it is DESIGNED to be much larger than the span
+    # (see the Rleak-specific initial-guess heuristic in
+    # circuit_library.initial_guess_and_bounds), so this ratio doesn't
+    # apply to it.
+    r_span = float(np.max(zr) - np.min(zr)) if len(zr) else 0.0
+    if r_span > 0:
+        OVERESTIMATE_FACTOR = 20.0
+        for name, val in params.items():
+            if param_kinds.get(name) == "R" and name != "Rleak" and val > OVERESTIMATE_FACTOR * r_span:
+                warnings_list.append(
+                    f"'{name}' = {val:.4g} Ω is over {OVERESTIMATE_FACTOR:.0f}x the "
+                    f"measured real-axis span ({r_span:.4g} Ω) -- this is the signature of "
+                    f"a circuit missing an element it needs (most often a Warburg/diffusion "
+                    f"element) to explain a low-frequency feature that hasn't fully resolved "
+                    f"within your measured frequency range, not a genuine measurement. Try a "
+                    f"circuit with a Warburg element (e.g. the Supercapacitor category) or "
+                    f"extend the measurement to lower frequency."
+                )
+
     return EquivalentCircuitFitResult(
         model=model, params=params, param_errors=param_errors,
         chi_squared=chi_sq, reduced_chi_squared=reduced_chi_sq,

@@ -2,7 +2,19 @@
 generic CNLS fitting engine (core.eis_analysis), including the physical
 asymptotic-limit checks used to verify the Warburg-open/short and
 transmission-line conventions before they were finalized (see the module
-docstring in circuit_library.py for the reasoning)."""
+docstring in circuit_library.py for the reasoning).
+
+The production library was pruned to supercapacitor-only circuits (see
+circuit_library.py's module docstring), removing the generic Miscellaneous
+and Gerischer categories that a few of these tests used to pull minimal
+diagnostic circuits (bare "Rs-element", no Rct) from. Those tests are
+about ELEMENT FORMULA / FITTING-PIPELINE correctness, not about whether a
+circuit is a supercapacitor model, so they build the same minimal trees
+directly (via _bare_rs_element / _register_test_only_circuit below)
+instead of depending on circuits that no longer exist in the production
+registry -- this keeps the physics coverage without reintroducing
+non-supercapacitor circuits into the app.
+"""
 import numpy as np
 import pytest
 
@@ -10,8 +22,48 @@ from core import circuit_library as cl
 from core import eis_analysis as eis
 
 
-def test_library_has_over_100_circuits():
-    assert len(cl.CIRCUITS) >= 130
+def _bare_rs_element(kind: str, prefix: str = "zw") -> tuple:
+    """A minimal Rs-element series tree, e.g. what "misc_R_Wo" used to be
+    before the library was pruned to supercapacitor-only circuits --
+    built directly rather than looked up, since evaluate_circuit() works
+    on any tree without requiring it to be registered."""
+    return ("series", [("elem", "R", "Rs"), ("elem", kind, prefix)])
+
+
+def _register_test_only_circuit(name: str, tree: tuple) -> None:
+    """Register a minimal circuit under a name reserved for this test
+    file only (never used by the production app, which only ever sees
+    whatever core/circuit_library.py's own _build_library() registers at
+    import time) -- needed for the handful of tests that exercise the
+    FITTING pipeline (fit_equivalent_circuit takes a registered name, not
+    a raw tree) rather than just evaluate_circuit(). No-op if already
+    registered (pytest can import this module more than once in some
+    run configurations)."""
+    if name not in cl.CIRCUITS:
+        cl._register(cl.CircuitSpec(name, name, "Test-only (not in production library)", tree))
+
+
+def test_library_has_over_45_supercapacitor_circuits():
+    assert len(cl.CIRCUITS) >= 45
+
+
+def test_library_contains_only_supercapacitor_relevant_categories():
+    """Regression for the library-pruning request: no generic
+    battery/corrosion/fuel-cell (Gerischer) or unsourced combinatorial
+    multi-time-constant categories should be present -- every PRODUCTION
+    circuit (i.e. excluding this test file's own test-only diagnostic
+    registrations, see _register_test_only_circuit) exposed to the EIS
+    tab's category dropdown must be a supercapacitor model (Baseline,
+    one-time-constant Randles-type, porous-electrode transmission line,
+    or the purpose-built Supercapacitor category)."""
+    categories = {c for c in cl.circuits_by_category().keys()
+                  if not c.startswith("Test-only")}
+    assert categories == {
+        "Baseline",
+        "One time constant (Randles-type)",
+        "Transmission line (porous electrode)",
+        "Supercapacitor (recommended)",
+    }
 
 
 @pytest.mark.parametrize("kind,generalized_params,base_kind,base_params", [
@@ -46,6 +98,20 @@ def test_winf_element_is_finite_and_well_defined():
     assert np.any(np.abs(z) > 1e-6)
 
 
+# gerischer_R_Ga/Gb, misc_R_La/Winf/Mg no longer exist in the pruned
+# (supercapacitor-only) production library -- registered as test-only
+# circuits below purely to keep exercising the FITTING PIPELINE against
+# these element formulas (evaluate_circuit's own correctness is already
+# covered by test_generalized_ec_lab_elements_reduce_to_base_element).
+_TEST_ONLY_TREES = {
+    "gerischer_R_Ga": _bare_rs_element("Ga", "G"),
+    "gerischer_R_Gb": _bare_rs_element("Gb", "G"),
+    "misc_R_La": _bare_rs_element("La", "La"),
+    "misc_R_Winf": _bare_rs_element("Winf", "zw"),
+    "misc_R_Mg": _bare_rs_element("Mg", "zw"),
+}
+
+
 @pytest.mark.parametrize("name,true_params", [
     ("supercap_Q_Ma", {"Rs": 50.0, "Rct": 50.0, "Rct_cap_Y0": 5e-3, "Rct_cap_n": 0.9,
                         "Mb_R": 40.0, "Mb_tau": 2.0, "Mb_a": 0.8}),
@@ -61,6 +127,8 @@ def test_new_ec_lab_sourced_circuits_recover_true_parameters(name, true_params):
     noise-free synthetic data (with multistart, matching what the EIS
     tab's "Fit this circuit" button does) and confirm it recovers the
     true parameters, not a local-minimum near-miss."""
+    if name in _TEST_ONLY_TREES:
+        _register_test_only_circuit(name, _TEST_ONLY_TREES[name])
     freq = np.logspace(4, -3, 60)
     omega = 2 * np.pi * freq
     spec = cl.get_circuit(name)
@@ -237,7 +305,8 @@ def test_semiinfinite_warburg_is_flagged_when_fit_against_a_capacitive_tail():
                     "Wb_Y0": 5e-3, "Wb_B": 0.05}
     z_true = cl.evaluate_circuit(true_spec.tree, omega, true_params)
 
-    result = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag, model="misc_R_W")
+    _register_test_only_circuit("test_only_rs_w", _bare_rs_element("W"))
+    result = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag, model="test_only_rs_w")
     assert any("lower search bound" in w for w in result.warnings)
 
 
@@ -285,7 +354,14 @@ def test_auto_fit_finds_a_near_perfect_fit_for_the_true_generating_circuit():
     z_meas = z_true + noise
 
     best, attempts = eis.auto_fit_equivalent_circuit(f, z_meas.real, z_meas.imag)
-    assert len(attempts) == len(cl.CIRCUITS)
+    # Compare against eis.CIRCUIT_MODELS (what auto_fit_equivalent_circuit
+    # actually iterates over by default -- a snapshot taken once at
+    # core.eis_analysis's import time), not the live cl.CIRCUITS dict --
+    # other tests in this module register a few extra test-only circuits
+    # into cl.CIRCUITS after that snapshot was taken (see
+    # _register_test_only_circuit above), which would make cl.CIRCUITS
+    # larger than what a real auto-fit run ever actually tries.
+    assert len(attempts) == len(eis.CIRCUIT_MODELS)
 
     true_model_result = next(r for m, r, _ in attempts if m == "randles1_Q_none")
     assert true_model_result is not None
@@ -301,8 +377,8 @@ def test_warburg_open_diverges_at_low_frequency():
     omega -> 0 (capacitive-like, nothing can escape)."""
     f = np.logspace(4, -6, 40)
     omega = 2 * np.pi * f
-    spec = cl.get_circuit("misc_R_Wo")
-    z = cl.evaluate_circuit(spec.tree, omega, {"Rs": 1.0, "zw_Y0": 0.1, "zw_B": 5.0})
+    tree = _bare_rs_element("Wo")
+    z = cl.evaluate_circuit(tree, omega, {"Rs": 1.0, "zw_Y0": 0.1, "zw_B": 5.0})
     assert abs(z[-1]) > abs(z[0]) * 100  # grows by orders of magnitude
 
 
@@ -312,8 +388,8 @@ def test_warburg_short_saturates_at_low_frequency():
     f = np.logspace(4, -6, 40)
     omega = 2 * np.pi * f
     Rs, Y0, B = 1.0, 0.1, 5.0
-    spec = cl.get_circuit("misc_R_Ws")
-    z = cl.evaluate_circuit(spec.tree, omega, {"Rs": Rs, "zw_Y0": Y0, "zw_B": B})
+    tree = _bare_rs_element("Ws")
+    z = cl.evaluate_circuit(tree, omega, {"Rs": Rs, "zw_Y0": Y0, "zw_B": B})
     expected_dc_resistance = Rs + B / Y0
     assert abs(z[-1]) == pytest.approx(expected_dc_resistance, rel=1e-3)
 
@@ -399,3 +475,54 @@ def test_remove_inductance_zeroes_out_a_pure_inductive_contribution():
     re_out, im_out = eis.remove_inductance(freq, z_re, z_im_with_L, L)
     np.testing.assert_allclose(re_out, z_re)
     np.testing.assert_allclose(im_out, z_im_baseline, atol=1e-9)
+
+
+def test_missing_warburg_produces_flagged_rct_overestimation():
+    """Regression for a real user-reported "Rct is overestimated" bug:
+    fitting a circuit with NO Warburg/diffusion element to data that has
+    a genuine low-frequency diffusion tail which hasn't fully resolved
+    within the measured frequency range (a truncated, realistic
+    frequency sweep -- stops at 0.1 Hz, not true DC) makes Rct blow up
+    to many multiples of its true value, converging to a genuine (non-
+    boundary) local optimum that the existing bound-pinning warning
+    cannot catch. fit_equivalent_circuit must flag this via a dedicated
+    resistance-overestimation warning; the correct (Warburg-containing)
+    circuit fit to the same data must NOT trigger it."""
+    freq = np.logspace(5, -1, 50)  # truncated -- stops well short of true DC
+    omega = 2 * np.pi * freq
+    spec = cl.get_circuit("supercap_Q_Wo")
+    true_params = {"Rs": 2.0, "Rct": 50.0, "Rct_cap_Y0": 5e-4, "Rct_cap_n": 0.85,
+                    "Wb_Y0": 0.01, "Wb_B": 5.0}
+    z = cl.evaluate_circuit(spec.tree, omega, true_params)
+    rng = np.random.default_rng(3)
+    noise = 0.005
+    z_re_n = z.real * (1 + noise * rng.standard_normal(len(z)))
+    z_im_n = z.imag * (1 + noise * rng.standard_normal(len(z)))
+
+    bad = eis.fit_equivalent_circuit(freq, z_re_n, z_im_n, model="randles1_Q_none", multistart=True)
+    assert bad.params["Rct"] > 10 * true_params["Rct"]  # confirms the failure actually reproduces
+    assert any("real-axis span" in w for w in bad.warnings)
+
+    good = eis.fit_equivalent_circuit(freq, z_re_n, z_im_n, model="supercap_Q_Wo", multistart=True)
+    assert good.params["Rct"] == pytest.approx(true_params["Rct"], rel=0.05)
+    assert not any("real-axis span" in w for w in good.warnings)
+
+
+def test_resistance_overestimation_warning_does_not_misfire_on_legitimate_large_rct():
+    """A genuinely large but well-RESOLVED Rct (the frequency range
+    actually reaches low enough for the semicircle to close) must NOT
+    trigger the overestimation warning -- only a resistance many
+    multiples of the data's own real-axis span should."""
+    freq = np.logspace(4, -4, 60)
+    omega = 2 * np.pi * freq
+    spec = cl.get_circuit("randles1_Q_none")
+    true_params = {"Rs": 5.0, "Rct": 500.0, "Rct_cap_Y0": 2e-4, "Rct_cap_n": 0.9}
+    z = cl.evaluate_circuit(spec.tree, omega, true_params)
+    rng = np.random.default_rng(2)
+    noise = 0.003
+    z_re_n = z.real * (1 + noise * rng.standard_normal(len(z)))
+    z_im_n = z.imag * (1 + noise * rng.standard_normal(len(z)))
+
+    result = eis.fit_equivalent_circuit(freq, z_re_n, z_im_n, model="randles1_Q_none", multistart=True)
+    assert result.params["Rct"] == pytest.approx(true_params["Rct"], rel=0.05)
+    assert not any("real-axis span" in w for w in result.warnings)

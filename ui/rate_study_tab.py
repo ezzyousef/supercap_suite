@@ -579,12 +579,22 @@ class CvRateTool(QWidget):
             peak_display = unitconv.from_base(peak_current_a, self.peak_table_current_unit.currentText(), "current")
             peak_rows.append((rate_display, peak_display))
 
+        # REPLACE, not append: a batch import is a new rate-study dataset,
+        # not an addition to whatever was there before. This used to
+        # default to append (replace=False), which silently left stale
+        # rows from a PREVIOUS import mixed into the table -- re-running
+        # this with different files still fit Trasatti's/b-value's
+        # extrapolation against a table that was partly old data, so
+        # results barely changed even though the just-uploaded data was
+        # completely different. Manual "+ Add row" below each table is
+        # still there for anyone who genuinely wants to build up a table
+        # from more than one import.
         if cap_rows:
-            self.cap_table.load_rows(cap_rows, replace=False)
+            self.cap_table.load_rows(cap_rows, replace=True)
         if peak_rows:
-            self.peak_table.load_rows(peak_rows, replace=False)
+            self.peak_table.load_rows(peak_rows, replace=True)
 
-        summary = f"Imported {len(cap_rows)} of {len(paths)} file(s) into the tables below."
+        summary = f"Imported {len(cap_rows)} of {len(paths)} file(s) -- this REPLACED whatever was in the tables below."
         if failures:
             summary += "\n\nSkipped:\n" + "\n".join(f"  - {f}" for f in failures)
         QMessageBox.information(self, "Batch import complete", summary)

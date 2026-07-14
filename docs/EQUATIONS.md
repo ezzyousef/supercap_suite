@@ -280,23 +280,47 @@ circuit dataset with a known true Rs.
 
 `core/circuit_library.py` implements a generic circuit-TREE engine (every
 circuit is a nested `("elem", kind, prefix)` / `("series", [...])` /
-`("parallel", [...])` expression) with ~139 preset circuits across 8
-categories, rather than a fixed handful of named models -- one evaluator
+`("parallel", [...])` expression) with ~50 preset circuits across 4
+categories, all specifically supercapacitor-relevant (see "Library
+scope: supercapacitor-only" below), rather than a fixed handful of
+named models -- one evaluator
 and one CNLS fitter (`core/eis_analysis.fit_equivalent_circuit`, via
 `scipy.optimize.least_squares` on the stacked real+imaginary residuals)
 works for all of them, which is what lets `auto_fit_equivalent_circuit`
 try every circuit against a spectrum and report a ranked table instead of
 one hand-picked model. Reported per fit: fitted parameters, approximate
 1-sigma standard errors (linearized covariance estimate), reduced
-chi-squared, and explicit warnings when a parameter is pinned at its
-search bound (a strong sign the model doesn't actually need that
-element -- see the Warburg discussion below). Nonlinear least squares can
-still converge to a local minimum; single-circuit fits (not the ~139
--circuit screening pass) additionally try a few rescaled starting points
-(`multistart=True`) and keep the best, which fixed confirmed local-minimum
-failures in several circuits during self-consistency testing (fitting
-each circuit to its own noise-free synthetic data and checking the true
-parameters are recovered).
+chi-squared, and two independent kinds of explicit warning:
+
+- **Bound-pinning**: a parameter pinned at its search bound (a strong
+  sign the model doesn't actually need that element -- see the Warburg
+  discussion below).
+- **Resistance overestimation**: a fitted resistance (any "R"-kind
+  parameter except `Rleak`, which is designed to be large) that's more
+  than 20x the measured data's own real-axis span (`max(Z') -
+  min(Z')`). This catches a DIFFERENT, more dangerous failure mode than
+  bound-pinning: fitting a circuit with no Warburg/diffusion element to
+  data whose low-frequency diffusion tail hasn't fully resolved within
+  the measured frequency range converges to a genuine (non-boundary)
+  local optimum where Rct is pushed far beyond the semicircle's actual
+  diameter -- reproduced directly during a real user-reported "Rct is
+  overestimated" investigation: Rct = 4447 Ω fitted against a true value
+  of 50 Ω (89x), on a realistically truncated frequency sweep (stopping
+  at 0.1 Hz rather than true DC), with the fitted value nowhere near any
+  search-bound ceiling so the existing bound-pinning check alone did not
+  catch it. A genuinely large, well-resolved Rct instead lands close to
+  (not many multiples of) the data's real-axis span -- verified
+  computationally: ratio ≈1.0 for a correct large-Rct fit vs. ≈32x for
+  the reproduced failure case. If you see this warning, try a circuit
+  with a Warburg element (the Supercapacitor category) or extend the
+  measurement to lower frequency.
+
+Nonlinear least squares can still converge to a local minimum;
+single-circuit fits (not the full screening pass) additionally try a
+few rescaled starting points (`multistart=True`) and keep the best,
+which fixed confirmed local-minimum failures in several circuits during
+self-consistency testing (fitting each circuit to its own noise-free
+synthetic data and checking the true parameters are recovered).
 
 Base element impedances (all with per-element sourcing in
 `circuit_library.py`'s own module docstring):
@@ -406,23 +430,25 @@ already documented above) that this library's Warburg/Gerischer element
 conventions are correct.
 
 EC-Lab also documents six further element types that were found during
-the same cross-check and have since been added to this library (all
-verified via the same self-consistency sweep -- fitting each new element/
-circuit to its own noise-free synthetic data -- as every other circuit;
-all reduce EXACTLY to an existing simpler element at their "neutral"
-exponent value, checked numerically before finalizing):
+the same cross-check. All six are still fully implemented in
+`core/circuit_library.py` (formulas verified via the same self-
+consistency sweep -- fitting each new element/circuit to its own
+noise-free synthetic data -- as every other element/circuit; all reduce
+EXACTLY to an existing simpler element at their "neutral" exponent
+value, checked numerically before finalizing), but only ONE of the six
+(`Ma`) is currently used in a registered, user-facing circuit -- see
+"Library scope: supercapacitor-only" below for why:
 - `La` (modified inductor, `Z = L*(jw)^a`, a=1 -> plain `L`) -- represents
   an unusual/non-ideal inductive high-frequency loop.
 - `Winf` (RDE/rotating-disk convective-diffusion element, analytical
   approximation, `Z = Rd*sqrt(g^2+td*jw)/(g+td*jw)`) -- mainly relevant to
   rotating-disk-electrode redox-couple systems rather than porous
-  supercapacitor electrodes, included for completeness of the EC-Lab
-  element set.
+  supercapacitor electrodes.
 - `Ma` (modified restricted diffusion, `Z = R*coth((t*jw)^(a/2))/
   (t*jw)^(a/2)`, a=1 -> plain `Wo`) -- a CPE-style generalization of this
   library's "Wo" (fixed exponent 1/2 -> variable exponent a/2), directly
   relevant to real porous supercapacitor electrodes with a DISTRIBUTION of
-  pore relaxation times rather than one sharp time constant. Added to the
+  pore relaxation times rather than one sharp time constant. Used in the
   "Supercapacitor (recommended)" category as `supercap_C_Ma`/
   `supercap_Q_Ma` (and `_L` variants), alongside the existing Wo/Ws-based
   entries -- offering Ma lets a fit discover whether the fixed-exponent
@@ -432,13 +458,29 @@ exponent value, checked numerically before finalizing):
   (t*jw)^(1-g/2)`, g=1 -> same base form as Ma(a=1)/Wo, but the
   ASYMMETRIC exponents diverge from Ma for g!=1) -- originally developed
   for anomalous/fractal transport in mesoporous dye-sensitized-solar-cell
-  films; added as `misc_R_Mg`.
+  films, not a supercapacitor-specific model.
 - `Ga` (`Z = R/sqrt(1+(jwt)^a)`) and `Gb` (`Z = R/(1+jwt)^(a/2)`) -- two
   DIFFERENT generalizations of this library's Gerischer element "G"
   (both reduce to G at a=1, but diverge from each other and from G for
-  a!=1) -- added alongside the existing G-based entries in the
-  "Gerischer (mixed conduction)" category (`gerischer_R_Ga`,
-  `gerischer_C_Ga`, `gerischer_R_Gb`, etc.).
+  a!=1) -- Gerischer-family elements describe mixed ionic/electronic
+  conduction with a coupled chemical reaction (battery/SOFC insertion
+  electrodes), not supercapacitors.
+
+### Library scope: supercapacitor-only
+
+The circuit library was pruned to remove every category that wasn't
+individually sourced for supercapacitors specifically: the combinatorial
+"Two time constants" / "Three time constants" categories (a systematic
+sweep over cap/Warburg/inductor combinations, useful for generic EIS but
+not individually justified for any one system), the "Gerischer (mixed
+conduction)" category (battery/SOFC insertion electrodes), and the
+"Miscellaneous" grab-bag (single-element diagnostic circuits with no
+Rct term -- not physically representable as a supercapacitor electrode
+at all). `La`, `Winf`, `Mg`, `Ga`, `Gb` remain fully implemented (see
+above) since `Ma` and the underlying element-evaluation engine still
+depend on the same code paths, and a user building a fully custom
+circuit could still reach them -- they're simply no longer used by any
+of the ~50 remaining registered, user-facing circuits.
 
 **Not implemented this pass:**
 - An "EDL capacitance + pseudocapacitance" combined model was investigated
