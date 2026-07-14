@@ -1,17 +1,24 @@
 ; Inno Setup script for the Supercapacitor & DSC Analysis Suite.
 ;
-; Wraps the standalone PyInstaller build (dist\SupercapSuite.exe, which
-; already bundles Python + every dependency -- no Python or anything else
-; needs to be installed on the target PC) into a normal Windows installer:
-; Start Menu shortcut, optional Desktop shortcut, Add/Remove Programs
-; entry, and a proper uninstaller.
+; Wraps the standalone PyInstaller build (dist\SupercapSuite\, an
+; onedir build -- SupercapSuite.exe plus every bundled dependency as
+; loose files in that folder; no Python or anything else needs to be
+; installed on the target PC) into a normal Windows installer: Start
+; Menu shortcut, optional Desktop shortcut, Add/Remove Programs entry,
+; and a proper uninstaller.
+;
+; Deliberately onedir, not onefile: onefile re-extracts its entire
+; bundled runtime to a fresh %TEMP% folder on EVERY launch, which is a
+; well-documented cause of flaky/slow startup (antivirus real-time
+; scanning the newly-written payload each time) -- onedir extracts once,
+; here, at install time.
 ;
 ; Build with (from this "installer" folder, or point ISCC at this file
 ; directly -- see build_installer.ps1 in this folder for the one-command
 ; version):
 ;     "C:\Users\<you>\AppData\Local\Programs\Inno Setup 6\ISCC.exe" SupercapSuite.iss
 ;
-; Requires dist\SupercapSuite.exe to already exist -- run
+; Requires dist\SupercapSuite\ to already exist -- run
 ; `pyinstaller SupercapSuite.spec` from the project root first (or run
 ; build_installer.ps1, which does both steps).
 
@@ -51,7 +58,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "..\dist\SupercapSuite.exe"; DestDir: "{app}"; Flags: ignoreversion
+; The whole onedir build folder (SupercapSuite.exe + every bundled DLL/
+; data file it needs at runtime), recursively -- NOT just the exe.
+Source: "..\dist\SupercapSuite\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\assets\app_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\COPYRIGHT.txt"; DestDir: "{app}"; Flags: ignoreversion
