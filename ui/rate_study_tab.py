@@ -819,7 +819,19 @@ class CvRateTool(QWidget):
             "Bulk concentration, C (mol/L)": self.concentration_spin.value(),
             "Temperature, T (K)": self.temperature_spin.value(),
         }
-        self.last_raw_df = pd.DataFrame({"scan_rate_v_per_s": rates, "peak_current_a": peaks})
+        # Export the literal plotted graph (I_p vs sqrt(scan rate), data
+        # points AND fit line) alongside the raw (rate, peak current)
+        # input pairs -- same treatment already given to the b-value
+        # graph above and to Trasatti's method, so every scan-rate-based
+        # analysis in this tab reproduces its own plot exactly from the
+        # exported sheet, not just the raw table it was built from.
+        self.last_raw_df = pd.DataFrame({
+            "scan_rate_v_per_s": rates,
+            "peak_current_a": peaks,
+            "graph_x_sqrt_scan_rate": sqrt_v,
+            "graph_y_peak_current_a": peaks,
+            "graph_fit_y_peak_current_a": fit_line,
+        })
         self.export_btn.setEnabled(True)
 
 
