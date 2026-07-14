@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt, QSize, QTimer
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QPixmap, QKeySequence, QShortcut
 from PySide6.QtWidgets import QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QLabel
 
@@ -179,26 +179,20 @@ class MainWindow(QMainWindow):
         self._lazy_containers[0].ensure_built()  # the tab shown at launch is ready immediately
         self._on_tab_changed(tabs.currentIndex())
 
-        # Every OTHER tab still only builds the first time the user clicks
-        # it (see _LazyTabContainer) -- fast to launch, but that first
-        # click then pays the full construction cost synchronously and
-        # visibly stalls the tab switch, which is exactly the "lagging"
-        # symptom. Warm the rest up in the background instead, one at a
-        # time with a small gap between each, starting shortly after the
-        # window has had a chance to paint -- by the time the user
-        # actually clicks around, most tabs are typically already built
-        # and the switch is instant. A tab clicked before its turn in
-        # this queue still builds synchronously as a fallback (same as
-        # before), so correctness never depends on this warm-up finishing.
-        self._warm_up_index = 1
-        QTimer.singleShot(400, self._warm_up_next_tab)
-
-    def _warm_up_next_tab(self) -> None:
-        if self._warm_up_index >= len(self._lazy_containers):
-            return
-        self._lazy_containers[self._warm_up_index].ensure_built()
-        self._warm_up_index += 1
-        QTimer.singleShot(60, self._warm_up_next_tab)
+        # NOTE: an earlier version of this method also warmed up the other
+        # 7 tabs automatically in the background shortly after launch (one
+        # at a time via QTimer.singleShot) so tab switching would feel
+        # instant. That traded one problem for a worse one: building each
+        # tab (matplotlib canvases included) still blocks the UI thread
+        # for ~0.3-0.5s, and doing that 7 times in a burst right after the
+        # window opens is long/frequent enough that Windows' DWM flags the
+        # window as unresponsive repeatedly -- which showed up as the
+        # taskbar icon/peek-preview flashing several times right after
+        # launch. Removed: every tab now builds ONLY when the user
+        # actually clicks it (see _LazyTabContainer.ensure_built), which
+        # costs that same ~0.3-0.5s but as a single, expected, user-
+        # initiated pause tied to a real click -- not an automatic,
+        # unexplained flurry of freezes the moment the app opens.
 
     def _on_tab_changed(self, index: int) -> None:
         if 0 <= index < len(self._lazy_containers):
