@@ -20,7 +20,7 @@ from .widgets import (
     PlotWidget, PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
     make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
-    attach_section_restore_menu,
+    attach_section_restore_menu, yield_to_event_loop,
 )
 from .workers import AnalysisWorker, set_controls_busy
 from .circuit_diagram import draw_circuit
@@ -174,6 +174,7 @@ class EisTab(QWidget):
         induct_section.addLayout(induct_grid)
         self.data_section.addWidget(induct_section)
 
+        yield_to_event_loop()  # Data section (often several CollapsibleSections) is fully built by this point -- yield before Configure
         self.configure_section = CollapsibleSection("2) Configure", start_expanded=True)
         left_layout.addWidget(self.configure_section)
 
@@ -269,7 +270,9 @@ class EisTab(QWidget):
         self.configure_section.addWidget(fit_section)
 
         left_layout.addStretch()
+        yield_to_event_loop()  # right before wrapping in QScrollArea, which forces an expensive full-subtree sizeHint pass
         splitter.addWidget(make_scrollable_panel(left))
+        yield_to_event_loop()  # left settings panel is the biggest single chunk -- yield partway through construction
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
@@ -297,6 +300,7 @@ class EisTab(QWidget):
             sizes=[320, 200, 160, 160],
         )
         right_layout.addWidget(results_splitter, stretch=1)
+        yield_to_event_loop()  # plot/table splitter is the other big chunk -- yield again before the remaining (usually lighter) widgets
 
         table_actions_row = QHBoxLayout()
         remove_rows_btn = QPushButton("🗑 Remove selected row(s) & redraw")

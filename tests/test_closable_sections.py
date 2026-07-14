@@ -29,6 +29,32 @@ def test_non_closable_section_has_no_close_button():
     assert not any(b.text() == "✕" for b in section.findChildren(QToolButton))
 
 
+def test_start_expanded_true_shows_body_without_a_redundant_setvisible_call():
+    # Regression test: __init__ skips calling body.setVisible(True) when
+    # start_expanded=True (relying on Qt's default child-widget
+    # visibility instead, since that call measured as extremely expensive
+    # in this environment -- see the comment in CollapsibleSection.
+    # __init__). Confirms the END STATE is unaffected by that shortcut.
+    section = CollapsibleSection("Test", start_expanded=True)
+    section.show()
+    assert section.body.isVisible() is True
+
+
+def test_start_expanded_false_still_hides_the_body():
+    section = CollapsibleSection("Test", start_expanded=False)
+    section.show()
+    assert section.body.isVisible() is False
+
+
+def test_toggling_after_construction_still_works_both_directions():
+    section = CollapsibleSection("Test", start_expanded=False)
+    section.show()
+    section.set_expanded(True)
+    assert section.body.isVisible() is True
+    section.set_expanded(False)
+    assert section.body.isVisible() is False
+
+
 def test_closable_section_close_button_hides_the_whole_section():
     section = CollapsibleSection("Plot", start_expanded=True, closable=True)
     section.show()

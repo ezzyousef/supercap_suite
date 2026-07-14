@@ -18,7 +18,7 @@ from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
     make_scrollable_panel, ResultCard, CollapsibleSection, NormalizationSelector, show_toast, show_empty_state,
-    attach_section_restore_menu,
+    attach_section_restore_menu, yield_to_event_loop,
 )
 from . import theme, formula_sources
 
@@ -138,6 +138,7 @@ class GcdTab(QWidget):
         seg_section.addLayout(seg_grid)
         self.data_section.addWidget(seg_section)
 
+        yield_to_event_loop()  # Data section (often several CollapsibleSections) is fully built by this point -- yield before Configure
         self.configure_section = CollapsibleSection("2) Configure", start_expanded=True)
         left_layout.addWidget(self.configure_section)
 
@@ -226,7 +227,9 @@ class GcdTab(QWidget):
         ))
 
         left_layout.addStretch()
+        yield_to_event_loop()  # right before wrapping in QScrollArea, which forces an expensive full-subtree sizeHint pass
         splitter.addWidget(make_scrollable_panel(left))
+        yield_to_event_loop()  # left settings panel is the biggest single chunk -- yield partway through construction
 
         # --- Right: plot + results ---
         right = QWidget()
@@ -248,6 +251,7 @@ class GcdTab(QWidget):
             ("Plot", self.plot), ("Results summary", self.results_text), ("Data table", self.table)
         )
         right_layout.addWidget(results_splitter, stretch=1)
+        yield_to_event_loop()  # plot/table splitter is the other big chunk -- yield again before the remaining (usually lighter) widgets
 
         maximize_row = QHBoxLayout()
         maximize_row.addStretch()
