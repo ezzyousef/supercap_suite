@@ -21,6 +21,7 @@ from .widgets import (
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
     make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
 )
+from .workers import AnalysisWorker, set_controls_busy
 from .circuit_diagram import draw_circuit
 from . import theme, formula_sources
 
@@ -31,6 +32,10 @@ class EisTab(QWidget):
         self.df: pd.DataFrame | None = None
         self.last_result: dict | None = None
         self.last_raw_df: pd.DataFrame | None = None
+        # Keep a reference to whichever fit worker is currently running --
+        # QThread objects with no live Python reference can be garbage-
+        # collected mid-run, which would silently kill the fit.
+        self._fit_worker: AnalysisWorker | None = None
         self._build_ui()
 
     def _build_ui(self):
@@ -216,26 +221,27 @@ class EisTab(QWidget):
         # "W", which cannot reproduce the near-vertical low-frequency turn).
         self._select_circuit("supercap_Q_Wo")
 
-        fit_btn = QPushButton("▶ Fit this circuit")
-        fit_btn.clicked.connect(self.on_fit)
-        fit_grid.addWidget(fit_btn, 3, 0, 1, 2)
-        auto_btn = QPushButton(f"▶ Auto-detect best circuit (tries all {len(circuits.all_circuit_names())})")
-        auto_btn.setToolTip(
+        self.fit_btn = QPushButton("▶ Fit this circuit")
+        self.fit_btn.clicked.connect(self.on_fit)
+        fit_grid.addWidget(self.fit_btn, 3, 0, 1, 2)
+        self.auto_btn = QPushButton(f"▶ Auto-detect best circuit (tries all {len(circuits.all_circuit_names())})")
+        self.auto_btn.setToolTip(
             "Fits every circuit in the library to this spectrum and keeps "
             "the one with the lowest reduced χ² -- the results panel lists "
             "the top-ranked models and their fit quality, so the choice is "
-            "never hidden, not just the winner. Takes a few seconds."
+            "never hidden, not just the winner. Runs in the background -- "
+            "the window stays responsive while it works."
         )
-        auto_btn.clicked.connect(self.on_auto_fit)
-        fit_grid.addWidget(auto_btn, 4, 0, 1, 2)
-        clear_btn = QPushButton("Clear results")
-        clear_btn.setToolTip(
+        self.auto_btn.clicked.connect(self.on_auto_fit)
+        fit_grid.addWidget(self.auto_btn, 4, 0, 1, 2)
+        self.clear_btn = QPushButton("Clear results")
+        self.clear_btn.setToolTip(
             "Resets the results panel, plot, circuit diagram, and table -- "
             "so a fresh fit always starts clean and a stale result can't "
             "get exported or recorded by accident."
         )
-        clear_btn.clicked.connect(self.on_clear_results)
-        fit_grid.addWidget(clear_btn, 5, 0, 1, 2)
+        self.clear_btn.clicked.connect(self.on_clear_results)
+        fit_grid.addWidget(self.clear_btn, 5, 0, 1, 2)
         fit_grid.addWidget(theme.make_source_button(self, "Equivalent circuit fit", formula_sources.EIS_CIRCUIT_FIT), 6, 0, 1, 2)
         fit_section.addLayout(fit_grid)
         self.configure_section.addWidget(fit_section)
@@ -664,7 +670,12 @@ class EisTab(QWidget):
         self.export_btn.setEnabled(False)
         self.export_diagram_btn.setEnabled(False)
 
+    def _fit_control_buttons(self) -> list:
+        return [self.fit_btn, self.auto_btn, self.clear_btn]
+
     def on_fit(self):
+        if self._fit_worker is not None:
+            return  # a fit is already running -- ignore a double-click
         data = self._get_eis_arrays()
         if data is None:
             return
@@ -673,30 +684,39 @@ class EisTab(QWidget):
         if not model:
             QMessageBox.warning(self, "No circuit selected", "Choose a circuit from the list first.")
             return
-        try:
-            result = eis.fit_equivalent_circuit(freq, zre, zim, model=model, multistart=True)
-        except (ImportError, ValueError) as e:
-            QMessageBox.critical(self, "Fit error", str(e))
-            return
-        self._render_fit_result(freq, zre, zim, result)
+
+        set_controls_busy(self._fit_control_buttons(), True, busy_texts={self.fit_btn: "Fitting…"})
+        self.status_label.setText(f"Fitting {eis.CIRCUIT_DISPLAY_NAMES.get(model, model)}…")
+
+        worker = AnalysisWorker(lambda: eis.fit_equivalent_circuit(freq, zre, zim, model=model, multistart=True))
+        self._fit_worker = worker
+        worker.succeeded.connect(lambda result: self._render_fit_result(freq, zre, zim, result))
+        worker.failed.connect(lambda msg: QMessageBox.critical(self, "Fit error", msg))
+        worker.finished.connect(self._on_fit_worker_finished)
+        worker.start()
 
     def on_auto_fit(self):
+        if self._fit_worker is not None:
+            return  # a fit is already running -- ignore a double-click
         data = self._get_eis_arrays()
         if data is None:
             return
         freq, zre, zim = data
         n_total = len(circuits.all_circuit_names())
-        self.status_label.setText(f"Running auto-fit across {n_total} circuits…")
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        QApplication.processEvents()
-        try:
-            best, attempts = eis.auto_fit_equivalent_circuit(freq, zre, zim)
-        except ValueError as e:
-            QMessageBox.critical(self, "Auto-detect failed", str(e))
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
-            self.status_label.setText(f"Loaded {len(self.df)} rows, {len(self.df.columns)} columns")
+
+        set_controls_busy(self._fit_control_buttons(), True,
+                           busy_texts={self.auto_btn: f"Running auto-fit across {n_total} circuits…"})
+        self.status_label.setText(f"Running auto-fit across {n_total} circuits… (window stays responsive)")
+
+        worker = AnalysisWorker(lambda: eis.auto_fit_equivalent_circuit(freq, zre, zim))
+        self._fit_worker = worker
+        worker.succeeded.connect(lambda result: self._on_auto_fit_done(freq, zre, zim, result))
+        worker.failed.connect(lambda msg: QMessageBox.critical(self, "Auto-detect failed", msg))
+        worker.finished.connect(self._on_fit_worker_finished)
+        worker.start()
+
+    def _on_auto_fit_done(self, freq, zre, zim, result):
+        best, attempts = result
 
         # move the category/circuit combos to match the winner, so "Fit
         # this circuit" and subsequent exports stay consistent with what's
@@ -730,6 +750,16 @@ class EisTab(QWidget):
             "sense for your electrode/electrolyte before trusting it."
         )
         self._render_fit_result(freq, zre, zim, best, extra_header_lines=ranking_lines)
+
+    def _on_fit_worker_finished(self):
+        n_total = len(circuits.all_circuit_names())
+        set_controls_busy(
+            self._fit_control_buttons(), False,
+            busy_texts={self.fit_btn: "Fitting…", self.auto_btn: f"Running auto-fit across {n_total} circuits…"},
+        )
+        if self.df is not None:
+            self.status_label.setText(f"Loaded {len(self.df)} rows, {len(self.df.columns)} columns")
+        self._fit_worker = None
 
     def _render_fit_result(self, freq, zre, zim, result, extra_header_lines=None):
         lines = list(extra_header_lines) if extra_header_lines else []

@@ -71,6 +71,28 @@ class CvTab(QWidget):
         col_grid.addWidget(self.voltage_combo, 0, 1)
         col_grid.addWidget(QLabel("Current column:"), 1, 0)
         col_grid.addWidget(self.current_combo, 1, 1)
+
+        self.cycle_col_combo = QComboBox()
+        self.cycle_col_combo.currentIndexChanged.connect(self._on_cycle_column_changed)
+        col_grid.addWidget(QLabel("Cycle-number column (optional):"), 2, 0)
+        col_grid.addWidget(self.cycle_col_combo, 2, 1)
+        self.cycle_value_combo = QComboBox()
+        self.cycle_value_combo.setEnabled(False)
+        self.cycle_value_combo.currentIndexChanged.connect(self._on_cycle_value_changed)
+        col_grid.addWidget(QLabel("Cycle to analyze:"), 3, 0)
+        col_grid.addWidget(self.cycle_value_combo, 3, 1)
+        cycle_note = QLabel(
+            "If your file has multiple CV cycles stacked in one sheet (one "
+            "cycle-number column, several full sweeps back to back), select "
+            "the cycle-number column here, then pick which cycle to "
+            "analyze below -- the row range above then applies within just "
+            "that cycle's rows. Leave on \"-- all rows --\" for a file with "
+            "a single cycle."
+        )
+        cycle_note.setWordWrap(True)
+        cycle_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        col_grid.addWidget(cycle_note, 4, 0, 1, 2)
+
         col_section.addLayout(col_grid)
         self.data_section.addWidget(col_section)
 
@@ -234,12 +256,63 @@ class CvTab(QWidget):
             if "ma" in i_guess.lower():
                 self.current_unit_combo.setCurrentText("mA")
 
+        self.cycle_col_combo.blockSignals(True)
+        self.cycle_col_combo.clear()
+        self.cycle_col_combo.addItem("-- none / single cycle --")
+        self.cycle_col_combo.addItems([str(c) for c in cols])
+        self.cycle_col_combo.blockSignals(False)
+        cycle_guess = find_column(df, "cycle")
+        if cycle_guess:
+            self.cycle_col_combo.setCurrentText(cycle_guess)  # triggers _on_cycle_column_changed
+        else:
+            self._on_cycle_column_changed()
+
         self.table_model.set_dataframe(df.head(500))
-        self.end_spin.setMaximum(max(0, len(df) - 1))
-        self.end_spin.setValue(max(0, len(df) - 1))
         # Data (column mapping + cycle row range) is done with once a
         # file loads -- collapse it so Configure gets the attention.
         self.data_section.set_expanded(False)
+
+    def _on_cycle_column_changed(self):
+        self.cycle_value_combo.blockSignals(True)
+        self.cycle_value_combo.clear()
+        col = self.cycle_col_combo.currentText()
+        if self.df is None or col == "-- none / single cycle --" or not col:
+            self.cycle_value_combo.addItem("-- all rows --")
+            self.cycle_value_combo.setEnabled(False)
+        else:
+            try:
+                values = sorted(self.df[col].dropna().unique().tolist())
+            except TypeError:
+                values = sorted(self.df[col].dropna().astype(str).unique().tolist())
+            self.cycle_value_combo.addItem("-- all rows --")
+            for v in values:
+                label = f"{v:g}" if isinstance(v, float) else str(v)
+                self.cycle_value_combo.addItem(f"Cycle {label}", userData=v)
+            self.cycle_value_combo.setEnabled(len(values) > 0)
+        self.cycle_value_combo.blockSignals(False)
+        self._on_cycle_value_changed()
+
+    def _on_cycle_value_changed(self):
+        if self.df is None:
+            return
+        df = self._current_df()
+        self.table_model.set_dataframe(df.head(500))
+        self.end_spin.setMaximum(max(0, len(df) - 1))
+        self.end_spin.setValue(max(0, len(df) - 1))
+
+    def _current_df(self) -> pd.DataFrame | None:
+        """self.df, filtered to just the selected cycle's rows if a cycle
+        column and a specific cycle are chosen -- otherwise the full
+        dataframe unchanged."""
+        if self.df is None:
+            return None
+        col = self.cycle_col_combo.currentText()
+        if col == "-- none / single cycle --" or not col:
+            return self.df
+        if self.cycle_value_combo.currentIndex() <= 0:  # "-- all rows --"
+            return self.df
+        cycle_value = self.cycle_value_combo.currentData()
+        return self.df[self.df[col] == cycle_value]
 
     def _get_cycle(self):
         if self.df is None:
@@ -250,11 +323,15 @@ class CvTab(QWidget):
         if vcol == "-- select --" or icol == "-- select --":
             QMessageBox.warning(self, "Missing columns", "Select both a voltage and a current column.")
             return None
+        df = self._current_df()
+        if df.empty:
+            QMessageBox.warning(self, "No rows", "The selected cycle has no rows -- pick a different cycle.")
+            return None
         start, end = self.start_spin.value(), self.end_spin.value()
         if end <= start:
             QMessageBox.warning(self, "Invalid range", "End row must be greater than start row.")
             return None
-        sub = self.df.iloc[start:end + 1]
+        sub = df.iloc[start:end + 1]
         try:
             v = sub[vcol].astype(float).to_numpy()
             i = sub[icol].astype(float).to_numpy()
