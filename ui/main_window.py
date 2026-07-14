@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QPixmap, QKeySequence, QShortcut
 from PySide6.QtWidgets import QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QLabel
 
@@ -178,6 +178,27 @@ class MainWindow(QMainWindow):
 
         self._lazy_containers[0].ensure_built()  # the tab shown at launch is ready immediately
         self._on_tab_changed(tabs.currentIndex())
+
+        # Every OTHER tab still only builds the first time the user clicks
+        # it (see _LazyTabContainer) -- fast to launch, but that first
+        # click then pays the full construction cost synchronously and
+        # visibly stalls the tab switch, which is exactly the "lagging"
+        # symptom. Warm the rest up in the background instead, one at a
+        # time with a small gap between each, starting shortly after the
+        # window has had a chance to paint -- by the time the user
+        # actually clicks around, most tabs are typically already built
+        # and the switch is instant. A tab clicked before its turn in
+        # this queue still builds synchronously as a fallback (same as
+        # before), so correctness never depends on this warm-up finishing.
+        self._warm_up_index = 1
+        QTimer.singleShot(400, self._warm_up_next_tab)
+
+    def _warm_up_next_tab(self) -> None:
+        if self._warm_up_index >= len(self._lazy_containers):
+            return
+        self._lazy_containers[self._warm_up_index].ensure_built()
+        self._warm_up_index += 1
+        QTimer.singleShot(60, self._warm_up_next_tab)
 
     def _on_tab_changed(self, index: int) -> None:
         if 0 <= index < len(self._lazy_containers):
