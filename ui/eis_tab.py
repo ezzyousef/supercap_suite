@@ -291,7 +291,8 @@ class EisTab(QWidget):
         self.table.setModel(self.table_model)
 
         results_splitter = make_resizable_results_panel(
-            self.plot, self.circuit_diagram, self.results_text, self.table,
+            ("Plot", self.plot), ("Circuit diagram", self.circuit_diagram),
+            ("Results summary", self.results_text), ("Data table", self.table),
             sizes=[320, 200, 160, 160],
         )
         right_layout.addWidget(results_splitter, stretch=1)

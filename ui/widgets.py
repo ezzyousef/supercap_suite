@@ -510,20 +510,74 @@ def remove_selected_table_rows(table: QTableView, df: pd.DataFrame) -> pd.DataFr
     return df.drop(df.index[rows]).reset_index(drop=True)
 
 
-def make_resizable_results_panel(*widgets, sizes: list[int] | None = None) -> QSplitter:
+def _make_collapsible_splitter_pane(splitter: QSplitter, title: str, widget: QWidget,
+                                     start_expanded: bool = True) -> "CollapsibleSection":
+    """Wrap `widget` in a titled, individually-collapsible header before
+    it goes into `splitter` -- clicking the header minimizes just THAT
+    pane (down to its header's height) and hands the freed vertical
+    space to the largest remaining expanded pane; expanding it again
+    takes that space back. This is a separate, per-section control from
+    both (a) dragging the splitter handle (still works, just resizes
+    rather than fully hiding) and (b) the tab-wide "Maximize results"
+    button (collapses the LEFT settings panel, a different axis
+    entirely) -- a researcher can hide, say, the raw data table while
+    keeping the plot and results text both visible, without losing
+    either the plot's or the text's current size.
+    """
+    section = CollapsibleSection(title, content_widget=widget, start_expanded=start_expanded)
+    section._restore_size = None  # last expanded height, remembered across collapse/expand cycles
+
+    def _on_toggle(expanded: bool):
+        sizes = splitter.sizes()
+        idx = splitter.indexOf(section)
+        if idx < 0 or idx >= len(sizes):
+            return
+        collapsed_h = section.toggle_btn.sizeHint().height() + 6
+        if not expanded:
+            section._restore_size = max(sizes[idx], collapsed_h + 40)
+            freed = sizes[idx] - collapsed_h
+            sizes[idx] = collapsed_h
+            others = [i for i in range(len(sizes)) if i != idx]
+            if others and freed > 0:
+                target = max(others, key=lambda i: sizes[i])
+                sizes[target] += freed
+        else:
+            restore = section._restore_size or 200
+            others = [i for i in range(len(sizes)) if i != idx]
+            if others:
+                donor = max(others, key=lambda i: sizes[i])
+                take = max(0, min(restore - sizes[idx], sizes[donor] - collapsed_h))
+                sizes[donor] -= take
+                sizes[idx] += take
+        splitter.setSizes(sizes)
+
+    section.toggled.connect(_on_toggle)
+    return section
+
+
+def make_resizable_results_panel(*titled_widgets, sizes: list[int] | None = None) -> QSplitter:
     """Vertical splitter for a tab's plot/results-text/table stack, in
     place of a fixed-ratio QVBoxLayout -- lets the user drag to give the
     plot more room at the table's expense (or vice versa) instead of
-    living with a hardcoded stretch ratio. Pass only the widgets a given
-    tab actually has (e.g. some tabs have no table); None entries are
-    skipped so callers can write `make_resizable_results_panel(self.plot,
-    self.results_text, getattr(self, "table", None))` without an if-chain.
+    living with a hardcoded stretch ratio. Each pane also gets its own
+    collapsible header (see _make_collapsible_splitter_pane) so any one
+    section can be minimized independently of the others.
+
+    Pass `(title, widget)` tuples; a bare widget (no title) also works,
+    for backward compatibility, and gets an auto "Section N" header.
+    Entries whose widget is None are skipped, so callers can write
+    `make_resizable_results_panel(("Plot", self.plot),
+    ("Table", getattr(self, "table", None)))` without an if-chain.
     """
     splitter = QSplitter(Qt.Orientation.Vertical)
-    real_widgets = [w for w in widgets if w is not None]
-    for w in real_widgets:
-        splitter.addWidget(w)
-    splitter.setSizes(sizes if sizes else [280, 140, 160][:len(real_widgets)])
+    real_items = []
+    for i, item in enumerate(titled_widgets):
+        title, widget = item if isinstance(item, tuple) else (f"Section {i + 1}", item)
+        if widget is not None:
+            real_items.append((title, widget))
+    for title, widget in real_items:
+        splitter.addWidget(_make_collapsible_splitter_pane(splitter, title, widget, start_expanded=True))
+    splitter.setSizes(sizes if sizes else [280, 140, 160][:len(real_items)])
     return splitter
 
 
@@ -632,7 +686,7 @@ class ExportButtonPair(QWidget):
                         lambda: _guarded(lambda: dialog_fn("new")))
         if origin_fn is not None:
             menu.addSeparator()
-            menu.addAction("🔬 Send to OriginLab", lambda: _guarded(origin_fn))
+            menu.addAction("🔬 Send to OriginLab (data + graph)", lambda: _guarded(origin_fn))
         self.export_button.setMenu(menu)
 
         layout.addWidget(self.export_button)
@@ -669,9 +723,11 @@ def make_export_button(parent, sheet_prefix: str, get_results, get_raw_data=None
 def _run_origin_send(parent, sheet_prefix: str, results: dict, raw_data, source_note: str | None) -> None:
     """Shared "Send to OriginLab" click handler -- pushes into whatever
     Origin session is already open (launching one, visibly, on the
-    first send of the app run) and reports success/failure the same way
-    every other action in this app does: a toast for success, a clear
-    dialog for failure, never a silent no-op."""
+    first send of the app run), automatically creating an actual Origin
+    GRAPH from the data too (not just a worksheet, see
+    core.origin_export._plot_worksheet_data), and reports success/
+    failure the same way every other action in this app does: a toast
+    for success, a clear dialog for failure, never a silent no-op."""
     try:
         sheet_name = origin_export.send_to_origin(sheet_prefix, results, raw_data, source_note)
     except origin_export.OriginNotAvailableError as e:
@@ -680,7 +736,7 @@ def _run_origin_send(parent, sheet_prefix: str, results: dict, raw_data, source_
     except Exception as e:
         QMessageBox.critical(parent, "Send to OriginLab failed", str(e))
         return
-    show_toast(parent, f"Sent to OriginLab -- worksheet '{sheet_name}'.")
+    show_toast(parent, f"Sent to OriginLab -- worksheet '{sheet_name}' (plus a graph, if the data supported one).")
 
 
 def _prompt_workbook_and_sheet(parent, sheet_prefix: str, mode: str = "ask"):
@@ -826,7 +882,22 @@ class RecordLogPanel(QGroupBox):
         self._rows: list[dict] = []
         self._get_results = None
 
-        layout = QVBoxLayout(self)
+        # A native checkable QGroupBox only dims/enables its children on
+        # toggle, it doesn't collapse them out of the layout -- so the
+        # actual content lives in this one sub-widget, which gets hidden
+        # entirely (shrinking the whole box down to just its title bar)
+        # when the checkbox is unticked. This gives this panel the same
+        # per-section minimize/maximize control as the plot/table/results
+        # panes above it (see _make_collapsible_splitter_pane).
+        self.setCheckable(True)
+        self.setChecked(True)
+        self.toggled.connect(self._on_group_toggled)
+
+        outer = QVBoxLayout(self)
+        self._body = QWidget()
+        outer.addWidget(self._body)
+        layout = QVBoxLayout(self._body)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         label_row = QHBoxLayout()
         label_row.addWidget(QLabel("Sample / run label:"))
@@ -870,6 +941,9 @@ class RecordLogPanel(QGroupBox):
         self.clear_btn.clicked.connect(self._clear)
         btn_row.addWidget(self.clear_btn)
         layout.addLayout(btn_row)
+
+    def _on_group_toggled(self, checked: bool):
+        self._body.setVisible(checked)
 
     def bind(self, get_results):
         """`get_results` is a zero-arg callable returning the tab's

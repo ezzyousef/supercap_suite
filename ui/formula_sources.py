@@ -183,16 +183,24 @@ cite for them).
 
 DSC_WATER_TYPE = """
 <code>W_t = m_w / m_d</code> (total water content, Eq.1)<br>
-<code>W_f = A_f / (334 &times; m_d)</code> (freezable water, Eq.2)<br>
+<code>W_f = A_f / (333.55 &times; m_d)</code> (freezable water, Eq.2)<br>
 <code>W_nb = W_t &minus; W_f</code> (non-freezable bound water, Eq.3)<br>
 <code>W_fb = W_f &times; (area_symmetric / area_total)</code> (freezable bound water, Eq.4)<br>
 <code>W_b = W_nb + W_fb</code> (total bound water, Eq.5)<br>
 <code>W_free = W_f &minus; W_fb</code> (free water, Eq.6)<br>
 Source: Yousef et al., "Anti-freezing gel electrolyte...", <i>Chemical
-Engineering Journal</i> 526 (2025) 171441, Section 2.4, eqns 1-6. 334 J/g
-is the heat of fusion of water used in that paper's equation set
-(literature range: ~333.5-334 J/g) -- adjustable in this tab if your
-reference method uses a different value.
+Engineering Journal</i> 526 (2025) 171441, Section 2.4, eqns 1-6.
+333.55 J/g (the "Pure water Enthalpy" reference value in the validated
+reference spreadsheet, "Calculations of water (version 1).xlsx") is the
+default heat of fusion of water used here (literature range: ~333.5-334
+J/g) -- adjustable in this tab if your reference method uses a different
+value.<br><br>
+Each water population can also be expressed as a percentage of TOTAL
+water content (W_t): freezable, non-freezable-bound, freezable-bound,
+and free water -- exactly matching that reference spreadsheet's
+"Freezable water %" / "Non-Freezable bound water" / "Freezable bound
+water %" / "Free water %" columns, verified to 5-6 significant figures
+against 3 real sample rows.
 """
 
 DSC_SYMMETRIC_TOTAL_SPLIT = """

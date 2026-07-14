@@ -397,7 +397,9 @@ class CvRateTool(QWidget):
         self.results_text = QTextEdit()
         self.results_text.setReadOnly(True)
 
-        results_splitter = make_resizable_results_panel(self.plot, self.results_text, sizes=[320, 220])
+        results_splitter = make_resizable_results_panel(
+            ("Plot", self.plot), ("Results summary", self.results_text), sizes=[320, 220]
+        )
         right_layout.addWidget(results_splitter, stretch=1)
 
         maximize_row = QHBoxLayout()
@@ -967,7 +969,9 @@ class GcdRateTool(QWidget):
         self.table_model = DataFrameModel()
         self.table.setModel(self.table_model)
 
-        results_splitter = make_resizable_results_panel(self.plot, self.table, sizes=[380, 220])
+        results_splitter = make_resizable_results_panel(
+            ("Plot", self.plot), ("Data table", self.table), sizes=[380, 220]
+        )
         right_layout.addWidget(results_splitter, stretch=1)
 
         maximize_row = QHBoxLayout()

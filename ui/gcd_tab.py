@@ -243,7 +243,9 @@ class GcdTab(QWidget):
         self.table_model = DataFrameModel()
         self.table.setModel(self.table_model)
 
-        results_splitter = make_resizable_results_panel(self.plot, self.results_text, self.table)
+        results_splitter = make_resizable_results_panel(
+            ("Plot", self.plot), ("Results summary", self.results_text), ("Data table", self.table)
+        )
         right_layout.addWidget(results_splitter, stretch=1)
 
         maximize_row = QHBoxLayout()

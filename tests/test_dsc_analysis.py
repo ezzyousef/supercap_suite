@@ -26,6 +26,36 @@ def test_classify_water_types_known_worked_example():
     assert result.total_bound_water == pytest.approx(0.15)         # W_nb + W_fb
     assert result.free_water == pytest.approx(0.05)                # W_f - W_fb
 
+    pct = result.as_percent_of_total_water()
+    assert pct["freezable_pct"] == pytest.approx(50.0)
+    assert pct["non_freezable_bound_pct"] == pytest.approx(50.0)
+    assert pct["freezable_bound_pct"] == pytest.approx(25.0)
+    assert pct["free_pct"] == pytest.approx(25.0)
+    # all four percentages share the same basis (W_t), so they relate consistently
+    assert pct["freezable_pct"] + pct["non_freezable_bound_pct"] == pytest.approx(100.0)
+    assert pct["freezable_bound_pct"] + pct["free_pct"] == pytest.approx(pct["freezable_pct"])
+
+    pct_of_f = result.as_percent_of_freezable_water()
+    assert pct_of_f["freezable_bound_pct"] == pytest.approx(50.0)
+    assert pct_of_f["free_pct"] == pytest.approx(50.0)
+    assert pct_of_f["freezable_bound_pct"] + pct_of_f["free_pct"] == pytest.approx(100.0)
+
+
+def test_default_heat_of_fusion_matches_reference_spreadsheet():
+    # "Pure water Enthalpy" reference value in the user's own validated
+    # reference spreadsheet (Calculations of water (version 1).xlsx) --
+    # kept as the app's default so results match it out of the box.
+    assert dsc.DEFAULT_HEAT_OF_FUSION_WATER_J_PER_G == pytest.approx(333.55)
+
+
+def test_as_percent_of_total_water_handles_zero_total_water():
+    result = dsc.classify_water_types(
+        mass_water_g=0.0, mass_dry_g=0.1,
+        melting_peak_area_j=0.0001, symmetric_peak_area_j=0.00005, total_peak_area_j=0.0001,
+    )
+    pct = result.as_percent_of_total_water()
+    assert all(v is None for v in pct.values())
+
 
 def test_integrate_dsc_peak_known_rectangular_area():
     # A flat 2 mW signal for 5 s above a 0 mW baseline -> 10 mJ = 0.01 J

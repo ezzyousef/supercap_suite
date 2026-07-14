@@ -287,8 +287,14 @@ class EnthalpyTool(QWidget):
         self.heat_fusion_spin = QDoubleSpinBox()
         self.heat_fusion_spin.setDecimals(2)
         self.heat_fusion_spin.setRange(1, 1000)
-        self.heat_fusion_spin.setValue(334.0)
+        self.heat_fusion_spin.setValue(dsc.DEFAULT_HEAT_OF_FUSION_WATER_J_PER_G)
         self.heat_fusion_spin.setSuffix(" J/g")
+        self.heat_fusion_spin.setToolTip(
+            "Defaults to 333.55 J/g, the exact 'Pure water Enthalpy' "
+            "reference value used in the validated reference spreadsheet "
+            "this tool's calculations are matched against -- adjust if "
+            "your own reference method uses a different value."
+        )
         water_grid.addWidget(QLabel("Heat of fusion of water used:"), 3, 0)
         water_grid.addWidget(self.heat_fusion_spin, 3, 1)
         source_row = QHBoxLayout()
@@ -326,7 +332,9 @@ class EnthalpyTool(QWidget):
         self.table_model = DataFrameModel()
         self.table.setModel(self.table_model)
 
-        results_splitter = make_resizable_results_panel(self.plot, self.results_text, self.table)
+        results_splitter = make_resizable_results_panel(
+            ("Plot", self.plot), ("Results summary", self.results_text), ("Data table", self.table)
+        )
         right_layout.addWidget(results_splitter, stretch=1)
 
         maximize_row = QHBoxLayout()
@@ -642,6 +650,7 @@ class EnthalpyTool(QWidget):
                 except ValueError as e:
                     row["Water-type calculation error"] = str(e)
                 else:
+                    wr_pct = wr.as_percent_of_total_water()
                     row.update({
                         "Water-type split method": (
                             "temperature-threshold (0°C)" if zero_subzero is not None
@@ -654,6 +663,13 @@ class EnthalpyTool(QWidget):
                         "W_b, total bound (g/g)": wr.total_bound_water,
                         "W_free, free water (g/g)": wr.free_water,
                     })
+                    if wr_pct["freezable_pct"] is not None:
+                        row.update({
+                            "Freezable water (% of total water)": wr_pct["freezable_pct"],
+                            "Non-freezable bound (% of total water)": wr_pct["non_freezable_bound_pct"],
+                            "Freezable bound (% of total water)": wr_pct["freezable_bound_pct"],
+                            "Free water (% of total water)": wr_pct["free_pct"],
+                        })
             rows.append(row)
 
         if rows:
@@ -926,6 +942,7 @@ class EnthalpyTool(QWidget):
                 lines += ["", f"Water-type calculation error: {e}"]
                 card_warnings.append(f"Water-type calculation error: {e}")
             else:
+                water_pct = water_result.as_percent_of_total_water()
                 lines += [
                     "",
                     "Water-type breakdown (fully automated -- peak detection, integration,",
@@ -936,7 +953,14 @@ class EnthalpyTool(QWidget):
                     f"  Freezable bound water       W_fb   = {water_result.freezable_bound_water:.4f} g/g",
                     f"  Total bound water           W_b    = {water_result.total_bound_water:.4f} g/g",
                     f"  Free water                  W_free = {water_result.free_water:.4f} g/g",
+                    "",
+                    "  As % of total water (matches the reference spreadsheet exactly):",
                 ]
+                if water_pct["freezable_pct"] is not None:
+                    lines.append(f"    Freezable water:      {water_pct['freezable_pct']:.2f} %")
+                    lines.append(f"    Non-freezable bound:  {water_pct['non_freezable_bound_pct']:.2f} %")
+                    lines.append(f"    Freezable bound:      {water_pct['freezable_bound_pct']:.2f} %")
+                    lines.append(f"    Free:                 {water_pct['free_pct']:.2f} %")
                 card_secondary.append(("Total water content W_t", f"{water_result.total_water_content:.4f} g/g"))
                 if water_result.non_freezable_bound_water < 0:
                     negative_note = ("Non-freezable bound water came out negative -- check m_w, "
@@ -959,6 +983,13 @@ class EnthalpyTool(QWidget):
                     "Total bound water W_b (g/g)": water_result.total_bound_water,
                     "Free water W_free (g/g)": water_result.free_water,
                 })
+                if water_pct["freezable_pct"] is not None:
+                    self.last_result.update({
+                        "Freezable water (% of total water)": water_pct["freezable_pct"],
+                        "Non-freezable bound (% of total water)": water_pct["non_freezable_bound_pct"],
+                        "Freezable bound (% of total water)": water_pct["freezable_bound_pct"],
+                        "Free water (% of total water)": water_pct["free_pct"],
+                    })
         else:
             lines += [
                 "",
@@ -1034,17 +1065,20 @@ class WaterTypeTool(QWidget):
             grid.addWidget(widget, r, 1)
         root.addLayout(grid)
 
-        self.heat_fusion = QDoubleSpinBox(); self.heat_fusion.setDecimals(2); self.heat_fusion.setRange(1, 1000); self.heat_fusion.setValue(334.0); self.heat_fusion.setSuffix(" J/g")
+        self.heat_fusion = QDoubleSpinBox(); self.heat_fusion.setDecimals(2); self.heat_fusion.setRange(1, 1000)
+        self.heat_fusion.setValue(dsc.DEFAULT_HEAT_OF_FUSION_WATER_J_PER_G); self.heat_fusion.setSuffix(" J/g")
         advanced = CollapsibleSection("Advanced: heat of fusion constant")
         hf_row = QHBoxLayout()
-        hf_row.addWidget(QLabel("Heat of fusion of water used (default 334 J/g):"))
+        hf_row.addWidget(QLabel("Heat of fusion of water used (default 333.55 J/g):"))
         hf_row.addWidget(self.heat_fusion)
         advanced.addLayout(hf_row)
         note = QLabel(
-            "Note: 334 J/g is the value used in the source equation set for this "
-            "tool; the literature value for the heat of fusion of bulk water is "
-            "commonly cited in the range ~333.5-334 J/g -- verify which figure "
-            "matches your reference method if precision matters."
+            "Note: 333.55 J/g is the 'Pure water Enthalpy' reference value "
+            "used in the validated reference spreadsheet this tool's "
+            "calculations are matched against; the literature value for "
+            "the heat of fusion of bulk water is commonly cited anywhere "
+            "in the ~333.5-334 J/g range -- verify which figure matches "
+            "your own reference method if precision matters."
         )
         note.setWordWrap(True)
         note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
@@ -1091,6 +1125,7 @@ class WaterTypeTool(QWidget):
             return
 
         pct = result.as_percent_of_total_water()
+        pct_of_freezable = result.as_percent_of_freezable_water()
         lines = [
             f"Total water content        W_t    = {result.total_water_content:.4f} g water / g dry sample",
             f"Freezable water content     W_f    = {result.freezable_water_content:.4f} g/g",
@@ -1099,14 +1134,25 @@ class WaterTypeTool(QWidget):
             f"Total bound water           W_b    = {result.total_bound_water:.4f} g/g",
             f"Free water                  W_free = {result.free_water:.4f} g/g",
             "",
-            "As % of total water content:",
+            "As % of TOTAL water content (matches the reference spreadsheet's",
+            "'Freezable water %' / 'Non-Freezable bound water' / 'Freezable",
+            "bound water %' / 'Free water %' columns exactly):",
         ]
+        if pct["freezable_pct"] is not None:
+            lines.append(f"  Freezable water:      {pct['freezable_pct']:.2f} %")
         if pct["non_freezable_bound_pct"] is not None:
-            lines.append(f"  Non-freezable bound: {pct['non_freezable_bound_pct']:.2f} %")
+            lines.append(f"  Non-freezable bound:  {pct['non_freezable_bound_pct']:.2f} %")
         if pct["freezable_bound_pct"] is not None:
-            lines.append(f"  Freezable bound (of freezable fraction): {pct['freezable_bound_pct']:.2f} %")
+            lines.append(f"  Freezable bound:      {pct['freezable_bound_pct']:.2f} %")
         if pct["free_pct"] is not None:
-            lines.append(f"  Free (of freezable fraction): {pct['free_pct']:.2f} %")
+            lines.append(f"  Free:                 {pct['free_pct']:.2f} %")
+        lines.append("")
+        lines.append("As % of the freezable fraction only (alternate view, NOT the")
+        lines.append("spreadsheet's basis -- these two sum to 100% between themselves):")
+        if pct_of_freezable["freezable_bound_pct"] is not None:
+            lines.append(f"  Freezable bound (of freezable fraction): {pct_of_freezable['freezable_bound_pct']:.2f} %")
+        if pct_of_freezable["free_pct"] is not None:
+            lines.append(f"  Free (of freezable fraction): {pct_of_freezable['free_pct']:.2f} %")
 
         card_warnings = []
         if result.non_freezable_bound_water < 0:
@@ -1140,10 +1186,16 @@ class WaterTypeTool(QWidget):
             "Total bound water W_b (g/g)": result.total_bound_water,
             "Free water W_free (g/g)": result.free_water,
         }
+        if pct["freezable_pct"] is not None:
+            self.last_result["Freezable water (% of total water)"] = pct["freezable_pct"]
         if pct["non_freezable_bound_pct"] is not None:
             self.last_result["Non-freezable bound (% of total water)"] = pct["non_freezable_bound_pct"]
         if pct["freezable_bound_pct"] is not None:
-            self.last_result["Freezable bound (% of freezable fraction)"] = pct["freezable_bound_pct"]
+            self.last_result["Freezable bound (% of total water)"] = pct["freezable_bound_pct"]
         if pct["free_pct"] is not None:
-            self.last_result["Free (% of freezable fraction)"] = pct["free_pct"]
+            self.last_result["Free (% of total water)"] = pct["free_pct"]
+        if pct_of_freezable["freezable_bound_pct"] is not None:
+            self.last_result["Freezable bound (% of freezable fraction)"] = pct_of_freezable["freezable_bound_pct"]
+        if pct_of_freezable["free_pct"] is not None:
+            self.last_result["Free (% of freezable fraction)"] = pct_of_freezable["free_pct"]
         self.export_btn.setEnabled(True)

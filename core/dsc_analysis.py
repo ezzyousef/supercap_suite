@@ -11,26 +11,34 @@ as applied to DSC melting-peak data, e.g. Yousef et al., "Anti-freezing
 ... gel electrolyte", Chemical Engineering Journal 526 (2025) 171441:
 
     W_t   = m_w / m_d                                  (total water content, Eq.1)
-    W_f   = A_f / (334 * m_d)                           (freezable water,   Eq.2)
+    W_f   = A_f / (333.55 * m_d)                        (freezable water,   Eq.2)
     W_nb  = W_t - W_f                                   (non-freezable bound water, Eq.3)
     W_fb  = W_f * (area_symmetric_peak / total_peak_area) (freezable bound water, Eq.4)
     W_b   = W_nb + W_fb                                 (total bound water, Eq.5)
     W_free= W_f - W_fb                                  (free water,        Eq.6)
 
 where m_w = mass of water in the sample (g), m_d = mass of the dry sample
-(g), A_f = melting endotherm peak area (J), and 334 J/g is the specific
-latent heat of fusion of water used in that scheme. Note: the literature
-value for the heat of fusion of pure bulk water is commonly cited as
-~333.5-334 J/g (~79.7-80 cal/g); 334 J/g is the value explicitly used in
-the source equation set above, so it is kept as the default here, but you
-may need to verify which value (e.g. 333.55 J/g, an alternative commonly
-cited figure) is appropriate for your specific reference method.
+(g), A_f = melting endotherm peak area (J), and 333.55 J/g is the specific
+latent heat of fusion of water used as the reference ("Pure water
+Enthalpy") in the user's own validated reference spreadsheet
+("Calculations of water (version 1).xlsx"), kept as the default here to
+match it exactly (still user-adjustable -- the literature value for the
+heat of fusion of pure bulk water is commonly cited anywhere in the
+~333.5-334 J/g range depending on source).
+
+Each water population can also be expressed as a percentage OF TOTAL
+WATER CONTENT (W_t) -- see WaterContentResult.as_percent_of_total_water()
+-- which is exactly the "Freezable water %", "Non-Freezable bound water",
+"Freezable bound water %", "Free water %" columns tabulated in that same
+reference spreadsheet (verified to 5-6 significant figures against 3
+real sample rows): freezable_pct + non_freezable_bound_pct == 100, and
+freezable_bound_pct + free_pct == freezable_pct.
 """
 from dataclasses import dataclass
 import numpy as np
 
 
-DEFAULT_HEAT_OF_FUSION_WATER_J_PER_G = 334.0
+DEFAULT_HEAT_OF_FUSION_WATER_J_PER_G = 333.55
 
 
 @dataclass
@@ -43,15 +51,42 @@ class WaterContentResult:
     free_water: float                   # W_free
 
     def as_percent_of_total_water(self) -> dict:
-        """Convenience view: each freezable/bound/free fraction expressed as
-        a percentage of the FREEZABLE water content (W_f), matching how
-        results are often tabulated in papers (e.g. 'freezable bound water
-        (% of freezable water)'). Guards against division by zero."""
-        if self.freezable_water_content == 0:
-            return {"non_freezable_bound_pct": None, "freezable_bound_pct": None, "free_pct": None}
+        """Every water population expressed as a percentage of TOTAL water
+        content (W_t) -- this is exactly the "Freezable water %",
+        "Non-Freezable bound water", "Freezable bound water %", "Free
+        water %" columns tabulated in the source reference spreadsheet
+        (Calculations of water (version 1).xlsx), verified to 5-6
+        significant figures against 3 real sample rows. All four are on
+        the SAME basis (W_t), so they relate consistently:
+        freezable_pct + non_freezable_bound_pct == 100, and
+        freezable_bound_pct + free_pct == freezable_pct.
+
+        For the freezable-bound/free split expressed relative to the
+        freezable fraction alone instead (a narrower, different-basis
+        view -- NOT the spreadsheet's convention), see
+        as_percent_of_freezable_water().
+        """
+        if self.total_water_content == 0:
+            return {"freezable_pct": None, "non_freezable_bound_pct": None,
+                    "freezable_bound_pct": None, "free_pct": None}
+        t = self.total_water_content
         return {
-            "non_freezable_bound_pct": 100 * self.non_freezable_bound_water / self.total_water_content
-            if self.total_water_content else None,
+            "freezable_pct": 100 * self.freezable_water_content / t,
+            "non_freezable_bound_pct": 100 * self.non_freezable_bound_water / t,
+            "freezable_bound_pct": 100 * self.freezable_bound_water / t,
+            "free_pct": 100 * self.free_water / t,
+        }
+
+    def as_percent_of_freezable_water(self) -> dict:
+        """Freezable-bound / free water, each as a percentage of the
+        FREEZABLE water fraction (W_f) only -- these two sum to 100%
+        between themselves. An alternate, narrower view than
+        as_percent_of_total_water(); NOT the basis used in the source
+        reference spreadsheet (use as_percent_of_total_water() to match
+        that). Guards against division by zero."""
+        if self.freezable_water_content == 0:
+            return {"freezable_bound_pct": None, "free_pct": None}
+        return {
             "freezable_bound_pct": 100 * self.freezable_bound_water / self.freezable_water_content,
             "free_pct": 100 * self.free_water / self.freezable_water_content,
         }
@@ -87,9 +122,10 @@ def classify_water_types(mass_water_g: float, mass_dry_g: float,
         components (J); symmetric_peak_area_j / total_peak_area_j is the
         fraction of freezable water that is "freezable bound"
     heat_of_fusion_j_per_g : specific heat of fusion of water used to
-        convert peak area to mass of freezable water; defaults to 334 J/g
-        as used in the source equation set -- verify against your chosen
-        reference if precision matters.
+        convert peak area to mass of freezable water; defaults to
+        333.55 J/g, matching the "Pure water Enthalpy" reference value
+        used in the source reference spreadsheet -- verify against your
+        chosen reference if precision matters.
     """
     if mass_dry_g <= 0:
         raise ValueError("mass_dry_g must be positive")
