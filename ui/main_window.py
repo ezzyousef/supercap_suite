@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QPixmap, QKeySequence, QShortcut
 from PySide6.QtWidgets import QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QLabel
 
@@ -87,6 +87,23 @@ class _LazyTabContainer(QWidget):
     only this container's inner content changes from empty to real, so
     there is no removeTab/insertTab churn or re-entrancy risk in
     MainWindow's currentChanged handler.
+
+    Building a tab still costs ~0.3-0.5s of uninterrupted main-thread
+    work (matplotlib canvases included) -- fine for the ONE tab built
+    eagerly at launch, but doing that same work synchronously inside a
+    tab-CLICK's event handler makes Windows treat the click as
+    unhandled/hung and flash the window's taskbar/peek preview (the
+    ghosting effect is tied to unresponsive INPUT handling specifically,
+    not just to the thread being busy in general). request_build_async()
+    works around this: it shows a lightweight placeholder immediately
+    (so the click itself is acknowledged and the tab visibly switches
+    right away) and defers the actual heavy construction to a QTimer
+    callback instead of running it inline in the click handler -- same
+    total work, same thread, but no longer attributed to that specific
+    input event, which is what avoids the ghosting. ensure_built() is
+    kept as a synchronous fallback for callers that need the real widget
+    to exist immediately (e.g. a keyboard shortcut firing right after a
+    tab switch, before the deferred build has had a chance to run).
     """
 
     def __init__(self, factory):
@@ -95,12 +112,33 @@ class _LazyTabContainer(QWidget):
         self.real_widget: QWidget | None = None
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
+        self._placeholder: QLabel | None = None
+        self._build_scheduled = False
 
     def ensure_built(self) -> QWidget:
         if self.real_widget is None:
-            self.real_widget = self._factory()
-            self._layout.addWidget(self.real_widget)
+            self._build_now()
         return self.real_widget
+
+    def request_build_async(self) -> None:
+        if self.real_widget is not None or self._build_scheduled:
+            return
+        self._build_scheduled = True
+        self._placeholder = QLabel("Loading…")
+        self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._layout.addWidget(self._placeholder)
+        QTimer.singleShot(0, self._build_now)
+
+    def _build_now(self) -> None:
+        if self.real_widget is not None:
+            return
+        if self._placeholder is not None:
+            self._layout.removeWidget(self._placeholder)
+            self._placeholder.deleteLater()
+            self._placeholder = None
+        self.real_widget = self._factory()
+        self._layout.addWidget(self.real_widget)
+        self._build_scheduled = False
 
 
 class MainWindow(QMainWindow):
@@ -179,24 +217,23 @@ class MainWindow(QMainWindow):
         self._lazy_containers[0].ensure_built()  # the tab shown at launch is ready immediately
         self._on_tab_changed(tabs.currentIndex())
 
-        # NOTE: an earlier version of this method also warmed up the other
-        # 7 tabs automatically in the background shortly after launch (one
-        # at a time via QTimer.singleShot) so tab switching would feel
-        # instant. That traded one problem for a worse one: building each
-        # tab (matplotlib canvases included) still blocks the UI thread
-        # for ~0.3-0.5s, and doing that 7 times in a burst right after the
-        # window opens is long/frequent enough that Windows' DWM flags the
-        # window as unresponsive repeatedly -- which showed up as the
-        # taskbar icon/peek-preview flashing several times right after
-        # launch. Removed: every tab now builds ONLY when the user
-        # actually clicks it (see _LazyTabContainer.ensure_built), which
-        # costs that same ~0.3-0.5s but as a single, expected, user-
-        # initiated pause tied to a real click -- not an automatic,
-        # unexplained flurry of freezes the moment the app opens.
+        # NOTE: an earlier version of this method warmed up the other 7
+        # tabs automatically in the background shortly after launch (one
+        # at a time via QTimer.singleShot). That fixed laggy first clicks
+        # but caused a WORSE problem: building 7 tabs in a burst right
+        # after the window opens was long/frequent enough that Windows'
+        # DWM flagged the window as unresponsive repeatedly, flashing its
+        # taskbar/peek preview. Removed. Building on click alone (see
+        # _on_tab_changed below) turned out to trip the SAME ghosting --
+        # any ~0.3-0.5s of uninterrupted work run directly inside the
+        # click's event handler reads to Windows as "didn't handle this
+        # click", regardless of whether it happens once or seven times.
+        # request_build_async() (see _LazyTabContainer) is the actual
+        # fix: same work, deferred one tick off the click's call stack.
 
     def _on_tab_changed(self, index: int) -> None:
         if 0 <= index < len(self._lazy_containers):
-            self._lazy_containers[index].ensure_built()
+            self._lazy_containers[index].request_build_async()
         color = theme.TAB_COLORS[index] if 0 <= index < len(theme.TAB_COLORS) else theme.RAW
         self.accent_strip.setStyleSheet(f"background-color: {color};")
 
