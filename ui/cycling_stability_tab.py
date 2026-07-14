@@ -21,6 +21,7 @@ from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
     make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
+    attach_section_restore_menu,
 )
 from . import theme, formula_sources
 
@@ -256,7 +257,7 @@ class CyclingStabilityTab(QWidget):
         self.record_panel.bind(lambda: self.last_result)
         right_layout.addWidget(self.record_panel)
 
-        batch_section = CollapsibleSection("Batch results (multiple files)")
+        batch_section = CollapsibleSection("Batch results (multiple files)", closable=True)
         self.batch_table = make_table_view()
         self.batch_table_model = DataFrameModel()
         self.batch_table.setModel(self.batch_table_model)
@@ -274,6 +275,7 @@ class CyclingStabilityTab(QWidget):
         splitter.addWidget(right)
         splitter.setSizes([420, 700])
         configure_collapsible_main_splitter(splitter)
+        attach_section_restore_menu(right, right.findChildren(CollapsibleSection) + right.findChildren(RecordLogPanel))
 
     # -------------------------------------------------------------- events
     def on_open_file(self):

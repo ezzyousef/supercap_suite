@@ -70,6 +70,39 @@ class AboutTab(QWidget):
         layout.addStretch()
 
 
+class _LazyTabContainer(QWidget):
+    """Thin, cheap-to-construct stand-in for a tab's real content, built
+    on first visit instead of eagerly at app startup. Every one of this
+    app's 8 top-level tabs builds dozens of widgets (several of them
+    matplotlib canvases) in its own __init__ -- constructing all 8 up
+    front measured at ~2.6s alone (profiled via cProfile on this app),
+    on top of the several more seconds spent importing matplotlib/scipy/
+    pandas, which together is long enough that Windows shows its "not
+    responding yet" placeholder window (generic icon, wobble animation)
+    before the real window ever paints. Building 7 of the 8 tabs only
+    when the user actually clicks them turns that into a few hundred
+    milliseconds for the tab that matters (the one shown on launch).
+
+    The QTabWidget's tab list itself (index/label/icon) never changes --
+    only this container's inner content changes from empty to real, so
+    there is no removeTab/insertTab churn or re-entrancy risk in
+    MainWindow's currentChanged handler.
+    """
+
+    def __init__(self, factory):
+        super().__init__()
+        self._factory = factory
+        self.real_widget: QWidget | None = None
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+
+    def ensure_built(self) -> QWidget:
+        if self.real_widget is None:
+            self.real_widget = self._factory()
+            self._layout.addWidget(self.real_widget)
+        return self.real_widget
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -111,14 +144,23 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(tabs)
         self._tabs = tabs
 
-        tabs.addTab(CalculatorTab(), "Manual Calculator")
-        tabs.addTab(GcdTab(), "GCD (Charge/Discharge)")
-        tabs.addTab(CyclingStabilityTab(), "Cycling Stability")
-        tabs.addTab(CvTab(), "Cyclic Voltammetry")
-        tabs.addTab(RateStudyTab(), "Rate Study (Dunn's / Trasatti's)")
-        tabs.addTab(EisTab(), "EIS (Impedance)")
-        tabs.addTab(DscTab(), "DSC (Water / Enthalpy)")
-        tabs.addTab(AboutTab(), "About & Equations")
+        # See _LazyTabContainer's docstring -- every tab is built lazily
+        # on first visit except the one shown at launch (index 0).
+        factories = [
+            ("Manual Calculator", CalculatorTab),
+            ("GCD (Charge/Discharge)", GcdTab),
+            ("Cycling Stability", CyclingStabilityTab),
+            ("Cyclic Voltammetry", CvTab),
+            ("Rate Study (Dunn's / Trasatti's)", RateStudyTab),
+            ("EIS (Impedance)", EisTab),
+            ("DSC (Water / Enthalpy)", DscTab),
+            ("About & Equations", AboutTab),
+        ]
+        self._lazy_containers: list[_LazyTabContainer] = []
+        for label, factory in factories:
+            container = _LazyTabContainer(factory)
+            self._lazy_containers.append(container)
+            tabs.addTab(container, label)
 
         tabs.setIconSize(QSize(11, 11))
         for i, color in enumerate(theme.TAB_COLORS[:tabs.count()]):
@@ -133,9 +175,13 @@ class MainWindow(QMainWindow):
         # for a tool researchers use many times per session.
         QShortcut(QKeySequence("Ctrl+O"), self, activated=self._shortcut_open_file)
         QShortcut(QKeySequence("Ctrl+E"), self, activated=self._shortcut_export)
+
+        self._lazy_containers[0].ensure_built()  # the tab shown at launch is ready immediately
         self._on_tab_changed(tabs.currentIndex())
 
     def _on_tab_changed(self, index: int) -> None:
+        if 0 <= index < len(self._lazy_containers):
+            self._lazy_containers[index].ensure_built()
         color = theme.TAB_COLORS[index] if 0 <= index < len(theme.TAB_COLORS) else theme.RAW
         self.accent_strip.setStyleSheet(f"background-color: {color};")
 
@@ -145,6 +191,8 @@ class MainWindow(QMainWindow):
         QTabWidget) so Ctrl+O/Ctrl+E act on whichever sub-tool is actually
         on screen, not the outer container."""
         widget = self._tabs.currentWidget()
+        if isinstance(widget, _LazyTabContainer):
+            widget = widget.ensure_built()
         while widget is not None:
             inner = widget.findChild(QTabWidget)
             if inner is None:

@@ -298,16 +298,33 @@ class CollapsibleSection(QWidget):
       section.addWidget(my_widget)          # or .addLayout(my_layout)
     or, if the content already exists as one widget:
       section = CollapsibleSection("Data", content_widget=my_widget, start_expanded=True)
+
+    `closable=True` adds a small "x" button next to the arrow that hides
+    the WHOLE section (header included, not just the body) -- a coarser
+    "remove this panel entirely" action distinct from the arrow's
+    collapse-to-header. Meant for results-area panes (plot/table/etc,
+    see _make_collapsible_splitter_pane) and the "Batch results"
+    section, not the left settings panel's Data/Configure/Advanced
+    workflow stages, which only ever use the arrow. Pair with
+    attach_section_restore_menu() so a closed section can be brought
+    back via a right-click menu -- there is no other way back once
+    closed, since the header itself disappears too.
     """
 
     toggled = Signal(bool)
 
     def __init__(self, title: str = "Advanced options", parent=None,
-                 content_widget: QWidget | None = None, start_expanded: bool = False):
+                 content_widget: QWidget | None = None, start_expanded: bool = False,
+                 closable: bool = False):
         super().__init__(parent)
+        self.title = title
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(2)
+
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(0)
 
         self.toggle_btn = QToolButton()
         self.toggle_btn.setText(title)
@@ -320,7 +337,21 @@ class CollapsibleSection(QWidget):
             f"padding: 4px 0; background: transparent; }}"
         )
         self.toggle_btn.clicked.connect(self._on_toggled)
-        outer.addWidget(self.toggle_btn)
+        header_row.addWidget(self.toggle_btn)
+        header_row.addStretch()
+
+        if closable:
+            close_btn = QToolButton()
+            close_btn.setText("✕")
+            close_btn.setToolTip(f"Close '{title}' -- right-click anywhere in this panel to bring it back.")
+            close_btn.setStyleSheet(
+                f"QToolButton {{ border: none; color: {theme.INK_DIM}; padding: 2px 6px; "
+                f"background: transparent; }} QToolButton:hover {{ color: {theme.WARN}; }}"
+            )
+            close_btn.clicked.connect(lambda: self.setVisible(False))
+            header_row.addWidget(close_btn)
+
+        outer.addLayout(header_row)
 
         self.body = QWidget()
         self.body_layout = QVBoxLayout(self.body)
@@ -524,7 +555,7 @@ def _make_collapsible_splitter_pane(splitter: QSplitter, title: str, widget: QWi
     keeping the plot and results text both visible, without losing
     either the plot's or the text's current size.
     """
-    section = CollapsibleSection(title, content_widget=widget, start_expanded=start_expanded)
+    section = CollapsibleSection(title, content_widget=widget, start_expanded=start_expanded, closable=True)
     section._restore_size = None  # last expanded height, remembered across collapse/expand cycles
 
     def _on_toggle(expanded: bool):
@@ -579,6 +610,56 @@ def make_resizable_results_panel(*titled_widgets, sizes: list[int] | None = None
         splitter.addWidget(_make_collapsible_splitter_pane(splitter, title, widget, start_expanded=True))
     splitter.setSizes(sizes if sizes else [280, 140, 160][:len(real_items)])
     return splitter
+
+
+def attach_section_restore_menu(target: QWidget, sections: list) -> None:
+    """Right-click `target` to get a checklist of `sections` (each a
+    closable CollapsibleSection or a RecordLogPanel -- anything with a
+    `.title`/QGroupBox `.title()` and normal QWidget show/hide) --
+    checking a currently-closed one brings it back, unchecking a visible
+    one closes it. This is the ONLY way back for a section closed via
+    its own "x" button (see CollapsibleSection's `closable`), since that
+    button removes the header too, not just the body.
+
+    Call this once per tab, after every closable section for that tab
+    has been created, passing `target` as the results-area container
+    (or the whole tab) so right-clicking anywhere in it opens the menu
+    -- not just some specific empty strip that's easy to miss.
+    """
+    target.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+    target.customContextMenuRequested.connect(
+        lambda pos: build_section_visibility_menu(target, sections).exec(target.mapToGlobal(pos))
+    )
+
+
+def _section_title(section) -> str:
+    # CollapsibleSection exposes a plain `.title` string attribute;
+    # QGroupBox (e.g. RecordLogPanel) exposes a `.title()` method --
+    # both spellings are supported so either kind of section works.
+    t = getattr(section, "title", None)
+    if callable(t):
+        return t()
+    return str(t) if t is not None else "Panel"
+
+
+def build_section_visibility_menu(parent: QWidget, sections: list) -> QMenu:
+    """The actual menu-construction logic behind attach_section_restore_
+    menu(), factored out so it's independently testable (Qt's real
+    QMenu.exec() blocks on a native event loop / can't be reliably
+    intercepted by monkeypatching from a headless test) -- a test can
+    call this directly and inspect the returned QMenu's actions/checked
+    state without ever calling .exec() on it."""
+    menu = QMenu(parent)
+    menu.addSection("Show / hide panels")
+    for section in sections:
+        action = menu.addAction(_section_title(section))
+        action.setCheckable(True)
+        action.setChecked(section.isVisible())
+        action.toggled.connect(lambda checked, s=section: s.setVisible(checked))
+    if not sections:
+        action = menu.addAction("(no panels registered)")
+        action.setEnabled(False)
+    return menu
 
 
 def make_scrollable_panel(widget: QWidget) -> QScrollArea:
@@ -908,6 +989,15 @@ class RecordLogPanel(QGroupBox):
         self.record_btn.setObjectName("recordButton")
         self.record_btn.clicked.connect(self._record)
         label_row.addWidget(self.record_btn)
+        close_btn = QToolButton()
+        close_btn.setText("✕")
+        close_btn.setToolTip("Close this panel -- right-click anywhere in the results area to bring it back.")
+        close_btn.setStyleSheet(
+            f"QToolButton {{ border: none; color: {theme.INK_DIM}; padding: 2px 6px; "
+            f"background: transparent; }} QToolButton:hover {{ color: {theme.WARN}; }}"
+        )
+        close_btn.clicked.connect(lambda: self.setVisible(False))
+        label_row.addWidget(close_btn)
         layout.addLayout(label_row)
 
         self.table = make_table_view()

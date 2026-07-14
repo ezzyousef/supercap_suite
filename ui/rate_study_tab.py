@@ -30,6 +30,7 @@ from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
     make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
+    attach_section_restore_menu,
 )
 from . import theme, formula_sources
 
@@ -420,6 +421,7 @@ class CvRateTool(QWidget):
         splitter.addWidget(right)
         splitter.setSizes([420, 700])
         configure_collapsible_main_splitter(splitter)
+        attach_section_restore_menu(right, right.findChildren(CollapsibleSection) + right.findChildren(RecordLogPanel))
 
         self._on_cap_basis_changed()
 
@@ -992,6 +994,7 @@ class GcdRateTool(QWidget):
         splitter.addWidget(right)
         splitter.setSizes([420, 700])
         configure_collapsible_main_splitter(splitter)
+        attach_section_restore_menu(right, right.findChildren(CollapsibleSection) + right.findChildren(RecordLogPanel))
 
     def on_open_file(self):
         path, _ = QFileDialog.getOpenFileName(
