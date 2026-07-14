@@ -55,6 +55,42 @@ def _show_splash(app: QApplication) -> QSplashScreen:
     return splash
 
 
+def _prewarm_heavy_imports(app: QApplication) -> None:
+    """Import the slow C-extension-heavy libraries this app depends on
+    ONE AT A TIME, pumping the Qt event loop (processEvents) between each
+    -- a single monolithic `from ui.main_window import MainWindow` blocks
+    the message loop for its entire ~4-6s cold-import duration in one
+    uninterrupted stretch. Windows' DWM treats a window that goes that
+    long without responding to the message queue as hung, and starts
+    redrawing its own ghost/peek preview for it -- which is exactly the
+    "icon appears and disappears several times" symptom right after
+    launch (the SPLASH window itself going unresponsive, not just the
+    old blank-window case this splash screen was added to fix). Splitting
+    the import into pieces with processEvents() in between keeps the
+    message pump alive throughout, so Windows never considers it hung.
+    Each of these modules gets imported again by ui.main_window's own
+    import chain regardless -- Python caches modules in sys.modules, so
+    that second import is then instant.
+    """
+    modules = [
+        "numpy", "pandas", "matplotlib", "matplotlib.backends.backend_qtagg", "scipy",
+        # ui.main_window imports every tab module at ITS top level (the
+        # tabs themselves are lazily CONSTRUCTED, see ui.main_window's
+        # _LazyTabContainer, but they still get IMPORTED eagerly) -- pre-
+        # importing them here too, individually, spreads that cost across
+        # more processEvents-separated chunks instead of one that's still
+        # ~1-2s long on its own.
+        "ui.calculator_tab", "ui.gcd_tab", "ui.cycling_stability_tab", "ui.cv_tab",
+        "ui.rate_study_tab", "ui.eis_tab", "ui.dsc_tab",
+    ]
+    for module_name in modules:
+        try:
+            __import__(module_name)
+        except ImportError:
+            pass
+        app.processEvents()
+
+
 def main():
     _set_windows_app_user_model_id()
     app = QApplication(sys.argv)
@@ -65,9 +101,11 @@ def main():
     apply_theme(app)
 
     splash = _show_splash(app)
+    _prewarm_heavy_imports(app)
 
-    from ui.main_window import MainWindow  # deferred: this import chain pulls in matplotlib/scipy/pandas
+    from ui.main_window import MainWindow  # deferred: see _show_splash/_prewarm_heavy_imports
     window = MainWindow()
+    app.processEvents()
     window.show()
     splash.finish(window)
     sys.exit(app.exec())
