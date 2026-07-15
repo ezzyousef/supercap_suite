@@ -66,6 +66,75 @@ def b_value_analysis(scan_rates_v_per_s: np.ndarray, peak_currents_a: np.ndarray
 
 
 @dataclass
+class PeakCurrentCapacitiveDiffusiveSplit:
+    k1: float                          # capacitive coefficient (single fit across all scan rates)
+    k2: float                          # diffusive coefficient (single fit across all scan rates)
+    r_squared: float                   # goodness of the i/v^0.5 = k1*v^0.5 + k2 linear fit
+    scan_rates_v_per_s: np.ndarray
+    capacitive_currents_a: np.ndarray  # k1*v at each scan rate
+    diffusive_currents_a: np.ndarray   # k2*v^0.5 at each scan rate
+    total_currents_a: np.ndarray       # k1*v + k2*v^0.5 (the MODEL's reconstruction, not the raw measured peak)
+    capacitive_percent: np.ndarray     # per scan rate, of the model total
+    diffusive_percent: np.ndarray
+
+
+def peak_current_capacitive_diffusive_split(scan_rates_v_per_s: np.ndarray,
+                                             peak_currents_a: np.ndarray) -> PeakCurrentCapacitiveDiffusiveSplit:
+    """Capacitive/diffusive split of Dunn's i(v) = k1*v + k2*v^0.5 model
+    using only ONE representative current value per scan rate (typically
+    peak current) -- the simpler, single-fit variant of Dunn's method seen
+    throughout the literature when a full voltage-resolved breakdown
+    (see capacitive_diffusive_split, which needs a complete CV curve at
+    every scan rate) isn't available or needed, just a peak-current-vs-
+    scan-rate table (the same shape of data as b_value_analysis).
+
+    Method: linear regression of i(v)/v^0.5 against v^0.5 across ALL scan
+    rates at once (ONE k1, k2 pair, not one per point) -- slope = k1,
+    intercept = k2. capacitive_percent/diffusive_percent are then each
+    scan rate's k1*v / k2*v^0.5 as a fraction of the model's OWN
+    reconstructed total (k1*v + k2*v^0.5) at that scan rate, NOT of the
+    raw measured peak current (which will differ from the model total by
+    the fit residual).
+
+    Verified against a real worked spreadsheet example (K1=0.0125,
+    K2=0.0986, capacitive%/diffusion% per scan rate reproduced to 6
+    significant figures).
+    """
+    scan_rates = np.asarray(scan_rates_v_per_s, dtype=float)
+    peaks = np.asarray(peak_currents_a, dtype=float)
+    if len(scan_rates) < 3:
+        raise ValueError("Need at least 3 scan rates for a meaningful k1/k2 fit")
+    if len(scan_rates) != len(peaks):
+        raise ValueError("scan_rates_v_per_s and peak_currents_a must be the same length")
+    if np.any(scan_rates <= 0):
+        raise ValueError("scan_rates_v_per_s must all be positive")
+
+    sqrt_v = np.sqrt(scan_rates)
+    i_over_sqrt_v = peaks / sqrt_v
+    k1, k2 = np.polyfit(sqrt_v, i_over_sqrt_v, 1)
+
+    fit_vals = k1 * sqrt_v + k2
+    residuals = i_over_sqrt_v - fit_vals
+    ss_res = float(np.sum(residuals ** 2))
+    ss_tot = float(np.sum((i_over_sqrt_v - np.mean(i_over_sqrt_v)) ** 2))
+    r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
+    i_cap = k1 * scan_rates
+    i_diff = k2 * sqrt_v
+    total = i_cap + i_diff
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cap_pct = 100.0 * i_cap / total
+        diff_pct = 100.0 * i_diff / total
+
+    return PeakCurrentCapacitiveDiffusiveSplit(
+        k1=float(k1), k2=float(k2), r_squared=float(r_squared),
+        scan_rates_v_per_s=scan_rates, capacitive_currents_a=i_cap,
+        diffusive_currents_a=i_diff, total_currents_a=total,
+        capacitive_percent=cap_pct, diffusive_percent=diff_pct,
+    )
+
+
+@dataclass
 class CapacitiveDiffusiveSplit:
     k1: np.ndarray            # capacitive coefficient at each potential point
     k2: np.ndarray            # diffusive coefficient at each potential point

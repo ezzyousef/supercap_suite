@@ -101,6 +101,26 @@ flaws in this metric -- sensitivity to scan-rate range and electrode mass
 loading. Treat results as indicative, not a definitive mechanistic proof.
 """
 
+DUNN_CAPACITIVE_DIFFUSIVE = """
+<code>i(v) = k1&middot;v + k2&middot;v&#8304;&#8901;&#8309;</code> (Dunn's method)<br>
+<code>i(v)/v&#8304;&#8901;&#8309; = k1&middot;v&#8304;&#8901;&#8309; + k2</code>
+-- linear fit of i/v&#8304;&#8901;&#8309; vs. v&#8304;&#8901;&#8309;
+across all scan rates at once (ONE k1, k2 pair from the whole peak-
+current-vs-scan-rate series), giving the capacitive (k1&middot;v) and
+diffusive (k2&middot;v&#8304;&#8901;&#8309;) contribution to each scan
+rate's current as a percentage of the model's own reconstructed total.
+Source: Suganya et al., <i>J. Energy Storage</i> 109 (2025) 115181, eqns
+16-17, citing Dunn's method. This is the simpler "peak current only"
+variant (a single k1/k2 fit across scan rates) -- not the full-CV-curve
+variant (k1(V)/k2(V) fit separately at every potential point across a
+whole voltammogram), which needs complete CV curves at every scan rate
+rather than just a peak-current table.<br><br>
+<b>Caveat</b>: Pervez &amp; Stallard, <i>Small</i>, 2023 document known
+flaws in this model -- sensitivity to scan-rate range and electrode mass
+loading, and note the capacitive/diffusive split is model-dependent, not
+a direct measurement. Treat results as indicative, not definitive.
+"""
+
 TRASATTI = """
 <code>Q*(v) = k1&middot;v&#8315;&#8304;&#8901;&#8309; + Q*_outer</code>
 (extrapolate v &rarr; &infin;)<br>

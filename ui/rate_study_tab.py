@@ -109,12 +109,41 @@ class _EditableTable(QTableWidget):
             self.setItem(start + i, 1, QTableWidgetItem(f"{b:g}"))
 
 
+def _guess_rate_study_columns(columns: list[str]) -> tuple:
+    """Best-effort (scan_rate_col, capacitance_col, peak_current_col)
+    guesses for _RateColumnMappingDialog, matched by keyword against each
+    column's (lowercased) header text -- any of the three may be None if
+    nothing recognizable was found. Only ever used as a pre-filled
+    DEFAULT in a dialog the user must confirm/edit, never trusted
+    silently; a file with duplicate-suffixed headers (e.g. a sheet with
+    two side-by-side data blocks, "SCAN RATE " and "SCAN RATE .1") always
+    matches the FIRST occurrence, since that's the column order pandas
+    preserves.
+    """
+    def _find(*keywords):
+        for col in columns:
+            low = str(col).lower()
+            if any(kw in low for kw in keywords):
+                return col
+        return None
+
+    rate_col = _find("scan rate", "scan_rate", "scanrate") or _find("rate")
+    cap_col = _find("specific capacitance", "capacitance (f", "cs (f", "c_s", "csp")
+    peak_col = _find("peak current", "i/ma", "i /a", "i/a", "peak i") or _find("current")
+    return rate_col, cap_col, peak_col
+
+
 class _RateColumnMappingDialog(QDialog):
     """Column-mapping dialog for importing a scan-rate-vs-metric table from
     a loaded file: pick which column is the scan rate, and which (optional)
     column(s) are specific capacitance / peak current -- both may be filled
     from the SAME file at once if it has both, since that's the common case
     (one CV-summary sheet with several metric columns alongside scan rate).
+    Recognizable column names (e.g. "SCAN RATE", "I/mA") are pre-selected
+    automatically -- see _guess_rate_study_columns -- so a file already
+    laid out this way (scan rate + peak current/capacitance columns) can
+    usually be imported with a single click of OK instead of manually
+    picking each column every time.
     """
 
     def __init__(self, parent, columns: list[str]):
@@ -122,20 +151,38 @@ class _RateColumnMappingDialog(QDialog):
         self.setWindowTitle("Import scan-rate data — map columns")
         layout = QFormLayout(self)
 
+        rate_guess, cap_guess, peak_guess = _guess_rate_study_columns(columns)
+
         self.rate_combo = QComboBox()
         self.rate_combo.addItem("-- select --")
         self.rate_combo.addItems(columns)
+        if rate_guess:
+            self.rate_combo.setCurrentText(rate_guess)
         layout.addRow("Scan rate column:", self.rate_combo)
 
         self.cap_combo = QComboBox()
         self.cap_combo.addItem("-- none --")
         self.cap_combo.addItems(columns)
+        if cap_guess:
+            self.cap_combo.setCurrentText(cap_guess)
         layout.addRow("Specific capacitance column (optional):", self.cap_combo)
 
         self.peak_combo = QComboBox()
         self.peak_combo.addItem("-- none --")
         self.peak_combo.addItems(columns)
+        if peak_guess:
+            self.peak_combo.setCurrentText(peak_guess)
         layout.addRow("Peak current column (optional):", self.peak_combo)
+
+        if rate_guess or cap_guess or peak_guess:
+            hint = QLabel(
+                "Columns auto-matched by name below -- double-check they're "
+                "right (and pick from the dropdowns if your file has more "
+                "than one block of similarly-named columns), then click OK."
+            )
+            hint.setWordWrap(True)
+            hint.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+            layout.addRow(hint)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
@@ -367,9 +414,24 @@ class CvRateTool(QWidget):
         btn_row.addWidget(bvalue_btn)
         left_layout.addLayout(btn_row)
 
+        dunn_split_btn = QPushButton("▶ Run capacitive/diffusive split (Dunn's method)")
+        dunn_split_btn.setToolTip(
+            "Fits i(v)/v^0.5 = k1*v^0.5 + k2 across the whole peak-current-"
+            "vs-scan-rate table above (one k1/k2 pair), then reports what "
+            "fraction of the model's current at EACH scan rate is "
+            "capacitive (k1*v) vs. diffusive (k2*v^0.5) -- the same "
+            "peak-current-only Dunn's method breakdown as a summary-table "
+            "workflow, not the full-CV-curve variant."
+        )
+        dunn_split_btn.clicked.connect(self.on_capacitive_diffusive_split)
+        left_layout.addWidget(dunn_split_btn)
+
         source_row = QHBoxLayout()
         source_row.addWidget(theme.make_source_button(self, "Trasatti's method", formula_sources.TRASATTI))
         source_row.addWidget(theme.make_source_button(self, "b-value analysis", formula_sources.BVALUE))
+        source_row.addWidget(theme.make_source_button(
+            self, "Capacitive/diffusive split (Dunn's method)", formula_sources.DUNN_CAPACITIVE_DIFFUSIVE
+        ))
         source_row.addWidget(theme.make_source_button(self, "Randles-Sevcik diffusion coefficient", formula_sources.RANDLES_SEVCIK))
         left_layout.addLayout(source_row)
 
@@ -759,6 +821,89 @@ class CvRateTool(QWidget):
             "graph_x_log_scan_rate": result.log_scan_rates,
             "graph_y_log_peak_current_abs": result.log_peak_currents,
             "graph_fit_y_log_peak_current_abs": fit_line,
+        })
+        self.export_btn.setEnabled(True)
+
+    def on_capacitive_diffusive_split(self):
+        pairs = self.peak_table.get_pairs_base(
+            self.peak_table_rate_unit.currentText(), self.peak_table_current_unit.currentText()
+        )
+        if len(pairs) < 3:
+            QMessageBox.warning(self, "Not enough data", "Enter at least 3 (scan rate, peak current) rows "
+                                 "for a meaningful k1/k2 fit.")
+            return
+        rates = np.array([p[0] for p in pairs])
+        peaks = np.array([p[1] for p in pairs])
+        try:
+            result = dunn.peak_current_capacitive_diffusive_split(rates, peaks)
+        except ValueError as e:
+            QMessageBox.critical(self, "Calculation error", str(e))
+            return
+
+        lines = [
+            "Dunn's method fit: i(v)/v^0.5 = k1*v^0.5 + k2  (one k1/k2 pair across all scan rates)",
+            f"  k1 (capacitive coefficient) = {result.k1:.6g}",
+            f"  k2 (diffusive coefficient)  = {result.k2:.6g}",
+            f"  R² of the linear fit         = {result.r_squared:.5f}",
+            "",
+            "Capacitive/diffusive split of the model's reconstructed current",
+            "(k1*v + k2*v^0.5) at each scan rate:",
+            "",
+            f"  {'Scan rate':>12}  {'Capacitive %':>14}  {'Diffusive %':>13}",
+        ]
+        for v, cp, dp in zip(result.scan_rates_v_per_s, result.capacitive_percent, result.diffusive_percent):
+            lines.append(f"  {v:12.6g}  {cp:14.2f}  {dp:13.2f}")
+        lines += [
+            "",
+            "Caveat: like the b-value metric, Dunn's k1*v + k2*v^0.5 model has "
+            "documented sensitivity to scan-rate range and mass loading (Pervez "
+            "& Stallard, Small, 2023) -- treat these percentages as indicative, "
+            "not a precise mechanistic proof.",
+        ]
+        self.results_text.setPlainText("\n".join(lines))
+
+        highest_v, highest_cap = result.scan_rates_v_per_s[-1], result.capacitive_percent[-1]
+        self.result_card.set_headline(
+            "Capacitive contribution (highest scan rate)", f"{highest_cap:.1f}% at v={highest_v:g}"
+        )
+        self.result_card.set_secondary([
+            ("k1 (capacitive coeff.)", f"{result.k1:.4g}"),
+            ("k2 (diffusive coeff.)", f"{result.k2:.4g}"),
+            ("Fit R²", f"{result.r_squared:.4f}"),
+        ])
+        self.result_card.set_warnings([])
+
+        self.plot.ax.clear()
+        self.plot.ax.plot(result.scan_rates_v_per_s, result.capacitive_percent, "o-",
+                           color=theme.RAW, linewidth=1.5, markersize=5, label="Capacitive %")
+        self.plot.ax.plot(result.scan_rates_v_per_s, result.diffusive_percent, "s--",
+                           color=theme.FIT, linewidth=1.5, markersize=5, label="Diffusive %")
+        self.plot.ax.set_xlabel("Scan rate")
+        self.plot.ax.set_ylabel("% of model current")
+        self.plot.ax.set_title("Dunn's method — capacitive/diffusive split vs. scan rate")
+        self.plot.ax.legend(fontsize=8)
+        theme.apply_plot_style(self.plot.ax)
+        self.plot.fig.tight_layout()
+        self.plot.draw()
+
+        self.last_result = {
+            "Dunn's method k1 (capacitive coeff.)": result.k1,
+            "Dunn's method k2 (diffusive coeff.)": result.k2,
+            "Dunn's method fit R²": result.r_squared,
+        }
+        for v, cp, dp in zip(result.scan_rates_v_per_s, result.capacitive_percent, result.diffusive_percent):
+            self.last_result[f"Capacitive % @ scan rate {v:g}"] = cp
+            self.last_result[f"Diffusive % @ scan rate {v:g}"] = dp
+
+        self.last_raw_df = pd.DataFrame({
+            "scan_rate_v_per_s": result.scan_rates_v_per_s,
+            "peak_current": peaks,
+            "capacitive_current_model": result.capacitive_currents_a,
+            "diffusive_current_model": result.diffusive_currents_a,
+            "total_current_model": result.total_currents_a,
+            "graph_x_scan_rate": result.scan_rates_v_per_s,
+            "graph_y_capacitive_percent": result.capacitive_percent,
+            "graph_fit_y_diffusive_percent": result.diffusive_percent,
         })
         self.export_btn.setEnabled(True)
 
