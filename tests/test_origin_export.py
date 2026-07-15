@@ -6,6 +6,7 @@ indices, not an actual Origin session."""
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 
 from core import origin_export as oe
 
@@ -98,3 +99,77 @@ def test_send_to_origin_plot_failure_does_not_break_the_data_send(monkeypatch):
 
     name = oe.send_to_origin("sheet", None, df)
     assert name is not None
+
+
+def test_is_session_active_reflects_module_state(monkeypatch):
+    monkeypatch.setattr(oe, "_origin_module", None)
+    assert oe.is_session_active() is False
+    monkeypatch.setattr(oe, "_origin_module", MagicMock())
+    assert oe.is_session_active() is True
+
+
+def test_save_origin_project_raises_without_an_active_session(monkeypatch):
+    monkeypatch.setattr(oe, "_origin_module", None)
+    with pytest.raises(RuntimeError, match="No active Origin session"):
+        oe.save_origin_project("C:/temp/x.opju")
+
+
+def test_save_origin_project_calls_op_save_with_the_given_path(monkeypatch):
+    fake_op = MagicMock()
+    fake_op.save.return_value = True
+    monkeypatch.setattr(oe, "_origin_module", fake_op)
+    monkeypatch.setattr(oe, "_get_origin", lambda: fake_op)
+
+    result = oe.save_origin_project("C:/temp/x.opju")
+
+    fake_op.save.assert_called_once_with("C:/temp/x.opju")
+    assert result == "C:/temp/x.opju"
+
+
+def test_save_origin_project_reraises_as_runtimeerror_on_failure(monkeypatch):
+    fake_op = MagicMock()
+    fake_op.save.side_effect = RuntimeError("COM error")
+    monkeypatch.setattr(oe, "_origin_module", fake_op)
+    monkeypatch.setattr(oe, "_get_origin", lambda: fake_op)
+
+    with pytest.raises(RuntimeError, match="Could not save"):
+        oe.save_origin_project("C:/temp/x.opju")
+
+
+def test_close_origin_is_a_no_op_with_no_active_session(monkeypatch):
+    monkeypatch.setattr(oe, "_origin_module", None)
+    oe.close_origin()  # must not raise
+
+
+def test_close_origin_calls_exit_and_clears_the_module_reference(monkeypatch):
+    fake_op = MagicMock()
+    monkeypatch.setattr(oe, "_origin_module", fake_op)
+
+    oe.close_origin()
+
+    fake_op.exit.assert_called_once()
+    assert oe._origin_module is None
+
+
+def test_close_origin_saves_first_when_requested():
+    fake_op = MagicMock()
+    import core.origin_export as oe_mod
+    oe_mod._origin_module = fake_op
+
+    oe_mod.close_origin(save=True, path="C:/temp/x.opju")
+
+    fake_op.save.assert_called_once_with("C:/temp/x.opju")
+    fake_op.exit.assert_called_once()
+    assert oe_mod._origin_module is None
+
+
+def test_close_origin_clears_reference_even_if_exit_raises():
+    fake_op = MagicMock()
+    fake_op.exit.side_effect = RuntimeError("COM gone")
+    import core.origin_export as oe_mod
+    oe_mod._origin_module = fake_op
+
+    with pytest.raises(RuntimeError, match="Could not close"):
+        oe_mod.close_origin()
+
+    assert oe_mod._origin_module is None

@@ -61,6 +61,77 @@ def is_available() -> bool:
         return False
 
 
+def is_session_active() -> bool:
+    """True if this app has already started (or attached to) a live
+    Origin session via an earlier send_to_origin()/save_origin_project()
+    call this run. Does NOT re-verify the session is still alive this
+    instant (e.g. if the user closed Origin by hand meanwhile) --
+    save_origin_project()/close_origin() surface that as a normal error
+    if so, rather than this function making a COM round-trip just to
+    answer a yes/no question."""
+    return _origin_module is not None
+
+
+def save_origin_project(path: str | None = None) -> str:
+    """Save the current Origin project. `path` (ending in .opju, or .opj
+    for the legacy format) is required the first time a project is
+    saved in this session -- Origin has no default location to save an
+    unsaved project to -- and optional afterwards (re-saves in place to
+    whatever path was last used).
+
+    Raises RuntimeError if there's no active Origin session (nothing has
+    been sent to Origin yet this app run) or if the save itself fails,
+    and OriginNotAvailableError if originpro isn't installed/reachable.
+    """
+    if _origin_module is None:
+        raise RuntimeError("No active Origin session to save -- send something to Origin first.")
+    op = _get_origin()
+    try:
+        ok = op.save(path) if path else op.save()
+    except Exception as e:
+        raise RuntimeError(f"Could not save the Origin project: {e}") from e
+    if ok is False:
+        raise RuntimeError(
+            "Origin did not confirm the save succeeded -- if this is the project's first "
+            "save, a file path is required."
+        )
+    return path or "the current project file"
+
+
+def close_origin(save: bool = False, path: str | None = None) -> None:
+    """Close the Origin session this app started (the Origin application
+    itself, via its COM automation handle) -- this only affects Origin,
+    never the Supercapacitor Suite application, which keeps running
+    normally either way.
+
+    Optionally saves the project first (save=True; pass `path` if the
+    project has never been saved to a file yet). A later "Send to
+    OriginLab" click after this transparently launches a FRESH Origin
+    session (this module's cached session reference is cleared here),
+    exactly like the very first send of the app run.
+
+    No-op if there is no active session to close (never raises just
+    because Close was clicked with nothing open).
+    """
+    global _origin_module
+    if _origin_module is None:
+        return
+    op = _origin_module
+    try:
+        if save:
+            try:
+                op.save(path) if path else op.save()
+            except Exception:
+                pass  # best-effort -- still proceed to close even if the save failed/had no path
+        op.exit()
+    except Exception as e:
+        raise RuntimeError(f"Could not close the Origin session: {e}") from e
+    finally:
+        # Cleared even if op.exit() raised -- a half-closed/errored COM
+        # handle is not something a later send should try to reuse.
+        _origin_module = None
+
+
 def send_to_origin(sheet_label: str, result: dict | None, raw_df: pd.DataFrame | None,
                     source_note: str | None = None, plot: bool = True) -> str:
     """Push one result set into a new worksheet in the current (or newly

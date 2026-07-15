@@ -776,7 +776,8 @@ class ExportButtonPair(QWidget):
     shortcut), so nothing calling into this widget needed to change.
     """
 
-    def __init__(self, parent, get_payload, dialog_fn, origin_fn=None, export_label="Export ▾"):
+    def __init__(self, parent, get_payload, dialog_fn, origin_fn=None, export_label="Export ▾",
+                 origin_save_fn=None, origin_close_fn=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -802,6 +803,14 @@ class ExportButtonPair(QWidget):
         if origin_fn is not None:
             menu.addSeparator()
             menu.addAction("🔬 Send to OriginLab (data + graph)", lambda: _guarded(origin_fn))
+        # Save/Close act on the shared Origin SESSION (not this tab's
+        # current result), so they're never gated by _guarded()/
+        # get_payload() -- available any time Origin is reachable at
+        # all, independent of whether THIS tab has run an analysis yet.
+        if origin_save_fn is not None:
+            menu.addAction("💾 Save Origin project…", origin_save_fn)
+        if origin_close_fn is not None:
+            menu.addAction("✕ Close Origin session (keeps this app open)", origin_close_fn)
         self.export_button.setMenu(menu)
 
         layout.addWidget(self.export_button)
@@ -831,8 +840,12 @@ def make_export_button(parent, sheet_prefix: str, get_results, get_raw_data=None
         raw_data = get_raw_data() if get_raw_data else None
         _run_origin_send(parent, sheet_prefix, get_results(), raw_data, source_note)
 
-    origin_fn = _send_to_origin if origin_export.is_available() else None
-    return ExportButtonPair(parent, get_results, _dialog, origin_fn=origin_fn)
+    available = origin_export.is_available()
+    origin_fn = _send_to_origin if available else None
+    origin_save_fn = (lambda: _run_origin_save(parent)) if available else None
+    origin_close_fn = (lambda: _run_origin_close(parent)) if available else None
+    return ExportButtonPair(parent, get_results, _dialog, origin_fn=origin_fn,
+                             origin_save_fn=origin_save_fn, origin_close_fn=origin_close_fn)
 
 
 def _run_origin_send(parent, sheet_prefix: str, results: dict, raw_data, source_note: str | None) -> None:
@@ -852,6 +865,75 @@ def _run_origin_send(parent, sheet_prefix: str, results: dict, raw_data, source_
         QMessageBox.critical(parent, "Send to OriginLab failed", str(e))
         return
     show_toast(parent, f"Sent to OriginLab -- worksheet '{sheet_name}' (plus a graph, if the data supported one).")
+
+
+def _run_origin_save(parent) -> None:
+    """"Save Origin project..." click handler -- always prompts for a
+    save path (even on a re-save) so it's never ambiguous where the
+    project ended up, unlike Origin's own Ctrl+S which silently
+    overwrites whatever was last used."""
+    if not origin_export.is_session_active():
+        QMessageBox.information(
+            parent, "No Origin session", "No Origin session is open yet -- send something to "
+            "OriginLab first, then Save/Close become available."
+        )
+        return
+    path, _ = QFileDialog.getSaveFileName(
+        parent, "Save Origin project", "", "Origin Project (*.opju);;Legacy Origin Project (*.opj)"
+    )
+    if not path:
+        return
+    try:
+        origin_export.save_origin_project(path)
+    except Exception as e:
+        QMessageBox.critical(parent, "Save Origin project failed", str(e))
+        return
+    show_toast(parent, f"Origin project saved to {Path(path).name}")
+
+
+def _run_origin_close(parent) -> None:
+    """"Close Origin session" click handler -- only closes the Origin
+    application this app started via COM automation, never this
+    Supercapacitor Suite window. Offers Save/Discard/Cancel exactly like
+    any other action that could lose unsaved work (see the app-wide
+    "confirm before anything destructive" convention)."""
+    if not origin_export.is_session_active():
+        QMessageBox.information(parent, "No Origin session", "No Origin session is currently open.")
+        return
+
+    box = QMessageBox(parent)
+    box.setWindowTitle("Close Origin session")
+    box.setText(
+        "Close the Origin session this app started?\n\n"
+        "This only closes Origin/OriginPro -- the Supercapacitor Suite "
+        "application stays open. Any unsaved changes in that Origin "
+        "project will be lost unless you save first."
+    )
+    save_btn = box.addButton("Save && Close", QMessageBox.ButtonRole.AcceptRole)
+    discard_btn = box.addButton("Close Without Saving", QMessageBox.ButtonRole.DestructiveRole)
+    box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(save_btn)
+    box.exec()
+    clicked = box.clickedButton()
+
+    if clicked not in (save_btn, discard_btn):
+        return  # Cancel, or the box was dismissed
+
+    save_path = None
+    if clicked is save_btn:
+        save_path, _ = QFileDialog.getSaveFileName(
+            parent, "Save Origin project before closing", "",
+            "Origin Project (*.opju);;Legacy Origin Project (*.opj)"
+        )
+        if not save_path:
+            return  # user backed out of the save step -- don't close unsaved work by accident
+
+    try:
+        origin_export.close_origin(save=(clicked is save_btn), path=save_path)
+    except Exception as e:
+        QMessageBox.critical(parent, "Close Origin session failed", str(e))
+        return
+    show_toast(parent, "Origin session closed.")
 
 
 def _prompt_workbook_and_sheet(parent, sheet_prefix: str, mode: str = "ask"):
