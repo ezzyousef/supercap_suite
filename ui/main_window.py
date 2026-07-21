@@ -6,6 +6,7 @@ from .gcd_tab import GcdTab
 from .cv_tab import CvTab
 from .dsc_tab import DscTab
 from .eis_tab import EisTab
+from .drt_tab import DrtTab
 from .rate_study_tab import RateStudyTab
 from .calculator_tab import CalculatorTab
 from .cycling_stability_tab import CyclingStabilityTab
@@ -49,6 +50,9 @@ class AboutTab(QWidget):
             "Trasatti's outer/inner/total capacitance extrapolation.</li>"
             "<li><b>EIS tab</b>: Nyquist/Bode plots, low-frequency capacitance, ESR, "
             "ionic conductivity, and Randles-type equivalent circuit fitting.</li>"
+            "<li><b>DRT tab</b>: Distribution of Relaxation Times deconvolution -- "
+            "a non-parametric alternative/complement to equivalent-circuit fitting, "
+            "with automatic frequency-region peak interpretation.</li>"
             "<li><b>DSC tab</b>: raw heat-flow peak integration and enthalpy "
             "calculation, plus free/freezable-bound/non-freezable-bound water "
             "classification for hydrogel electrolytes.</li>"
@@ -191,6 +195,7 @@ class MainWindow(QMainWindow):
             ("Cyclic Voltammetry", CvTab),
             ("Rate Study (Dunn's / Trasatti's)", RateStudyTab),
             ("EIS (Impedance)", EisTab),
+            ("DRT (Relaxation Times)", DrtTab),
             ("DSC (Water / Enthalpy)", DscTab),
             ("About & Equations", AboutTab),
         ]

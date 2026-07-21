@@ -1,0 +1,328 @@
+"""
+Distribution of Relaxation Times (DRT) analysis for EIS spectra.
+
+Pure functions, no Qt imports (same convention as core/eis_analysis.py).
+
+DRT is a non-parametric alternative/complement to equivalent-circuit
+fitting: instead of assuming one specific circuit topology up front, it
+recovers a continuous distribution gamma(ln tau) of relaxation-time
+"weights" directly from the measured spectrum, such that
+
+    Z_DRT(f) = R_inf + integral[ gamma(ln tau) / (1 + i*2*pi*f*tau) dlntau ]
+
+reproduces the data (eq. 1-2 in the source below). Every parallel RC
+element in an equivalent circuit shows up as one peak in gamma(ln tau) at
+tau = R*C -- so a DRT plot is, informally, "what an equivalent circuit fit
+would look like if you didn't have to commit to a specific circuit first."
+
+Source (method + eq. numbers cited in each function's docstring below):
+T.H. Wan, M. Saccoccio, C. Chen, F. Ciucci, "Influence of the
+Discretization Methods on the Distribution of Relaxation Times
+Deconvolution: Implementing Radial Basis Functions with DRTtools,"
+Electrochimica Acta 184 (2015) 483-499 -- the paper behind DRTtools, the
+standard open-source reference implementation in this field. This module
+implements the paper's piecewise-linear (PWL) discretization case (their
+eq. 5-6), not their RBF extension -- the paper's own abstract states PWL
+and RBF give "comparable" results "at normal data collection range,"
+which is the case this app is built for (a normal, complete-looking EIS
+sweep, not a truncated/incomplete one, where the paper found RBF's
+extended support helps more).
+
+Peak physical-interpretation caveats (frequency-region explanations) are
+based on: C. Plank et al., "A review of the distribution of relaxation
+times method for the analysis of impedance spectra," Journal of Power
+Sources 594 (2024) 233845 (see "Interpretation of peaks" and the
+CPE/blocking-electrode discussion); and B. Py, A. Maradesa, F. Ciucci,
+"From theory to practice: Unlocking the distribution of capacitive times
+in electrochemical impedance spectroscopy," Electrochimica Acta 479
+(2024) 143741 (documents that classical DRT is not well-suited to the
+low-frequency behavior of BLOCKING-electrode systems -- i.e. exactly
+supercapacitors and batteries -- because the DRT model's impedance
+necessarily tends to a FINITE value as f->0, which cannot represent the
+diverging/unbounded low-frequency impedance a real blocking electrode
+shows; this shows up as an "increasing series of peaks" artifact mimicking
+a CPE rather than one genuine low-frequency peak).
+"""
+from __future__ import annotations
+from dataclasses import dataclass, field
+import numpy as np
+
+try:
+    from scipy.optimize import nnls
+    from scipy.integrate import quad
+    from scipy.signal import find_peaks
+    _HAVE_SCIPY = True
+except ImportError:
+    _HAVE_SCIPY = False
+
+
+@dataclass
+class DRTPeak:
+    tau_s: float
+    frequency_hz: float
+    gamma: float
+    region: str
+    explanation: str
+
+
+@dataclass
+class DRTResult:
+    tau_s: np.ndarray
+    gamma: np.ndarray
+    r_inf_ohm: float
+    lambda_used: float
+    frequency_hz: np.ndarray       # ascending tau order, matches tau_s/gamma
+    model_z_re_ohm: np.ndarray
+    model_z_im_ohm: np.ndarray
+    residual_percent: float
+    peaks: list = field(default_factory=list)
+
+
+# Practical, literature-informed frequency-region bands for interpreting
+# DRT peaks -- NOT universal physical constants (no single tau cutoff is
+# correct for every electrochemical system; the actual boundary between
+# "charge transfer" and "diffusion" timescales depends on the specific
+# electrode/electrolyte). These are the commonly-cited ORDER-OF-MAGNITUDE
+# ranges from the DRT peak-interpretation literature (Plank et al. 2024
+# and standard EIS textbook practice: fast interfacial kinetics at high
+# frequency, progressively slower transport/diffusion processes at lower
+# frequency) -- always cross-check against the Nyquist/Bode shape and the
+# specific system's chemistry rather than trusting the label alone.
+FREQUENCY_REGIONS = [
+    (
+        "High frequency (fast process)",
+        0.0, 1e-3,
+        "Typically charge-transfer / interfacial reaction kinetics and "
+        "double-layer charging -- the fastest processes in the cell. "
+        "A resistance-like (narrow, symmetric) peak here usually maps "
+        "cleanly to a single Rct||C(or CPE) pair in an equivalent circuit.",
+    ),
+    (
+        "Mid frequency (interfacial / distributed)",
+        1e-3, 1.0,
+        "Typically a combination of charge-transfer and double-layer "
+        "effects, contact/grain-boundary resistance (solid electrodes), "
+        "or porous-electrode effects. A BROADER peak here indicates a "
+        "more DISTRIBUTED process (a range of local time constants, e.g. "
+        "non-uniform pore sizes or surface heterogeneity) rather than one "
+        "sharp relaxation.",
+    ),
+    (
+        "Low frequency (slow / transport-limited)",
+        1.0, float("inf"),
+        "Typically diffusion or mass-transport-limited response (ion "
+        "transport in the electrolyte/pores). IMPORTANT CAVEAT for "
+        "blocking-electrode systems like supercapacitors: classical DRT "
+        "cannot represent a truly diverging low-frequency impedance (its "
+        "model impedance is mathematically forced to a FINITE value as "
+        "f->0), so this often shows up as an ARTIFICIAL increasing series "
+        "of peaks mimicking a CPE rather than one genuine low-frequency "
+        "process -- treat isolated peaks in this region with caution and "
+        "cross-check against the raw Nyquist/Bode shape (Py, Maradesa & "
+        "Ciucci, Electrochimica Acta 479 (2024) 143741).",
+    ),
+]
+
+
+def classify_region(tau_s: float) -> tuple[str, str]:
+    """Returns (region_label, explanation) for a given relaxation time,
+    using the practical FREQUENCY_REGIONS bands above."""
+    for label, lo, hi, explanation in FREQUENCY_REGIONS:
+        if lo <= tau_s < hi:
+            return label, explanation
+    return FREQUENCY_REGIONS[-1][0], FREQUENCY_REGIONS[-1][3]
+
+
+def _hat_function_integral_re_im(tau_n: float, tau_m: float, y_lo: float, y_hi: float) -> tuple[float, float]:
+    """Numerically integrates the m-th PWL ("hat"/"tent") basis function,
+    centered at tau_m, against the RC-element kernel evaluated at the
+    measurement time constant tau_n = 1/(2*pi*f_n) -- i.e. computes one
+    (real, imaginary) entry pair of the A'/A'' design matrices from
+    Wan et al. 2015, eq. (30)-(33). The hat function is triangular in
+    y = ln(tau) - ln(tau_m), rising linearly from 0 at y_lo to 1 at y=0
+    and back to 0 at y_hi (y_lo <= 0 <= y_hi always).
+
+    This evaluates the general integral formula from eq. (32)-(33)
+    numerically (via scipy.integrate.quad) rather than using a closed-form
+    solution -- the source paper gives the general integral for an
+    arbitrary basis function f_m but the closed form specific to the PWL
+    "hat" shape is not spelled out there in elementary terms. Numerical
+    quadrature is mathematically equivalent and is verified in this
+    module's test suite by fitting a synthetic ZARC-element spectrum
+    (closed-form DRT known exactly, see docs/EQUATIONS.md) and checking
+    the peak position/shape is recovered.
+    """
+    def hat(y):
+        if y <= y_lo or y >= y_hi:
+            return 0.0
+        if y <= 0:
+            return 1.0 - y / y_lo
+        return 1.0 - y / y_hi
+
+    ratio_ln = np.log(tau_n / tau_m)
+
+    def re_integrand(y):
+        wt = np.exp(y - ratio_ln)  # omega*tau at this y, using tau = tau_m*exp(y), omega*tau_n cancels via tau_n/tau_m
+        return hat(y) / (1.0 + wt ** 2)
+
+    def im_integrand(y):
+        wt = np.exp(y - ratio_ln)
+        return hat(y) * (-wt) / (1.0 + wt ** 2)
+
+    re_val, _ = quad(re_integrand, y_lo, y_hi, limit=100)
+    im_val, _ = quad(im_integrand, y_lo, y_hi, limit=100)
+    return re_val, im_val
+
+
+def compute_drt(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.ndarray,
+                 lambda_reg: float = 1e-3) -> "DRTResult":
+    """Tikhonov-regularized DRT deconvolution using a piecewise-linear
+    (PWL) discretization basis, one basis function per measured
+    frequency (collocation points tau_m = 1/(2*pi*f_m)) -- following
+    Wan, Saccoccio, Chen & Ciucci, "Influence of the Discretization
+    Methods on the Distribution of Relaxation Times Deconvolution:
+    Implementing Radial Basis Functions with DRTtools," Electrochimica
+    Acta 184 (2015) 483-499 (the paper behind DRTtools, the standard
+    open-source reference implementation). Uses the same
+    inductive-loop-cropped, sign-normalized (frequency_hz, z_re_ohm,
+    z_im_ohm) convention as every other calculation in the EIS tab.
+
+    Regularization: penalizes the discrete SECOND difference of gamma
+    across collocation points (a standard smoothness penalty -- eq. 11-12
+    of the source paper use the norm of the first derivative; second-
+    difference regularization is an equally standard and commonly offered
+    alternative order in DRT toolboxes, chosen here because it does not
+    require the closed-form derivative of the PWL basis function). Larger
+    `lambda_reg` gives a smoother (less oscillatory) but potentially
+    over-smoothed DRT; smaller gives a noisier but more detailed one.
+    `lambda_reg` is a PRACTICAL DEFAULT here, not automatically optimized
+    against the data (the source paper notes optimal-lambda selection,
+    e.g. via re-im cross-validation, is itself a nontrivial choice) --
+    always check whether the result changes qualitatively across a
+    reasonable lambda range before trusting a specific peak.
+
+    Non-negativity: gamma(ln tau) and R_inf are both solved for jointly
+    via non-negative least squares (scipy.optimize.nnls) -- both are
+    physically non-negative quantities, so this is a direct, dependency-
+    free way to enforce the same physical constraint DRTtools enforces
+    via a general bounded quadratic program.
+
+    Raises ValueError if the input arrays are mismatched, have fewer than
+    5 points, or scipy is unavailable.
+    """
+    if not _HAVE_SCIPY:
+        raise ValueError("scipy is required for DRT analysis")
+    f = np.asarray(frequency_hz, dtype=float)
+    zre = np.asarray(z_re_ohm, dtype=float)
+    zim = np.asarray(z_im_ohm, dtype=float)
+    if not (len(f) == len(zre) == len(zim)):
+        raise ValueError("frequency_hz, z_re_ohm, and z_im_ohm must be equal-length arrays")
+    if len(f) < 5:
+        raise ValueError("DRT analysis needs at least 5 frequency points")
+
+    order = np.argsort(f)  # ascending frequency
+    f_sorted = f[order]
+    zre_sorted = zre[order]
+    zim_sorted = zim[order]
+
+    tau = 1.0 / (2.0 * np.pi * f_sorted)
+    tau = tau[::-1]  # ascending tau (descending frequency)
+    zre_by_tau = zre_sorted[::-1]
+    zim_by_tau = zim_sorted[::-1]
+    f_by_tau = f_sorted[::-1]
+
+    n = len(tau)
+    ln_tau = np.log(tau)
+
+    a_re = np.zeros((n, n))
+    a_im = np.zeros((n, n))
+    for m in range(n):
+        y_lo = ln_tau[m - 1] - ln_tau[m] if m > 0 else -(ln_tau[m + 1] - ln_tau[m])
+        y_hi = ln_tau[m + 1] - ln_tau[m] if m < n - 1 else -(ln_tau[m - 1] - ln_tau[m])
+        for k in range(n):
+            re_val, im_val = _hat_function_integral_re_im(tau[k], tau[m], y_lo, y_hi)
+            a_re[k, m] = re_val
+            a_im[k, m] = im_val
+
+    # Second-difference regularization matrix: (D gamma)_i = gamma_{i-1} - 2*gamma_i + gamma_{i+1}
+    d = np.zeros((max(n - 2, 0), n))
+    for i in range(n - 2):
+        d[i, i] = 1.0
+        d[i, i + 1] = -2.0
+        d[i, i + 2] = 1.0
+
+    # Design matrix: column 0 is R_inf (contributes 1 to every real-part
+    # row, 0 to imaginary/regularization rows); columns 1..n are the DRT
+    # weights gamma_m.
+    n_reg = d.shape[0]
+    design = np.zeros((2 * n + n_reg, 1 + n))
+    design[:n, 0] = 1.0
+    design[:n, 1:] = a_re
+    design[n:2 * n, 1:] = a_im
+    design[2 * n:, 1:] = np.sqrt(lambda_reg) * d
+    target = np.concatenate([zre_by_tau, zim_by_tau, np.zeros(n_reg)])
+
+    coeffs, _ = nnls(design, target)
+    r_inf = coeffs[0]
+    gamma = coeffs[1:]
+
+    model_re = r_inf + a_re @ gamma
+    model_im = a_im @ gamma
+    z_mag = np.sqrt(zre_by_tau ** 2 + zim_by_tau ** 2)
+    z_mag = np.where(z_mag == 0, np.finfo(float).eps, z_mag)
+    residual_percent = float(np.sqrt(np.mean(
+        ((zre_by_tau - model_re) ** 2 + (zim_by_tau - model_im) ** 2) / z_mag ** 2
+    )) * 100.0)
+
+    peaks_idx, _ = find_peaks(gamma, prominence=max(gamma.max() * 0.02, 1e-12))
+    peaks = []
+    for idx in peaks_idx:
+        region, explanation = classify_region(tau[idx])
+        peaks.append(DRTPeak(
+            tau_s=float(tau[idx]), frequency_hz=float(f_by_tau[idx]),
+            gamma=float(gamma[idx]), region=region, explanation=explanation,
+        ))
+
+    return DRTResult(
+        tau_s=tau, gamma=gamma, r_inf_ohm=float(r_inf), lambda_used=lambda_reg,
+        frequency_hz=f_by_tau, model_z_re_ohm=model_re, model_z_im_ohm=model_im,
+        residual_percent=residual_percent, peaks=peaks,
+    )
+
+
+def analytical_zarc_drt(tau_s: np.ndarray, rct_ohm: float, tau_zarc_s: float, phi: float) -> np.ndarray:
+    """Exact closed-form DRT of a single ZARC element (Z = Rct / (1 +
+    (i*2*pi*f*tau_zarc)^phi), i.e. a resistor in parallel with a CPE):
+
+        gamma(ln tau) = Rct * sin(pi*(1-phi)) /
+            (2*pi * (cosh(phi*ln(tau/tau_zarc)) - cos(pi*(1-phi))))
+
+    This is the standard ZARC/Cole-Cole DRT closed form reproduced across
+    the DRT literature (e.g. Schichlein et al., J. Appl. Electrochem. 32
+    (2002) 875; Boukamp, "Fourier Transform Distribution Function of
+    Relaxation Times," Solid State Ionics). The specific source PDF in
+    this project's reference material (Py, Maradesa & Ciucci,
+    Electrochimica Acta 479 (2024) 143741, eq. 10) states an equivalent
+    formula, but its printed equation could not be reliably transcribed
+    from this project's extracted PDF text (the two-column layout's OCR
+    interleaved characters from adjacent columns across the equation).
+    Rather than risk transcribing a garbled equation, this formula was
+    independently verified by forward-integration: computing
+    integral[gamma(ln tau)/(1+i*2*pi*f*tau) dlntau] numerically at several
+    frequencies and confirming it reproduces Rct/(1+(i*2*pi*f*tau_zarc)^phi)
+    to 5 decimal places for phi in (0,1) -- see the corresponding test.
+
+    Used only as a ground-truth reference for self-consistency testing
+    compute_drt() (no closed-form DRT exists for most real circuits, so
+    this is one of the few cases the numerical deconvolution can be
+    checked against exactly) and, in the UI, as an optional overlay so a
+    user fitting a single-semicircle-like feature can sanity-check the
+    numerical DRT's peak shape against the ideal case. phi=1 recovers an
+    ideal (non-distributed) RC element, a Dirac delta in the limit --
+    this formula is only meaningful for 0 < phi < 1.
+    """
+    tau = np.asarray(tau_s, dtype=float)
+    if not (0.0 < phi < 1.0):
+        raise ValueError("phi must be strictly between 0 and 1 for the ZARC DRT closed form")
+    x = phi * np.log(tau / tau_zarc_s)
+    return rct_ohm * np.sin(np.pi * (1.0 - phi)) / (2.0 * np.pi * (np.cosh(x) - np.cos(np.pi * (1.0 - phi))))
