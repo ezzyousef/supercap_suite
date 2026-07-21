@@ -533,15 +533,25 @@ class EisTab(QWidget):
         except ValueError as e:
             QMessageBox.warning(self, "No inductive loop found", str(e))
             return
+        n_points = eis.inductive_point_count(freq, zim)
         self.inductance_spin.blockSignals(True)
         self.inductance_spin.setValue(l_henries * 1e6)  # H -> µH
         self.inductance_spin.blockSignals(False)
         self.inductance_checkbox.setChecked(True)
+
+        confidence_note = ""
+        if n_points <= 3:
+            confidence_note = (
+                f" -- fit from only {n_points} points, right at the edge of the spectrum; "
+                "treat this L as a rough estimate and check the preview plot before trusting it."
+            )
         show_toast(
             self,
-            f"Fitted series inductance L = {l_henries * 1e6:.4g} µH from the high-frequency "
-            "inductive loop -- now applied to all analyses below (uncheck to remove).",
+            f"Fitted series inductance L = {l_henries * 1e6:.4g} µH from {n_points} high-frequency "
+            f"point(s) with Im(Z) > 0 -- now applied to all analyses below (uncheck to "
+            f"remove).{confidence_note}",
         )
+        self.on_preview()
 
     def _on_inductance_changed(self):
         if self.df is None:

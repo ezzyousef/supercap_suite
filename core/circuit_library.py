@@ -789,6 +789,111 @@ def _build_library() -> None:
             disp = f"{'L-' if with_l else ''}Rs({cap}2||(R2-M2))  [BioLogic AN34]"
             _register(CircuitSpec(name, disp, "Supercapacitor (recommended)", tree))
 
+    # --- H4. Three-branch supercapacitor model (Zubieta-Bonert extended) --
+    #        Z = Rs + [C1 || Rleak || (R2-C2) || (R3-C3)]
+    #        The classic Zubieta-Bonert two-branch model (H2 above) already
+    #        separates an immediate (C1, Helmholtz/EDL) branch from a
+    #        delayed (R2-C2) redistribution branch; the natural, widely-
+    #        used extension in supercapacitor modeling adds a THIRD,
+    #        longer-time-constant branch (R3-C3) to capture slow internal
+    #        charge redistribution over minutes-to-hours, distinct from
+    #        both the fast EDL response and the medium-speed
+    #        redistribution the two-branch model already covers -- e.g.
+    #        Buller, Karden, Kok & De Doncker, "Modeling the dynamic
+    #        behaviour of supercapacitors using impedance spectroscopy,"
+    #        IEEE Trans. Ind. Appl. 38(6), 2002, fit exactly this style of
+    #        multi-branch RC ladder to real supercapacitor EIS data,
+    #        finding a THIRD (slow) branch measurably improves the fit
+    #        over a two-branch model. C1 may be a CPE (Q) instead of an
+    #        ideal capacitor, matching how a real non-ideal double layer
+    #        is commonly modeled elsewhere in this library; R2-C2/R3-C3
+    #        stay ideal capacitors, matching the original formulation.
+    for c1 in cap_opts:
+        for with_l in (False, True):
+            name = f"supercap_threebranch_{c1}" + ("_L" if with_l else "")
+            fast_branch = _e(c1, "C1")
+            mid_branch = _series(_e("R", "R2"), _e("C", "C2"))
+            slow_branch = _series(_e("R", "R3"), _e("C", "C3"))
+            node = _parallel(fast_branch, _e("R", "Rleak"), mid_branch, slow_branch)
+            tree = _maybe_L(_series(_e("R", "Rs"), node), with_l)
+            disp = f"{'L-' if with_l else ''}Rs({c1}1||Rleak||(R2-C2)||(R3-C3))  [three-branch]"
+            _register(CircuitSpec(name, disp, "Supercapacitor (recommended)", tree))
+
+    # --- H5. Charge-transfer + diffusion + self-discharge, combined -------
+    #        Z = Rs + [(Rct||cap)-Wo(or Ws)] || Rleak
+    #        Every "supercap_{cap}_{Wo,Ws}" entry above (H) already covers
+    #        charge-transfer + bounded diffusion; every two-branch entry
+    #        (H2) already covers a leakage/self-discharge path -- but not
+    #        both together. A real supercapacitor self-discharges (Rleak)
+    #        AT THE SAME TIME ions are diffusing into/out of the porous
+    #        electrode (Wo/Ws), and EIS alone cannot always distinguish
+    #        which single-mechanism model is "more correct" for a given
+    #        electrode without trying both -- this entry lets the fit
+    #        itself judge whether adding an explicit leakage path
+    #        (parallel to the whole charge-transfer+diffusion branch)
+    #        improves on the simpler H-category entry for a given
+    #        spectrum. Same literature basis as H2 (Zubieta-Bonert) for
+    #        the leakage-resistance concept, combined with the same
+    #        bounded-Warburg convention as category H (Cruz-Manzo &
+    #        Greenwood, J. Electrochem. Soc. 167 (2020)).
+    for cap in cap_opts:
+        for wb in ("Wo", "Ws"):
+            for with_l in (False, True):
+                name = f"supercap_{cap}_{wb}_leak" + ("_L" if with_l else "")
+                semicircle = _parallel(_e("R", "Rct"), _e(cap, "Rct_cap"))
+                diffusion_branch = _series(semicircle, _e(wb, "Wb"))
+                node = _parallel(diffusion_branch, _e("R", "Rleak"))
+                tree = _maybe_L(_series(_e("R", "Rs"), node), with_l)
+                disp = f"{'L-' if with_l else ''}Rs([(Rct-{cap})-{wb}]||Rleak)"
+                _register(CircuitSpec(name, disp, "Supercapacitor (recommended)", tree))
+
+    # --- H6. Two interfacial time constants + bounded diffusion ----------
+    #        Z = Rs + (Rct1||cap1) + (Rct2||cap2) + Wo(or Ws)
+    #        A composite/hybrid electrode (e.g. a conductive coating over
+    #        a current collector, or two distinct pore-size populations in
+    #        one carbon) can show TWO resolvable interfacial time constants
+    #        before the low-frequency diffusive/capacitive turn -- this
+    #        library's old "Two time constants" category covered the
+    #        general two-time-constant shape but was removed for being an
+    #        unsourced combinatorial sweep with no Warburg tail at all
+    #        (see this module's docstring); this entry reintroduces a
+    #        two-time-constant model specifically as a SUPERCAPACITOR
+    #        circuit by requiring the same bounded-Warburg tail every
+    #        other entry in this category uses (never the plain
+    #        semi-infinite "W", for the reason documented at category H
+    #        above). Both interfacial stages use the SAME cap kind (C or
+    #        Q) here to keep the preset count from combinatorially
+    #        exploding; use the manual multi-element builder (if/when
+    #        added) for a mixed C1/Q2 combination.
+    for cap in cap_opts:
+        for wb in ("Wo", "Ws"):
+            for with_l in (False, True):
+                name = f"supercap_twostage_{cap}_{wb}" + ("_L" if with_l else "")
+                stage1 = _parallel(_e("R", "Rct1"), _e(cap, "Rct1_cap"))
+                stage2 = _parallel(_e("R", "Rct2"), _e(cap, "Rct2_cap"))
+                tree = _maybe_L(_series(_e("R", "Rs"), stage1, stage2, _e(wb, "Wb")), with_l)
+                disp = f"{'L-' if with_l else ''}Rs(Rct1-{cap})(Rct2-{cap})-{wb}  [two-stage]"
+                _register(CircuitSpec(name, disp, "Supercapacitor (recommended)", tree))
+
+    # --- (TLM + bounded-diffusion-tail was tried here and DELIBERATELY
+    #      DROPPED, same as the earlier documented "Warburg + trailing
+    #      CPE" case above: self-consistency testing (fit a circuit to its
+    #      own noise-free synthetic data) confirmed the model is
+    #      mathematically valid -- starting the optimizer exactly at the
+    #      true parameters gives a perfect fit, cost=0 -- but this
+    #      library's standard initial-guess strategy could NOT reliably
+    #      find that minimum from a generic starting point (reduced
+    #      chi-squared ~14, Rs driven to ~0, in a concrete reproduction).
+    #      A de Levie transmission line already behaves increasingly
+    #      capacitive-like toward low frequency on its own, and a bounded
+    #      Warburg does too below its own characteristic time -- two
+    #      elements producing near-identical low-frequency shapes in
+    #      series are too easily confused for each other by a
+    #      single/multi-start least-squares fit, exactly the same failure
+    #      mode already documented above. Shipping a preset that
+    #      systematically fits to the wrong answer would be worse than not
+    #      offering it.)
+
 
 _build_library()
 

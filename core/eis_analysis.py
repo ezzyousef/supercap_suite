@@ -159,51 +159,104 @@ def bulk_resistance_from_nyquist(z_re_ohm: np.ndarray, z_im_ohm: np.ndarray,
 # L from the raw data is a standard preprocessing step to see the
 # underlying (semicircle/diffusion) response without it.
 
+def _count_leading_positive(values_high_to_low_freq: np.ndarray) -> int:
+    """How many points, walking down from the highest frequency, are
+    consecutively > 0 before the first non-positive one. Shared by
+    fit_inductance_from_high_frequency and inductive_point_count so the
+    UI's "N points used" diagnostic always matches what the fit itself
+    actually used."""
+    n = 0
+    for val in values_high_to_low_freq:
+        if val > 0:
+            n += 1
+        else:
+            break
+    return n
+
+
+def inductive_point_count(frequency_hz: np.ndarray, z_im_ohm: np.ndarray) -> int:
+    """How many points fit_inductance_from_high_frequency would use for
+    THIS spectrum -- exposed separately so a caller (e.g. the EIS tab's
+    auto-detect button) can report it to the user as a fit-confidence
+    signal ("fit from only 3 points" is far less trustworthy than "fit
+    from 15 points") without duplicating the point-selection logic."""
+    f = np.asarray(frequency_hz, dtype=float)
+    zi = np.asarray(z_im_ohm, dtype=float)
+    if len(f) != len(zi) or len(f) == 0:
+        return 0
+    order = np.argsort(-f)
+    return _count_leading_positive(zi[order])
+
+
 def fit_inductance_from_high_frequency(frequency_hz: np.ndarray, z_im_ohm: np.ndarray,
                                         min_points: int = 3) -> float:
     """Estimate a series inductance (H) from the portion of the spectrum
-    where Im(Z) is POSITIVE -- the genuinely inductive region. This is a
-    deliberately strict criterion rather than "the top X% of points by
-    frequency": a capacitor or CPE (0 < n <= 1) can only ever contribute
-    a NEGATIVE imaginary part, so a positive Im(Z) cannot be explained by
-    anything else in a normal EDLC/pseudocapacitive circuit and is
-    unambiguous evidence of inductance. Using a fixed high-frequency
-    fraction instead was tried first and rejected: for a small inductance
-    relative to the rest of the circuit's own frequency-dependent
-    imaginary contribution, the top-N-percent window can still be
-    dominated by the CPE's own curvature rather than the inductive
-    signal, producing a badly wrong (even wrong-SIGN) fitted L --
-    confirmed by a synthetic test where "top 15% by frequency" recovered
-    L off by more than 10x with the wrong sign, while restricting to
-    Im(Z) > 0 does not have this failure mode (there simply aren't any
-    such points if the inductance is too small to matter, and the
-    function raises rather than returning a meaningless number).
+    where Im(Z) is POSITIVE -- the genuinely inductive region. A capacitor
+    or CPE (0 < n <= 1) can only ever contribute a NEGATIVE imaginary
+    part, so a positive Im(Z) cannot be explained by anything else in a
+    normal EDLC/pseudocapacitive circuit and is unambiguous evidence of
+    inductance. Using a fixed high-frequency fraction instead was tried
+    first and rejected: for a small inductance relative to the rest of
+    the circuit's own frequency-dependent imaginary contribution, the
+    top-N-percent window can still be dominated by the CPE's own
+    curvature rather than the inductive signal, producing a badly wrong
+    (even wrong-SIGN) fitted L -- confirmed by a synthetic test where
+    "top 15% by frequency" recovered L off by more than 10x with the
+    wrong sign.
 
-    Once restricted to Im(Z) > 0 points, Im(Z) ~= omega*L is fit as a
-    zero-intercept least-squares slope of Im(Z) vs. omega.
+    Only a CONTIGUOUS run of Im(Z) > 0 points starting from the HIGHEST
+    frequency is used, not every Im(Z) > 0 point anywhere in the
+    spectrum: a genuine inductive artifact is confined to the highest-
+    frequency end of a real spectrum, so as soon as a point's Im(Z) drops
+    back to <= 0 walking down in frequency, everything past that is
+    outside the inductive region. An ISOLATED Im(Z) > 0 point elsewhere
+    (e.g. a single noisy point near the low-frequency end, common on a
+    real noisy spectrum) is measurement noise, not inductance -- letting
+    it into the same zero-intercept regression as the real high-frequency
+    points can visibly distort the fitted L (confirmed: a synthetic
+    spectrum with 10 genuine high-frequency inductive points plus 4
+    scattered low-frequency noise points elsewhere biased the old
+    all-points fit measurably versus the true L, and applying that biased
+    L then visibly deformed the LOW-frequency part of the corrected curve
+    it should never have touched -- this is the "removing inductance
+    destroys the curve" failure mode). Restricting to the contiguous
+    high-frequency run removes that contamination entirely.
 
-    Raises ValueError if fewer than `min_points` points have Im(Z) > 0 --
-    i.e. this spectrum doesn't show a genuine inductive loop (or not
-    enough of one to fit reliably), which is itself useful information:
-    don't "remove" an inductance that was never actually there.
+    Once restricted, Im(Z) ~= omega*L is fit as a zero-intercept
+    least-squares slope of Im(Z) vs. omega.
+
+    Raises ValueError if fewer than `min_points` CONSECUTIVE points from
+    the highest frequency have Im(Z) > 0 -- i.e. this spectrum doesn't
+    show a genuine inductive loop (or not enough of one to fit reliably),
+    which is itself useful information: don't "remove" an inductance that
+    was never actually there.
     """
     f = np.asarray(frequency_hz, dtype=float)
     zi = np.asarray(z_im_ohm, dtype=float)
     if len(f) != len(zi) or len(f) == 0:
         raise ValueError("frequency_hz and z_im_ohm must be equal-length, non-empty arrays")
 
-    inductive = zi > 0
-    if int(np.sum(inductive)) < min_points:
+    # Work in strictly descending-frequency order regardless of how the
+    # caller's arrays were ordered, so "contiguous from the highest
+    # frequency" is well-defined even if the input isn't pre-sorted.
+    order = np.argsort(-f)
+    f_sorted = f[order]
+    zi_sorted = zi[order]
+    n_contiguous = _count_leading_positive(zi_sorted)
+
+    if n_contiguous < min_points:
         raise ValueError(
-            f"No inductive loop found (need at least {min_points} points with Im(Z) > 0, "
-            f"found {int(np.sum(inductive))}) -- this spectrum doesn't show a high-frequency "
-            "inductive artifact to remove, or it's too small/noisy to fit reliably."
+            f"No inductive loop found (need at least {min_points} CONSECUTIVE points from the "
+            f"highest frequency with Im(Z) > 0, found {n_contiguous}) -- this spectrum doesn't "
+            "show a high-frequency inductive artifact to remove, or it's too small/noisy to "
+            "fit reliably."
         )
-    omega = 2 * np.pi * f[inductive]
+    omega = 2 * np.pi * f_sorted[:n_contiguous]
+    zi_sel = zi_sorted[:n_contiguous]
     denom = float(np.sum(omega ** 2))
     if denom <= 0:
         raise ValueError("Cannot fit an inductance from a single (or zero-frequency) point")
-    return float(np.sum(omega * zi[inductive]) / denom)
+    return float(np.sum(omega * zi_sel) / denom)
 
 
 def remove_inductance(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.ndarray,

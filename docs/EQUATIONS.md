@@ -480,9 +480,46 @@ at all). `La`, `Winf`, `Mg`, `Ga`, `Gb` remain fully implemented (see
 above) since `Ma` and the underlying element-evaluation engine still
 depend on the same code paths, and a user building a fully custom
 circuit could still reach them -- they're simply no longer used by any
-of the ~50 remaining registered, user-facing circuits.
+of the ~71 remaining registered, user-facing circuits.
+
+Four further supercapacitor-specific families were added later, each
+verified against its own noise-free synthetic data (same self-
+consistency standard as every other entry):
+- **Three-branch model** (`supercap_threebranch_{C,Q}[_L]`): the
+  Zubieta-Bonert two-branch model (below) extended with a third, slower
+  RC branch -- Buller, Karden, Kok & De Doncker, "Modeling the dynamic
+  behaviour of supercapacitors using impedance spectroscopy," IEEE Trans.
+  Ind. Appl. 38(6), 2002, fit exactly this style of multi-branch RC
+  ladder to real supercapacitor EIS data. `Z = Rs + [C1 || Rleak ||
+  (R2-C2) || (R3-C3)]`.
+- **Charge-transfer + diffusion + leakage** (`supercap_{C,Q}_{Wo,Ws}_leak
+  [_L]`): combines this library's existing semicircle+bounded-Warburg
+  entries with a leakage/self-discharge resistance in parallel with the
+  whole branch, since a real cell does both at once and EIS alone can't
+  always tell which single-mechanism model fits better without trying
+  both. `Z = Rs + [(Rct||cap)-Wo] || Rleak`.
+- **Two-stage + bounded diffusion** (`supercap_twostage_{C,Q}_{Wo,Ws}
+  [_L]`): two resolvable interfacial time constants (e.g. a composite
+  electrode, or two distinct pore-size populations) followed by a
+  bounded-Warburg tail -- reintroduces a two-time-constant shape as an
+  explicitly supercapacitor-scoped entry (the old, removed "Two time
+  constants" category had no Warburg tail at all). `Z = Rs + (Rct1||cap)
+  + (Rct2||cap) + Wo`.
 
 **Not implemented this pass:**
+- A de Levie transmission line with an added downstream bounded-Warburg
+  tail (`Z = Rs + TLM + Wo`) was built and tested, then DELIBERATELY
+  DROPPED: self-consistency testing confirmed the model is mathematically
+  valid (starting the optimizer exactly at the true parameters gives a
+  perfect fit, cost=0), but this library's standard initial-guess
+  strategy could not reliably find that minimum from a generic starting
+  point (a concrete reproduction converged to Rs~0 with reduced
+  chi-squared ~14). A transmission line already behaves increasingly
+  capacitive-like toward low frequency on its own, and a bounded Warburg
+  does too below its own characteristic time -- the same "two elements
+  producing near-identical low-frequency shapes are too easily confused"
+  failure mode already documented for the "Warburg + trailing CPE" case
+  below.
 - An "EDL capacitance + pseudocapacitance" combined model was investigated
   (captioned in the same Shen et al. 2017 review, fig. 2c) but the exact
   branch topology could not be confirmed from the primary source (IEEE

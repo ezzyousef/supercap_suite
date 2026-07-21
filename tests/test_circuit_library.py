@@ -174,6 +174,76 @@ def test_two_branch_model_all_cpe_variants_registered():
             assert spec.category == "Supercapacitor (recommended)"
 
 
+def test_three_branch_model_recovers_true_parameters():
+    """Three-branch supercapacitor model (Zubieta-Bonert two-branch
+    extended with a third, slower RC branch -- Buller et al., IEEE Trans.
+    Ind. Appl. 38(6), 2002): Z = Rs + [C1 || Rleak || (R2-C2) || (R3-C3)].
+    A physically realistic ordering (R2 << R3, C2 vs C3 giving a slower
+    third time constant) must be recoverable from noise-free synthetic
+    data, same self-consistency standard as every other preset here."""
+    freq = np.logspace(4, -4, 70)
+    omega = 2 * np.pi * freq
+    spec = cl.get_circuit("supercap_threebranch_C")
+    true_params = {"Rs": 30.0, "C1": 1e-3, "Rleak": 8000.0, "R2": 20.0, "C2": 5e-3, "R3": 100.0, "C3": 5e-2}
+    z_true = cl.evaluate_circuit(spec.tree, omega, true_params)
+
+    result = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag,
+                                         model="supercap_threebranch_C", multistart=True)
+    assert result.reduced_chi_squared < 1e-6
+    for name, true_val in true_params.items():
+        assert result.params[name] == pytest.approx(true_val, rel=0.02)
+
+
+def test_charge_transfer_diffusion_and_leakage_model_recovers_true_parameters():
+    """Combined charge-transfer + bounded-diffusion + self-discharge model
+    (this library's own H/H2 conventions combined): Z = Rs + [(Rct||Q)-Wo]
+    || Rleak."""
+    freq = np.logspace(4, -3, 70)
+    omega = 2 * np.pi * freq
+    spec = cl.get_circuit("supercap_Q_Wo_leak")
+    true_params = {
+        "Rs": 2.0, "Rct": 20.0, "Rct_cap_Y0": 1e-3, "Rct_cap_n": 0.9,
+        "Wb_Y0": 0.05, "Wb_B": 2.0, "Rleak": 3000.0,
+    }
+    z_true = cl.evaluate_circuit(spec.tree, omega, true_params)
+
+    result = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag,
+                                         model="supercap_Q_Wo_leak", multistart=True)
+    assert result.reduced_chi_squared < 1e-6
+    for name, true_val in true_params.items():
+        assert result.params[name] == pytest.approx(true_val, rel=0.02)
+
+
+def test_two_stage_plus_warburg_model_recovers_true_parameters():
+    """Two resolvable interfacial time constants + a bounded-diffusion
+    tail (composite/hybrid electrode with two distinct interfaces):
+    Z = Rs + (Rct1||Q1) + (Rct2||Q2) + Wo."""
+    freq = np.logspace(4, -3, 70)
+    omega = 2 * np.pi * freq
+    spec = cl.get_circuit("supercap_twostage_Q_Wo")
+    true_params = {
+        "Rs": 1.0, "Rct1": 5.0, "Rct1_cap_Y0": 2e-3, "Rct1_cap_n": 0.95,
+        "Rct2": 15.0, "Rct2_cap_Y0": 5e-4, "Rct2_cap_n": 0.85,
+        "Wb_Y0": 0.03, "Wb_B": 3.0,
+    }
+    z_true = cl.evaluate_circuit(spec.tree, omega, true_params)
+
+    result = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag,
+                                         model="supercap_twostage_Q_Wo", multistart=True)
+    assert result.reduced_chi_squared < 1e-6
+    for name, true_val in true_params.items():
+        assert result.params[name] == pytest.approx(true_val, rel=0.03)
+
+
+def test_new_supercapacitor_families_are_registered_in_the_right_categories():
+    for c1 in ("C", "Q"):
+        assert cl.get_circuit(f"supercap_threebranch_{c1}").category == "Supercapacitor (recommended)"
+    for cap in ("C", "Q"):
+        for wb in ("Wo", "Ws"):
+            assert cl.get_circuit(f"supercap_{cap}_{wb}_leak").category == "Supercapacitor (recommended)"
+            assert cl.get_circuit(f"supercap_twostage_{cap}_{wb}").category == "Supercapacitor (recommended)"
+
+
 def test_an34_model_recovers_biologic_own_published_fit_values():
     """supercap_an34_C_L (Z = L + Rs + [C2 || (R2-M2)]) is BioLogic's own
     worked example for full-spectrum supercapacitor EIS fitting (EC-Lab
@@ -462,6 +532,65 @@ def test_fit_inductance_from_high_frequency_raises_without_an_inductive_loop():
     assert not np.any(z.imag > 0)
     with pytest.raises(ValueError, match="No inductive loop"):
         eis.fit_inductance_from_high_frequency(freq, z.imag)
+
+
+def test_fit_inductance_ignores_an_isolated_low_frequency_noise_point():
+    """A single stray Im(Z) > 0 point far from the high-frequency end
+    (plausible on a noisy real spectrum near the low-frequency baseline)
+    must NOT be treated as part of the inductive loop -- only a
+    CONTIGUOUS run starting from the highest frequency counts. Before
+    this was enforced, an isolated low-frequency positive point could
+    pull into the same zero-intercept regression as the real
+    high-frequency inductive points, which is what let the fitted L (and
+    therefore the "corrected" curve) drift wrong even though the loop
+    itself was fit from mostly-good points -- this test locks in that the
+    isolated point is excluded entirely, not merely down-weighted."""
+    freq = np.logspace(5, -3, 80)
+    omega = 2 * np.pi * freq
+    L_true = 2e-6
+    spec = cl.get_circuit("randles1_Q_none")
+    z = cl.evaluate_circuit(
+        spec.tree, omega,
+        {"Rs": 2.0, "Rct": 50.0, "Rct_cap_Y0": 5e-4, "Rct_cap_n": 0.92},
+    )
+    z_im = z.imag + omega * L_true
+
+    # Inject one isolated positive "noise" point far into the low-frequency
+    # tail (index near the END of a high-to-low-frequency-sorted array),
+    # well away from the contiguous high-frequency inductive run.
+    low_freq_idx = len(freq) - 5
+    assert z_im[low_freq_idx] < 0  # sanity: genuinely part of the capacitive tail beforehand
+    z_im_contaminated = z_im.copy()
+    z_im_contaminated[low_freq_idx] = 0.05  # a small noise-driven positive blip
+
+    n_clean = eis.inductive_point_count(freq, z_im)
+    n_contaminated = eis.inductive_point_count(freq, z_im_contaminated)
+    assert n_clean == n_contaminated  # the isolated point must not extend the counted run
+
+    fitted_L_clean = eis.fit_inductance_from_high_frequency(freq, z_im)
+    fitted_L_contaminated = eis.fit_inductance_from_high_frequency(freq, z_im_contaminated)
+    assert fitted_L_contaminated == pytest.approx(fitted_L_clean)
+
+
+def test_inductive_point_count_matches_the_fit():
+    freq = np.logspace(5, -1, 80)
+    omega = 2 * np.pi * freq
+    L_true = 2e-6
+    spec = cl.get_circuit("randles1_Q_none")
+    z = cl.evaluate_circuit(
+        spec.tree, omega,
+        {"Rs": 2.0, "Rct": 50.0, "Rct_cap_Y0": 5e-4, "Rct_cap_n": 0.92},
+    )
+    z_im = z.imag + omega * L_true
+    n = eis.inductive_point_count(freq, z_im)
+    assert n >= 3
+    # refitting using only the first n (highest-frequency) points by hand
+    # should recover essentially the same L as the full function
+    order = np.argsort(-freq)
+    f_sorted, zi_sorted = freq[order], z_im[order]
+    manual_omega = 2 * np.pi * f_sorted[:n]
+    manual_L = np.sum(manual_omega * zi_sorted[:n]) / np.sum(manual_omega ** 2)
+    assert eis.fit_inductance_from_high_frequency(freq, z_im) == pytest.approx(manual_L)
 
 
 def test_remove_inductance_zeroes_out_a_pure_inductive_contribution():
