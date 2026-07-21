@@ -162,6 +162,19 @@ noisy/sparse spectra -- always inspect the fit-overlay plot, not just
 reduced &chi;&sup2;.
 """
 
+KRAMERS_KRONIG = """
+<code>Z(&omega;) = R_inf + &sum;_k [ R_k / (1 + j&omega;&tau;_k) ]</code><br>
+Linear Kramers-Kronig validity test: a generic Voigt-element chain with
+&tau;_k fixed on a log grid (so the fit is ordinary least squares, no
+nonlinear optimizer), used to check whether a spectrum is even physically
+fittable by ANY causal/linear/stable circuit before trusting a specific
+one. Source: B.A. Boukamp, <i>J. Electrochem. Soc.</i> 142(6), 1885-1894
+(1995) -- the standard "linear KK test", also used in NOVA, ZView/RelaxIS.
+The pass/fail residual threshold (5%) is a practical heuristic, not from
+the source paper -- always also check whether the residual-vs-frequency
+pattern looks random or systematic.
+"""
+
 RATE_CAPABILITY = """
 <code>current_density (A/g) = I / m</code><br>
 <code>retention (%) = 100 &times; C_i / C_1</code><br>

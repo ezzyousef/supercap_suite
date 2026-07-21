@@ -317,6 +317,130 @@ def crop_inductive_loop_points(frequency_hz: np.ndarray, z_re_ohm: np.ndarray,
 
 
 # ---------------------------------------------------------------------------
+# Kramers-Kronig validity test
+# ---------------------------------------------------------------------------
+#
+# Checks whether a measured EIS spectrum is even PHYSICALLY fittable by any
+# causal, linear, time-invariant circuit at all, before spending time
+# fitting one specific topology. Source: B.A. Boukamp, "A Linear
+# Kronig-Kramers Transform Test for Immittance Data," J. Electrochem. Soc.
+# 142(6), 1885-1894 (1995) -- the standard "linear KK test" / measurement-
+# model approach also used in NOVA, ZView/RelaxIS, and the open-source
+# `pyimpspec`/`impedance.py` packages. The Voigt-chain measurement model
+# Z(omega) = R_inf + sum_k[ R_k / (1 + j*omega*tau_k) ] is a GENERIC,
+# maximally-flexible causal/linear/stable circuit: with the time constants
+# tau_k fixed on a log grid (not fitted), it is LINEAR in R_inf and every
+# R_k, so it's solved by one ordinary least-squares call -- no nonlinear
+# optimizer, no initial guess, and no assumption about the data's actual
+# physical circuit topology. Because this model can already reproduce any
+# KK-compliant spectrum arbitrarily well given enough elements, large
+# residuals mean the DATA itself is not KK-compliant (drift/non-stationarity
+# during the scan, nonlinearity, or instrument artifacts) rather than a
+# poor choice of equivalent circuit -- worth checking before trusting any
+# specific circuit fit's parameters.
+#
+# This implements Boukamp's original fixed-M linear KK test, not the later
+# automatic mu-criterion element-count selection of Schönleber, Klotz &
+# Ivers-Tiffée, "A Method for Improving the Robustness of linear
+# Kramers-Kronig Validity Tests," Electrochimica Acta 131, 20-27 (2014) --
+# that method chooses M adaptively to avoid both under- and over-fitting;
+# here M defaults to a fixed fraction of the number of data points, which
+# is simpler but can occasionally under- or over-fit at the extremes (very
+# few points, or a very noisy spectrum). Always inspect the returned
+# residual-percent arrays for a systematic (non-random) trend vs.
+# frequency, not just the single mean/max number, before concluding the
+# data has failed.
+
+@dataclass
+class KramersKronigResult:
+    passed: bool
+    mean_residual_percent: float
+    max_residual_percent: float
+    frequency_hz: np.ndarray           # ascending, matches the *_percent and model_z_* arrays below
+    residual_re_percent: np.ndarray
+    residual_im_percent: np.ndarray
+    model_z_re_ohm: np.ndarray
+    model_z_im_ohm: np.ndarray
+    num_elements: int
+
+
+def kramers_kronig_test(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.ndarray,
+                         num_elements: int | None = None,
+                         threshold_percent: float = 5.0) -> "KramersKronigResult":
+    """Linear Kramers-Kronig validity test (Boukamp 1995 measurement-model
+    approach) -- see the module comment above for the method and its
+    caveats. Fits a Voigt chain with `num_elements` RC elements, time
+    constants log-spaced across the measured frequency range, via ordinary
+    least squares (linear in R_inf and every R_k), then reports the
+    fit residual at every point as a percentage of |Z| at that point.
+
+    `threshold_percent` (default 5%) is a practical interpretation
+    threshold, NOT a value from Boukamp's paper -- commonly-cited
+    informal guidance in the KK-testing literature treats <1% residuals
+    as excellent, ~1-5% as typical/acceptable for a real (not ultra-clean)
+    cell, and consistently >5% (especially if the residuals show a
+    systematic trend with frequency rather than looking like noise) as a
+    sign the measurement itself should be re-checked before trusting any
+    circuit fit against it.
+
+    Raises ValueError if the three arrays aren't equal-length or there are
+    fewer than 5 points (too few to say anything meaningful).
+    """
+    f = np.asarray(frequency_hz, dtype=float)
+    zre = np.asarray(z_re_ohm, dtype=float)
+    zim = np.asarray(z_im_ohm, dtype=float)
+    if not (len(f) == len(zre) == len(zim)):
+        raise ValueError("frequency_hz, z_re_ohm, and z_im_ohm must be equal-length arrays")
+    if len(f) < 5:
+        raise ValueError("Kramers-Kronig test needs at least 5 frequency points")
+
+    order = np.argsort(f)
+    f_sorted = f[order]
+    zre_sorted = zre[order]
+    zim_sorted = zim[order]
+    omega = 2.0 * np.pi * f_sorted
+
+    if num_elements is None:
+        num_elements = max(3, len(f) - 2)
+    tau = np.logspace(np.log10(1.0 / omega[-1]), np.log10(1.0 / omega[0]), num_elements)
+
+    w_tau = omega[:, None] * tau[None, :]        # (N, M)
+    denom = 1.0 + w_tau ** 2
+    a_re = 1.0 / denom                            # real-part contribution of each Voigt element
+    a_im = -w_tau / denom                         # imaginary-part contribution of each Voigt element
+
+    n = len(f_sorted)
+    design = np.zeros((2 * n, 1 + num_elements))
+    design[:n, 0] = 1.0                           # R_inf only contributes to the real part
+    design[:n, 1:] = a_re
+    design[n:, 1:] = a_im
+    target = np.concatenate([zre_sorted, zim_sorted])
+
+    coeffs, *_ = np.linalg.lstsq(design, target, rcond=None)
+    r_inf, r_k = coeffs[0], coeffs[1:]
+    model_re = r_inf + a_re @ r_k
+    model_im = a_im @ r_k
+
+    z_mag = np.sqrt(zre_sorted ** 2 + zim_sorted ** 2)
+    z_mag = np.where(z_mag == 0, np.finfo(float).eps, z_mag)
+    resid_re_pct = (zre_sorted - model_re) / z_mag * 100.0
+    resid_im_pct = (zim_sorted - model_im) / z_mag * 100.0
+    all_resid = np.concatenate([resid_re_pct, resid_im_pct])
+
+    return KramersKronigResult(
+        passed=bool(np.max(np.abs(all_resid)) <= threshold_percent),
+        mean_residual_percent=float(np.mean(np.abs(all_resid))),
+        max_residual_percent=float(np.max(np.abs(all_resid))),
+        frequency_hz=f_sorted,
+        residual_re_percent=resid_re_pct,
+        residual_im_percent=resid_im_pct,
+        model_z_re_ohm=model_re,
+        model_z_im_ohm=model_im,
+        num_elements=num_elements,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Equivalent circuit fitting (complex nonlinear least squares)
 # ---------------------------------------------------------------------------
 #

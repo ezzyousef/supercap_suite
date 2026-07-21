@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel,
     QComboBox, QDoubleSpinBox, QSpinBox, QFileDialog, QMessageBox, QGroupBox,
     QTextEdit, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QListWidget,
-    QAbstractItemView, QDialog, QFormLayout, QDialogButtonBox, QInputDialog
+    QAbstractItemView, QDialog, QFormLayout, QDialogButtonBox, QInputDialog, QCheckBox
 )
 from PySide6.QtCore import Qt
 
@@ -1094,6 +1094,16 @@ class GcdRateTool(QWidget):
         left_layout.addWidget(run_btn)
         left_layout.addWidget(theme.make_source_button(self, "Rate capability & retention", formula_sources.RATE_CAPABILITY))
 
+        self.ragone_checkbox = QCheckBox("Show as Ragone plot (energy density vs. power density, log-log)")
+        self.ragone_checkbox.setToolTip(
+            "Standard supercapacitor comparison plot (e.g. EC-Lab's Ragone-"
+            "plot tool) -- same underlying E/P values as the rate-"
+            "capability table, just re-axed to log(P) vs. log(E) instead "
+            "of capacitance vs. current density."
+        )
+        self.ragone_checkbox.toggled.connect(lambda _checked: self._redraw_rate_plot())
+        left_layout.addWidget(self.ragone_checkbox)
+
         left_layout.addStretch()
         yield_to_event_loop()  # right before wrapping in QScrollArea, which forces an expensive full-subtree sizeHint pass
         splitter.addWidget(make_scrollable_panel(left))
@@ -1288,6 +1298,30 @@ class GcdRateTool(QWidget):
         self.seg_list.takeItem(row)
         del self._segments[row]
 
+    def _redraw_rate_plot(self, df: pd.DataFrame | None = None):
+        if df is None:
+            df = self.last_result_df
+        if df is None:
+            return
+        self.plot.ax.clear()
+        if self.ragone_checkbox.isChecked():
+            self.plot.ax.plot(df["energy_density_wh_per_kg"], df["power_density_w_per_kg"], "o-",
+                               color=theme.RAW, linewidth=1.3, markersize=4)
+            self.plot.ax.set_xscale("log")
+            self.plot.ax.set_yscale("log")
+            self.plot.ax.set_xlabel("Energy density (Wh/kg)")
+            self.plot.ax.set_ylabel("Power density (W/kg)")
+            self.plot.ax.set_title("Ragone plot")
+        else:
+            self.plot.ax.plot(df["current_density_a_per_g"], df["capacitance_f_per_g"], "o-",
+                               color=theme.RAW, linewidth=1.3, markersize=4)
+            self.plot.ax.set_xlabel("Current density (A/g)")
+            self.plot.ax.set_ylabel("Specific capacitance (F/g)")
+            self.plot.ax.set_title("Rate capability")
+        theme.apply_plot_style(self.plot.ax)
+        self.plot.fig.tight_layout()
+        self.plot.draw()
+
     def on_run(self):
         if len(self._segments) < 2:
             QMessageBox.warning(self, "Not enough segments", "Add at least 2 discharge segments "
@@ -1307,16 +1341,7 @@ class GcdRateTool(QWidget):
 
         df = pd.DataFrame(results)
         self.table_model.set_dataframe(df)
-
-        self.plot.ax.clear()
-        self.plot.ax.plot(df["current_density_a_per_g"], df["capacitance_f_per_g"], "o-",
-                           color=theme.RAW, linewidth=1.3, markersize=4)
-        self.plot.ax.set_xlabel("Current density (A/g)")
-        self.plot.ax.set_ylabel("Specific capacitance (F/g)")
-        self.plot.ax.set_title("Rate capability")
-        theme.apply_plot_style(self.plot.ax)
-        self.plot.fig.tight_layout()
-        self.plot.draw()
+        self._redraw_rate_plot(df=df)
 
         self.result_card.set_headline(
             "Capacitance retention at highest current",

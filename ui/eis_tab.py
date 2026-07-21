@@ -168,6 +168,32 @@ class EisTab(QWidget):
         induct_section.addLayout(induct_grid)
         self.data_section.addWidget(induct_section)
 
+        kk_section = CollapsibleSection("Kramers-Kronig validity check (optional)", start_expanded=False)
+        kk_grid = QGridLayout()
+        kk_note = QLabel(
+            "Checks whether this spectrum is even physically fittable by "
+            "ANY causal, linear, stable circuit at all -- before spending "
+            "time fitting one specific topology below. Fits a generic "
+            "Voigt-element chain (Boukamp 1995's standard linear KK test, "
+            "also used in NOVA/ZView/RelaxIS) and reports the residual at "
+            "every point as a % of |Z|; large residuals point to a "
+            "measurement problem (drift, nonlinearity, instrument "
+            "artifact), not a bad circuit choice. Uses the same inductive-"
+            "loop-cropped data as everything else below."
+        )
+        kk_note.setWordWrap(True)
+        kk_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        kk_grid.addWidget(kk_note, 0, 0, 1, 2)
+        kk_btn = QPushButton("▶ Run Kramers-Kronig validity test")
+        kk_btn.clicked.connect(self.on_kramers_kronig)
+        kk_grid.addWidget(kk_btn, 1, 0, 1, 2)
+        self.kk_status_label = QLabel("")
+        self.kk_status_label.setWordWrap(True)
+        kk_grid.addWidget(self.kk_status_label, 2, 0, 1, 2)
+        kk_grid.addWidget(theme.make_source_button(self, "Kramers-Kronig validity test", formula_sources.KRAMERS_KRONIG), 3, 0, 1, 2)
+        kk_section.addLayout(kk_grid)
+        self.data_section.addWidget(kk_section)
+
         yield_to_event_loop()  # Data section (often several CollapsibleSections) is fully built by this point -- yield before Configure
         self.configure_section = CollapsibleSection("2) Configure", start_expanded=True)
         left_layout.addWidget(self.configure_section)
@@ -544,6 +570,60 @@ class EisTab(QWidget):
         else:
             self.inductance_status_label.setText("")
         self.on_preview()
+
+    def on_kramers_kronig(self):
+        data = self._get_eis_arrays()
+        if data is None:
+            return
+        freq, zre, zim = data
+        try:
+            result = eis.kramers_kronig_test(freq, zre, zim)
+        except ValueError as e:
+            QMessageBox.critical(self, "Calculation error", str(e))
+            return
+        verdict = "PASSED" if result.passed else "FAILED"
+        color = theme.GOOD if result.passed else theme.WARN
+        self.kk_status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+        self.kk_status_label.setText(
+            f"Kramers-Kronig test {verdict} -- max residual {result.max_residual_percent:.3g}% "
+            f"(mean {result.mean_residual_percent:.3g}%) across {result.num_elements} fitted elements. "
+            + ("Data looks physically self-consistent; proceed to circuit fitting."
+               if result.passed else
+               "Large residuals -- re-check the measurement (drift/nonlinearity/instrument "
+               "artifacts) before trusting any circuit fit against this spectrum.")
+        )
+        lines = [
+            f"Kramers-Kronig linear validity test (Boukamp 1995 measurement model): {verdict}",
+            f"Max |residual| = {result.max_residual_percent:.4g}% of |Z|",
+            f"Mean |residual| = {result.mean_residual_percent:.4g}% of |Z|",
+            f"Voigt elements used = {result.num_elements}",
+            "",
+            "Pass/fail threshold is a practical heuristic (max residual <= 5%), not a "
+            "value from the source paper -- always also look at whether the residual "
+            "vs. frequency trend below looks random (fine) or systematic (a problem).",
+        ]
+        self.results_text.setPlainText("\n".join(lines))
+        self.result_card.set_headline(f"Kramers-Kronig: {verdict}", f"max residual {result.max_residual_percent:.3g}%")
+        self.result_card.set_secondary([
+            ("Mean residual", f"{result.mean_residual_percent:.3g}%"),
+            ("Voigt elements used", str(result.num_elements)),
+        ])
+        self.result_card.set_warnings([] if result.passed else [
+            "Spectrum failed the Kramers-Kronig validity check -- see the results panel."
+        ])
+
+        self.last_result = {
+            "Kramers-Kronig verdict": verdict,
+            "Max residual (%)": result.max_residual_percent,
+            "Mean residual (%)": result.mean_residual_percent,
+            "Voigt elements used": result.num_elements,
+        }
+        self.last_raw_df = pd.DataFrame({
+            "frequency_hz": result.frequency_hz,
+            "residual_re_percent": result.residual_re_percent,
+            "residual_im_percent": result.residual_im_percent,
+        })
+        self.export_btn.setEnabled(True)
 
     def on_remove_selected_rows(self):
         if self.df is None:

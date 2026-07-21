@@ -541,6 +541,45 @@ consistency standard as every other entry):
   essentially every circuit family in this library (not a separate
   fifth-plus model per topology), so no additional work was needed here.
 
+## 6b. Kramers-Kronig validity test
+
+```
+Z(omega) = R_inf + sum_k[ R_k / (1 + j*omega*tau_k) ]      (Voigt-chain measurement model)
+```
+A generic causal/linear/stable circuit -- a chain of parallel RC ("Voigt")
+elements with time constants `tau_k` FIXED on a log grid spanning the
+measured frequency range (not fitted), which makes the whole fit LINEAR in
+`R_inf` and every `R_k` (ordinary least squares, no nonlinear optimizer, no
+initial guess). Because this model can already reproduce ANY KK-compliant
+spectrum arbitrarily well given enough elements, a large residual between
+this fit and the actual data means the MEASUREMENT itself is not
+Kramers-Kronig-consistent (instrument drift/non-stationarity during the
+scan, nonlinearity, or artifacts) -- not that the wrong equivalent circuit
+was picked. Source: B.A. Boukamp, "A Linear Kronig-Kramers Transform Test
+for Immittance Data," *J. Electrochem. Soc.* 142(6), 1885-1894 (1995) --
+the standard "linear KK test" implemented in this exact form in commercial
+tools (NOVA/Metrohm Autolab, ZView/RelaxIS) and open-source packages
+(`pyimpspec`, `impedance.py`).
+
+`core/eis_analysis.kramers_kronig_test()` implements Boukamp's original
+fixed-element-count version, not the later automatic mu-criterion element-
+count selection of Schönleber, Klotz & Ivers-Tiffée, "A Method for
+Improving the Robustness of linear Kramers-Kronig Validity Tests,"
+*Electrochimica Acta* 131, 20-27 (2014) -- that method adaptively picks the
+number of Voigt elements to avoid both under- and over-fitting; this app
+defaults to a fixed fraction of the number of data points instead, which is
+simpler to implement and verify but can occasionally under- or over-fit at
+the extremes (very few points, or a very noisy spectrum). The reported
+pass/fail threshold (max residual <= 5% of |Z| at any point) is a
+practical interpretation threshold, **not a value from Boukamp's paper** --
+commonly-cited informal guidance treats <1% as excellent, ~1-5% as typical
+for a real (not ultra-clean) cell, and consistently >5% (especially with a
+systematic, not random-looking, trend vs. frequency) as a sign the
+measurement should be re-checked. Always look at the residual-vs-frequency
+shape, not just the single number. Uses the same inductive-loop-cropped
+data (Section 6, "Inductive loop removal") as every other calculation in
+the EIS tab.
+
 ## 7. GCD/CV rate capability and retention
 
 ```
@@ -555,6 +594,19 @@ number). `core/gcd_analysis.rate_capability_series` and
 `capacitance_retention_percent` implement these directly, running
 `capacitance_gcd_auto` (with its normal/integral auto-detection) across
 each discharge segment in the series.
+
+### 7a. Ragone plot
+
+The GCD rate-study tool's "Show as Ragone plot" checkbox re-axes the same
+per-current-density energy/power density values already computed by
+`rate_capability_series` (Section 3's formulas) as log(power density) vs.
+log(energy density) instead of capacitance vs. current density -- the
+standard way a supercapacitor's rate performance is compared across
+materials/devices in the literature (e.g. Ragone, "Review of Battery
+Systems for Electrically Powered Vehicles," SAE 1968; and, specific to
+EC-Lab's own equivalent tool, BioLogic's "Constant Power Discharge"
+application notes). No new formula -- purely a different plot of values
+already reported in the rate-capability table.
 
 ## 8. DSC water-type classification (free / freezable-bound / non-freezable-bound)
 

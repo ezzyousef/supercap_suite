@@ -655,3 +655,38 @@ def test_resistance_overestimation_warning_does_not_misfire_on_legitimate_large_
     result = eis.fit_equivalent_circuit(freq, z_re_n, z_im_n, model="randles1_Q_none", multistart=True)
     assert result.params["Rct"] == pytest.approx(true_params["Rct"], rel=0.05)
     assert not any("real-axis span" in w for w in result.warnings)
+
+
+def test_kramers_kronig_passes_a_genuinely_causal_randles_spectrum():
+    freq = np.logspace(4, -2, 60)
+    omega = 2 * np.pi * freq
+    spec = cl.get_circuit("randles1_C_none")
+    z = cl.evaluate_circuit(spec.tree, omega, {"Rs": 2.0, "Rct": 50.0, "Rct_cap": 1e-5})
+    result = eis.kramers_kronig_test(freq, z.real, z.imag)
+    assert result.passed
+    assert result.max_residual_percent < 0.5
+    assert len(result.frequency_hz) == len(freq)
+    assert np.all(np.diff(result.frequency_hz) > 0)  # returned ascending in frequency
+
+
+def test_kramers_kronig_flags_a_non_causal_glitch_point():
+    freq = np.logspace(4, -2, 60)
+    omega = 2 * np.pi * freq
+    spec = cl.get_circuit("randles1_C_none")
+    z = cl.evaluate_circuit(spec.tree, omega, {"Rs": 2.0, "Rct": 50.0, "Rct_cap": 1e-5})
+    z_re = z.real.copy()
+    clean_result = eis.kramers_kronig_test(freq, z_re, z.imag)
+    z_re[30] += 30.0  # inject a single non-physical spike (e.g. instrument glitch)
+    glitchy_result = eis.kramers_kronig_test(freq, z_re, z.imag)
+    assert not glitchy_result.passed
+    assert glitchy_result.max_residual_percent > clean_result.max_residual_percent
+
+
+def test_kramers_kronig_requires_at_least_five_points():
+    with pytest.raises(ValueError):
+        eis.kramers_kronig_test(np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0]))
+
+
+def test_kramers_kronig_requires_equal_length_arrays():
+    with pytest.raises(ValueError):
+        eis.kramers_kronig_test(np.ones(10), np.ones(9), np.ones(10))
