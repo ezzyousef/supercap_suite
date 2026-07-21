@@ -162,6 +162,24 @@ noisy/sparse spectra -- always inspect the fit-overlay plot, not just
 reduced &chi;&sup2;.
 """
 
+DRT_ANALYSIS = """
+<code>Z(f) = R_inf + &int; &gamma;(ln&tau;) / (1 + j2&pi;f&tau;) dln&tau;</code><br>
+Distribution of Relaxation Times: a non-parametric alternative to
+equivalent-circuit fitting -- deconvolves a continuous distribution
+&gamma;(ln&tau;) directly from the spectrum instead of assuming one
+circuit topology up front; every parallel RC-like process shows up as
+one peak. Discretized with piecewise-linear basis functions and solved
+via Tikhonov-regularized non-negative least squares. Source: T.H. Wan,
+M. Saccoccio, C. Chen, F. Ciucci, <i>Electrochimica Acta</i> 184 (2015)
+483-499 (the paper behind DRTtools, the standard open-source reference
+implementation). Peak frequency-region interpretations draw on C. Plank
+et al., <i>J. Power Sources</i> 594 (2024) 233845, and note a specific
+caveat for blocking-electrode systems (supercapacitors, batteries) from
+B. Py, A. Maradesa, F. Ciucci, <i>Electrochimica Acta</i> 479 (2024)
+143741. The regularization strength &lambda; is a practical default, not
+automatically optimized against this data -- try a few values.
+"""
+
 KRAMERS_KRONIG = """
 <code>Z(&omega;) = R_inf + &sum;_k [ R_k / (1 + j&omega;&tau;_k) ]</code><br>
 Linear Kramers-Kronig validity test: a generic Voigt-element chain with

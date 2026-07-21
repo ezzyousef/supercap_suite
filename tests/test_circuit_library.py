@@ -220,7 +220,7 @@ def test_two_stage_plus_warburg_model_recovers_true_parameters():
     Z = Rs + (Rct1||Q1) + (Rct2||Q2) + Wo."""
     freq = np.logspace(4, -3, 70)
     omega = 2 * np.pi * freq
-    spec = cl.get_circuit("supercap_twostage_Q_Wo")
+    spec = cl.get_circuit("supercap_twostage_QQ_Wo")
     true_params = {
         "Rs": 1.0, "Rct1": 5.0, "Rct1_cap_Y0": 2e-3, "Rct1_cap_n": 0.95,
         "Rct2": 15.0, "Rct2_cap_Y0": 5e-4, "Rct2_cap_n": 0.85,
@@ -229,7 +229,29 @@ def test_two_stage_plus_warburg_model_recovers_true_parameters():
     z_true = cl.evaluate_circuit(spec.tree, omega, true_params)
 
     result = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag,
-                                         model="supercap_twostage_Q_Wo", multistart=True)
+                                         model="supercap_twostage_QQ_Wo", multistart=True)
+    assert result.reduced_chi_squared < 1e-6
+    for name, true_val in true_params.items():
+        assert result.params[name] == pytest.approx(true_val, rel=0.03)
+
+
+def test_two_stage_mixed_cap_kind_model_recovers_true_parameters():
+    """The mixed-kind variant (stage 1 an ideal capacitor, stage 2 a
+    genuine CPE) added after a real fitting result showed Rct1_cap_n
+    pinned at its upper bound (1.0) in the same-kind-only QQ preset --
+    supercap_twostage_CQ_Ws lets stage 1 be plain C instead."""
+    freq = np.logspace(4, -3, 70)
+    omega = 2 * np.pi * freq
+    spec = cl.get_circuit("supercap_twostage_CQ_Ws")
+    true_params = {
+        "Rs": 1.0, "Rct1": 5.0, "Rct1_cap": 2e-4,
+        "Rct2": 15.0, "Rct2_cap_Y0": 5e-4, "Rct2_cap_n": 0.85,
+        "Wb_Y0": 0.03, "Wb_B": 3.0,
+    }
+    z_true = cl.evaluate_circuit(spec.tree, omega, true_params)
+
+    result = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag,
+                                         model="supercap_twostage_CQ_Ws", multistart=True)
     assert result.reduced_chi_squared < 1e-6
     for name, true_val in true_params.items():
         assert result.params[name] == pytest.approx(true_val, rel=0.03)
@@ -241,7 +263,10 @@ def test_new_supercapacitor_families_are_registered_in_the_right_categories():
     for cap in ("C", "Q"):
         for wb in ("Wo", "Ws"):
             assert cl.get_circuit(f"supercap_{cap}_{wb}_leak").category == "Supercapacitor (recommended)"
-            assert cl.get_circuit(f"supercap_twostage_{cap}_{wb}").category == "Supercapacitor (recommended)"
+    for c1 in ("C", "Q"):
+        for c2 in ("C", "Q"):
+            for wb in ("Wo", "Ws"):
+                assert cl.get_circuit(f"supercap_twostage_{c1}{c2}_{wb}").category == "Supercapacitor (recommended)"
 
 
 def test_an34_model_recovers_biologic_own_published_fit_values():

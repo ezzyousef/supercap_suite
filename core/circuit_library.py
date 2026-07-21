@@ -861,19 +861,34 @@ def _build_library() -> None:
     #        circuit by requiring the same bounded-Warburg tail every
     #        other entry in this category uses (never the plain
     #        semi-infinite "W", for the reason documented at category H
-    #        above). Both interfacial stages use the SAME cap kind (C or
-    #        Q) here to keep the preset count from combinatorially
-    #        exploding; use the manual multi-element builder (if/when
-    #        added) for a mixed C1/Q2 combination.
-    for cap in cap_opts:
-        for wb in ("Wo", "Ws"):
-            for with_l in (False, True):
-                name = f"supercap_twostage_{cap}_{wb}" + ("_L" if with_l else "")
-                stage1 = _parallel(_e("R", "Rct1"), _e(cap, "Rct1_cap"))
-                stage2 = _parallel(_e("R", "Rct2"), _e(cap, "Rct2_cap"))
-                tree = _maybe_L(_series(_e("R", "Rs"), stage1, stage2, _e(wb, "Wb")), with_l)
-                disp = f"{'L-' if with_l else ''}Rs(Rct1-{cap})(Rct2-{cap})-{wb}  [two-stage]"
-                _register(CircuitSpec(name, disp, "Supercapacitor (recommended)", tree))
+    #        above).
+    #
+    #        The two interfacial stages independently allow EITHER cap
+    #        kind (C or Q), matching the H2 two-branch family's
+    #        {c1}{c2} pattern, rather than forcing both stages to the
+    #        SAME kind as an earlier version of this entry did. That
+    #        earlier same-kind-only restriction produced a real, reported
+    #        failure mode: fitting supercap_twostage_Q_Ws_L against a real
+    #        two-stage spectrum where only ONE of the two stages actually
+    #        has non-ideal (distributed) interfacial behavior pinned
+    #        Rct1_cap_n at its upper search bound (1.0) -- the fit was
+    #        trying to tell us "this stage wants to be an ideal capacitor,
+    #        not a CPE" but the QQ-only preset had no plain-C option for
+    #        just that one stage. Now `supercap_twostage_CQ_Ws_L` (stage 1
+    #        ideal capacitor, stage 2 genuine CPE) or `_QC_` (the reverse)
+    #        lets a fit that hits this exact pattern converge without an
+    #        artificially pinned exponent, using one fewer free parameter
+    #        for whichever stage doesn't need it.
+    for c1 in cap_opts:
+        for c2 in cap_opts:
+            for wb in ("Wo", "Ws"):
+                for with_l in (False, True):
+                    name = f"supercap_twostage_{c1}{c2}_{wb}" + ("_L" if with_l else "")
+                    stage1 = _parallel(_e("R", "Rct1"), _e(c1, "Rct1_cap"))
+                    stage2 = _parallel(_e("R", "Rct2"), _e(c2, "Rct2_cap"))
+                    tree = _maybe_L(_series(_e("R", "Rs"), stage1, stage2, _e(wb, "Wb")), with_l)
+                    disp = f"{'L-' if with_l else ''}Rs(Rct1-{c1})(Rct2-{c2})-{wb}  [two-stage]"
+                    _register(CircuitSpec(name, disp, "Supercapacitor (recommended)", tree))
 
     # --- (TLM + bounded-diffusion-tail was tried here and DELIBERATELY
     #      DROPPED, same as the earlier documented "Warburg + trailing

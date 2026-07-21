@@ -480,7 +480,7 @@ at all). `La`, `Winf`, `Mg`, `Ga`, `Gb` remain fully implemented (see
 above) since `Ma` and the underlying element-evaluation engine still
 depend on the same code paths, and a user building a fully custom
 circuit could still reach them -- they're simply no longer used by any
-of the ~71 remaining registered, user-facing circuits.
+of the ~79 remaining registered, user-facing circuits.
 
 Four further supercapacitor-specific families were added later, each
 verified against its own noise-free synthetic data (same self-
@@ -498,13 +498,22 @@ consistency standard as every other entry):
   whole branch, since a real cell does both at once and EIS alone can't
   always tell which single-mechanism model fits better without trying
   both. `Z = Rs + [(Rct||cap)-Wo] || Rleak`.
-- **Two-stage + bounded diffusion** (`supercap_twostage_{C,Q}_{Wo,Ws}
-  [_L]`): two resolvable interfacial time constants (e.g. a composite
-  electrode, or two distinct pore-size populations) followed by a
-  bounded-Warburg tail -- reintroduces a two-time-constant shape as an
-  explicitly supercapacitor-scoped entry (the old, removed "Two time
-  constants" category had no Warburg tail at all). `Z = Rs + (Rct1||cap)
-  + (Rct2||cap) + Wo`.
+- **Two-stage + bounded diffusion** (`supercap_twostage_{c1}{c2}_{Wo,Ws}
+  [_L]`, c1/c2 independently C or Q): two resolvable interfacial time
+  constants (e.g. a composite electrode, or two distinct pore-size
+  populations) followed by a bounded-Warburg tail -- reintroduces a
+  two-time-constant shape as an explicitly supercapacitor-scoped entry
+  (the old, removed "Two time constants" category had no Warburg tail at
+  all). `Z = Rs + (Rct1||cap1) + (Rct2||cap2) + Wo`. The two stages'
+  capacitor kind was originally forced to match (both C or both Q); this
+  was changed to let each stage vary independently (matching the H2
+  two-branch family's `{c1}{c2}` pattern) after a real fitting result
+  showed `supercap_twostage_Q_Ws_L`'s `Rct1_cap_n` pinned at its upper
+  search bound (1.0) -- the fit was trying to say "this stage is an ideal
+  capacitor, not a CPE" but the QQ-only preset had no plain-C option for
+  just that one stage. `supercap_twostage_CQ_Ws_L` (stage 1 ideal
+  capacitor, stage 2 genuine CPE) resolves that specific case with one
+  fewer free parameter.
 
 **Not implemented this pass:**
 - A de Levie transmission line with an added downstream bounded-Warburg
@@ -693,6 +702,102 @@ time) and reports the resulting spread in area as a percentage. Large
 values in either check (>2% method disagreement, >5% boundary
 sensitivity) surface as a warning alongside the enthalpy -- neither
 replaces visually checking the plotted peak + baseline overlay.
+
+## 10. DRT (Distribution of Relaxation Times)
+
+```
+Z(f) = R_inf + integral[ gamma(ln tau) / (1 + j*2*pi*f*tau) dlntau ]
+```
+A non-parametric alternative/complement to equivalent-circuit fitting
+(Section 6a): instead of assuming one circuit topology up front, DRT
+deconvolves a continuous distribution gamma(ln tau) of relaxation-time
+"weights" directly from the measured spectrum. Every parallel RC-like
+element in an equivalent circuit shows up as one peak in gamma(ln tau) at
+tau = R*C -- informally, a DRT plot is "what an equivalent-circuit fit
+would look like without committing to a specific circuit first."
+
+`core/drt_analysis.compute_drt()` discretizes gamma(ln tau) with
+piecewise-linear ("hat") basis functions, one centered at each measured
+frequency's tau_n = 1/(2*pi*f_n), and solves the resulting Tikhonov-
+regularized least-squares problem via non-negative least squares
+(`scipy.optimize.nnls`) -- both R_inf and every gamma weight are
+constrained non-negative, which is physically required for gamma and
+happens to also hold for R_inf, so this enforces the non-negativity
+DRTtools implements via a general bounded quadratic program using only
+a standard-library-adjacent solver. Source: T.H. Wan, M. Saccoccio, C.
+Chen, F. Ciucci, "Influence of the Discretization Methods on the
+Distribution of Relaxation Times Deconvolution: Implementing Radial
+Basis Functions with DRTtools," *Electrochimica Acta* 184 (2015)
+483-499 -- the paper behind DRTtools, the standard open-source reference
+implementation in this field (this app implements the paper's PWL case,
+not its RBF extension; the paper's own abstract states the two give
+"comparable" results at a normal, complete data-collection range, which
+is the intended use case here). The design-matrix integrals (the paper's
+eq. 30-33) are evaluated by numerical quadrature (`scipy.integrate.quad`)
+rather than a closed form, and regularization uses a discrete SECOND-
+difference penalty on gamma (a standard, commonly-offered alternative
+regularization order to the paper's first-derivative penalty, chosen
+here because it avoids needing the closed-form derivative of the PWL
+basis function).
+
+**Self-consistency verification**: no closed-form DRT exists for most
+circuits, but one does for a single ZARC element (a resistor in parallel
+with a CPE) -- `core.drt_analysis.analytical_zarc_drt()` implements the
+standard ZARC/Cole-Cole DRT closed form reproduced across the DRT
+literature (e.g. Schichlein et al., *J. Appl. Electrochem.* 32 (2002)
+875; Boukamp, "Fourier Transform Distribution Function of Relaxation
+Times," *Solid State Ionics*). This project's own reference PDF (Py,
+Maradesa & Ciucci, *Electrochimica Acta* 479 (2024) 143741, eq. 10)
+states an equivalent result, but its printed equation could not be
+reliably transcribed from the extracted PDF text (the source's two-
+column layout interleaved characters from adjacent columns across the
+equation during OCR/text extraction) -- rather than risk shipping a
+garbled formula, it was independently verified by forward-integration
+(numerically computing `integral[gamma(ln tau)/(1+j*2*pi*f*tau)
+dlntau]` and confirming it reproduces the true ZARC impedance to 5
+decimal places across a wide frequency range; see
+`tests/test_drt_analysis.py`). `compute_drt()` itself is verified the
+same way this app verifies every other fitting routine: fit a synthetic
+ZARC spectrum with a known Rs/Rct/tau_zarc/phi and confirm R_inf, the
+peak position, and the peak "area" (integral of gamma d(ln tau) over a
+resolved peak, which should equal Rct -- a standard DRT property) are
+all recovered within a few percent.
+
+**Regularization parameter lambda** is a practical default (1e-3),
+exposed as an adjustable field in the DRT tab, NOT automatically
+optimized against the loaded data -- the source paper notes optimal-
+lambda selection (e.g. via re-im cross-validation) is itself a
+nontrivial, actively-discussed choice; always check whether a peak
+survives across a reasonable lambda range before trusting it.
+
+**Frequency-region peak interpretation** (`core.drt_analysis.
+classify_region()` / `FREQUENCY_REGIONS`): every detected peak is
+automatically labeled with a practical, literature-informed
+interpretation -- high frequency (short tau) typically maps to
+charge-transfer/interfacial kinetics and double-layer charging, mid
+frequency to distributed/combined charge-transfer + double-layer or
+contact/grain-boundary effects (broader peaks = more distributed
+process), and low frequency to diffusion/mass-transport-limited
+response. These are ORDER-OF-MAGNITUDE bands from the DRT peak-
+interpretation literature, **not universal physical constants** -- no
+single tau cutoff is correct for every electrode/electrolyte system;
+always cross-check a labeled peak against the specific chemistry and
+the raw Nyquist/Bode shape. Source: C. Plank et al., "A review of the
+distribution of relaxation times method for the analysis of impedance
+spectra," *J. Power Sources* 594 (2024) 233845 ("Interpretation of
+peaks" section). The low-frequency band's caveat about an artificial
+increasing series of peaks mimicking a CPE is specific to
+BLOCKING-electrode systems (i.e. exactly supercapacitors and
+batteries): B. Py, A. Maradesa, F. Ciucci, *Electrochimica Acta* 479
+(2024) 143741, documents that the classical DRT model's impedance is
+mathematically forced to a FINITE value as f->0, which cannot
+represent a real blocking electrode's diverging low-frequency
+impedance -- this is exactly why that paper introduces the distribution
+of capacitive times (DCT) as a complementary admittance-based method for
+blocking electrodes specifically; DCT is not implemented in this app
+(DRT is standard practice and adequate outside the specific low-
+frequency divergence case), noted here as a possible future addition if
+the low-frequency caveat proves limiting in practice.
 
 ---
 

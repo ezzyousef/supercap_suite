@@ -26,8 +26,9 @@ def test_plot_worksheet_data_generic_fallback_uses_first_col_as_x():
     op, gl = _mock_origin()
     wks = MagicMock()
 
-    oe._plot_worksheet_data(op, wks, df, col_index, "DSC test")
+    created = oe._plot_worksheet_data(op, wks, df, col_index, "DSC test")
 
+    assert created is True
     assert op.new_graph.call_count == 1
     calls = gl.add_plot.call_args_list
     assert len(calls) == 2  # one per non-x numeric column
@@ -48,8 +49,9 @@ def test_plot_worksheet_data_single_prefix_graph_x_y_convention():
     op, gl = _mock_origin()
     wks = MagicMock()
 
-    oe._plot_worksheet_data(op, wks, df, col_index, "Randles-Sevcik")
+    created = oe._plot_worksheet_data(op, wks, df, col_index, "Randles-Sevcik")
 
+    assert created is True
     assert op.new_graph.call_count == 1
     calls = gl.add_plot.call_args_list
     assert len(calls) == 2  # raw + fit line, same x
@@ -68,8 +70,9 @@ def test_plot_worksheet_data_dual_prefix_creates_two_separate_graphs():
     op, gl = _mock_origin()
     wks = MagicMock()
 
-    oe._plot_worksheet_data(op, wks, df, col_index, "Trasatti")
+    created = oe._plot_worksheet_data(op, wks, df, col_index, "Trasatti")
 
+    assert created is True
     assert op.new_graph.call_count == 2
     titles = {c.kwargs["lname"] for c in op.new_graph.call_args_list}
     assert titles == {"Trasatti — outer", "Trasatti — total"}
@@ -81,14 +84,19 @@ def test_plot_worksheet_data_skips_gracefully_with_fewer_than_two_numeric_column
     op, gl = _mock_origin()
     wks = MagicMock()
 
-    oe._plot_worksheet_data(op, wks, df, col_index, "Batch")
+    created = oe._plot_worksheet_data(op, wks, df, col_index, "Batch")
 
+    assert created is False
     assert op.new_graph.call_count == 0
 
 
 def test_send_to_origin_plot_failure_does_not_break_the_data_send(monkeypatch):
     """A broken/unavailable graphing call must never take down the whole
-    send -- the worksheet data is already safely pushed by that point."""
+    send -- the worksheet data is already safely pushed by that point --
+    but the failure must be reported back (graph_error), not silently
+    swallowed the way it used to be: previously a real graphing failure
+    and "no graph needed for this data shape" were indistinguishable to
+    the caller, both looking like nothing happened."""
     df = pd.DataFrame({"x": [1, 2], "y": [3, 4]})
 
     def _boom(*a, **k):
@@ -97,8 +105,30 @@ def test_send_to_origin_plot_failure_does_not_break_the_data_send(monkeypatch):
     monkeypatch.setattr(oe, "_plot_worksheet_data", _boom)
     monkeypatch.setattr(oe, "_get_origin", lambda: MagicMock(new_sheet=MagicMock(return_value=MagicMock(name="wks"))))
 
-    name = oe.send_to_origin("sheet", None, df)
-    assert name is not None
+    result = oe.send_to_origin("sheet", None, df)
+    assert result.sheet_name is not None
+    assert result.graph_created is False
+    assert result.graph_error == "graphing API unavailable"
+
+
+def test_send_to_origin_reports_graph_created_on_success(monkeypatch):
+    df = pd.DataFrame({"x": [1, 2], "y": [3, 4]})
+    monkeypatch.setattr(oe, "_plot_worksheet_data", lambda *a, **k: True)
+    monkeypatch.setattr(oe, "_get_origin", lambda: MagicMock(new_sheet=MagicMock(return_value=MagicMock(name="wks"))))
+
+    result = oe.send_to_origin("sheet", None, df)
+    assert result.graph_created is True
+    assert result.graph_error is None
+
+
+def test_send_to_origin_reports_no_graph_when_data_shape_does_not_support_one(monkeypatch):
+    df = pd.DataFrame({"File": ["a.csv", "b.csv"]})
+    monkeypatch.setattr(oe, "_plot_worksheet_data", lambda *a, **k: False)
+    monkeypatch.setattr(oe, "_get_origin", lambda: MagicMock(new_sheet=MagicMock(return_value=MagicMock(name="wks"))))
+
+    result = oe.send_to_origin("sheet", None, df)
+    assert result.graph_created is False
+    assert result.graph_error is None
 
 
 def test_is_session_active_reflects_module_state(monkeypatch):

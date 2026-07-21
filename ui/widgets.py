@@ -882,14 +882,25 @@ def _run_origin_send(parent, sheet_prefix: str, results: dict, raw_data, source_
     failure the same way every other action in this app does: a toast
     for success, a clear dialog for failure, never a silent no-op."""
     try:
-        sheet_name = origin_export.send_to_origin(sheet_prefix, results, raw_data, source_note)
+        result = origin_export.send_to_origin(sheet_prefix, results, raw_data, source_note)
     except origin_export.OriginNotAvailableError as e:
         QMessageBox.critical(parent, "OriginLab not available", str(e))
         return
     except Exception as e:
         QMessageBox.critical(parent, "Send to OriginLab failed", str(e))
         return
-    show_toast(parent, f"Sent to OriginLab -- worksheet '{sheet_name}' (plus a graph, if the data supported one).")
+    if result.graph_error:
+        show_toast(
+            parent,
+            f"Sent to OriginLab -- worksheet '{result.sheet_name}' created, but the graph "
+            f"could not be created: {result.graph_error}",
+            kind="error",
+        )
+    elif result.graph_created:
+        show_toast(parent, f"Sent to OriginLab -- worksheet '{result.sheet_name}' + graph created.")
+    else:
+        show_toast(parent, f"Sent to OriginLab -- worksheet '{result.sheet_name}' created (no graph: "
+                            f"data shape didn't match a plottable X/Y column pattern).")
 
 
 def _run_origin_save(parent) -> None:

@@ -14,7 +14,15 @@ researcher builds up one Origin project across a whole working session
 instead of a fresh Origin window opening every time they click "Send".
 """
 from __future__ import annotations
+from dataclasses import dataclass
 import pandas as pd
+
+
+@dataclass
+class OriginSendResult:
+    sheet_name: str
+    graph_created: bool
+    graph_error: str | None = None  # set only if graph creation was attempted and raised
 
 
 class OriginNotAvailableError(RuntimeError):
@@ -133,17 +141,26 @@ def close_origin(save: bool = False, path: str | None = None) -> None:
 
 
 def send_to_origin(sheet_label: str, result: dict | None, raw_df: pd.DataFrame | None,
-                    source_note: str | None = None, plot: bool = True) -> str:
+                    source_note: str | None = None, plot: bool = True) -> "OriginSendResult":
     """Push one result set into a new worksheet in the current (or newly
     launched) Origin session -- mirrors core/export_io.export_new_sheet's
     Excel layout (raw/graph data columns, plus a results block) so the
-    same data looks the same whichever destination it's sent to. Returns
-    the created worksheet's name.
+    same data looks the same whichever destination it's sent to.
 
+    Returns an OriginSendResult(sheet_name, graph_created, graph_error).
     If `plot` is True (default) and `raw_df` has at least one numeric X
     and Y column, this also creates an actual Origin GRAPH from that
     data (not just a data worksheet) -- see _plot_worksheet_data() for
-    which columns are picked.
+    which columns are picked. graph_created is False (with graph_error
+    None) when the data simply didn't match a plottable X/Y pattern --
+    that's a normal, silent no-op, NOT a failure. graph_error is set only
+    if graph creation was attempted and genuinely raised -- the data is
+    still safely in the worksheet either way (a graph failure never
+    fails the whole send), but the caller can now surface that failure
+    to the user instead of it vanishing silently, which previously made
+    "the graph never showed up in Origin" indistinguishable from "the
+    graph isn't applicable for this data" -- both looked like nothing
+    happened.
 
     Raises OriginNotAvailableError if originpro isn't installed or Origin
     can't be reached, and ValueError if there's nothing to send.
@@ -185,16 +202,18 @@ def send_to_origin(sheet_label: str, result: dict | None, raw_df: pd.DataFrame |
         except Exception:
             pass  # cosmetic only -- never fail the whole send over a comment
 
+    graph_created = False
+    graph_error = None
     if plot and raw_df is not None and not raw_df.empty:
         try:
-            _plot_worksheet_data(op, wks, raw_df, col_index_by_name, sheet_label)
-        except Exception:
-            pass  # the data is already safely in the worksheet either way -- never fail the whole send over the graph
+            graph_created = _plot_worksheet_data(op, wks, raw_df, col_index_by_name, sheet_label)
+        except Exception as e:
+            graph_error = str(e)  # data is already safely in the worksheet either way -- never fail the whole send over the graph
 
-    return wks.name
+    return OriginSendResult(sheet_name=wks.name, graph_created=graph_created, graph_error=graph_error)
 
 
-def _plot_worksheet_data(op, wks, raw_df: pd.DataFrame, col_index_by_name: dict, sheet_label: str) -> None:
+def _plot_worksheet_data(op, wks, raw_df: pd.DataFrame, col_index_by_name: dict, sheet_label: str) -> bool:
     """Create one or more actual Origin line/scatter graphs from the data
     just pushed to `wks`, instead of leaving the researcher to build a
     graph by hand from the raw worksheet every time.
@@ -233,12 +252,14 @@ def _plot_worksheet_data(op, wks, raw_df: pd.DataFrame, col_index_by_name: dict,
                 g["x"] = name
             else:
                 g["ys"].append(name)
+        created = False
         for prefix, g in groups.items():
             if g["x"] is not None and g["ys"]:
                 title = f"{sheet_label} — {prefix.rstrip('_')}" if prefix else sheet_label
                 _create_origin_graph(op, wks, col_index_by_name[g["x"]],
                                       [col_index_by_name[y] for y in g["ys"]], title[:60])
-        return
+                created = True
+        return created
 
     numeric_cols = [c for c in raw_df.columns if pd.api.types.is_numeric_dtype(raw_df[c])]
     if len(numeric_cols) >= 2:
@@ -246,6 +267,8 @@ def _plot_worksheet_data(op, wks, raw_df: pd.DataFrame, col_index_by_name: dict,
         y_cols = numeric_cols[1:]
         _create_origin_graph(op, wks, col_index_by_name[str(x_col)],
                               [col_index_by_name[str(y)] for y in y_cols], sheet_label[:60])
+        return True
+    return False
 
 
 def _create_origin_graph(op, wks, x_col_index: int, y_col_indices: list, title: str) -> None:
