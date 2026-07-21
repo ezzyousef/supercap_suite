@@ -250,6 +250,14 @@ class GcdTab(QWidget):
         results_splitter = make_resizable_results_panel(
             ("Plot", self.plot), ("Results summary", self.results_text), ("Data table", self.table)
         )
+        # Guarantees the plot/table area can never be crushed below a
+        # usable size just because the right panel as a whole is now
+        # wrapped in a scroll area (see make_scrollable_panel(right)
+        # below) -- if the window is too short for everything at once,
+        # the SCROLLBAR activates instead of shrinking the plot, so the
+        # graph stays visible/readable rather than disappearing into a
+        # sliver.
+        results_splitter.setMinimumHeight(580)
         right_layout.addWidget(results_splitter, stretch=1)
         yield_to_event_loop()  # plot/table splitter is the other big chunk -- yield again before the remaining (usually lighter) widgets
 

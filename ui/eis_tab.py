@@ -67,10 +67,10 @@ class EisTab(QWidget):
             "CURRENTLY SELECTED circuit below to every spectrum -- "
             "collecting one row per file (fitted parameters + reduced "
             "χ²) in the batch results table. Runs in the background, the "
-            "window stays responsive. Uses the same series-inductance-"
-            "removal and Im(Z) sign-convention settings as the single-"
-            "file flow above, which stays available for closer "
-            "inspection of one spectrum at a time."
+            "window stays responsive. Uses the same inductive-loop-removal "
+            "and Im(Z) sign-convention settings as the single-file flow "
+            "above, which stays available for closer inspection of one "
+            "spectrum at a time."
         )
         self.batch_btn.clicked.connect(self.on_import_multi_files)
         batch_row.addWidget(self.batch_btn)
@@ -141,36 +141,30 @@ class EisTab(QWidget):
         col_section.addLayout(col_grid)
         self.data_section.addWidget(col_section)
 
-        induct_section = CollapsibleSection("Series inductance removal (optional)", start_expanded=True)
+        induct_section = CollapsibleSection("Inductive loop removal (optional)", start_expanded=True)
         induct_grid = QGridLayout()
         induct_note = QLabel(
-            "A stray series inductance (cable/connector artifact) adds "
-            "j*omega*L to Z, which only ever affects Im(Z) -- on a "
-            "standard -Z'' vs Z' Nyquist plot it shows up as the trace "
-            "dipping BELOW the real axis (Im(Z) becomes positive) at high "
-            "frequency. Auto-detect fits L from exactly those Im(Z) > 0 "
-            "points; if your data has no such dip, there's no inductive "
-            "artifact here to remove and auto-detect will say so. Applies "
-            "to every calculation/fit below (preview, capacitance, "
-            "conductivity, circuit fit) until unchecked -- never modifies "
-            "the loaded file/table."
+            "A stray series inductance (cable/connector artifact) shows up "
+            "on a standard -Z'' vs Z' Nyquist plot as the trace dipping "
+            "BELOW the real axis (Im(Z) becomes positive) at high "
+            "frequency. Rather than estimating and subtracting an "
+            "inductance value (imprecise on real/noisy data, and any "
+            "imprecision then shows up as a smaller version of the same "
+            "distortion across the WHOLE curve), this simply DELETES "
+            "those points -- the actual inductive loop itself -- from "
+            "every calculation/plot below, leaving every remaining point "
+            "as untouched raw data. Never modifies the loaded file/table."
         )
         induct_note.setWordWrap(True)
         induct_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
         induct_grid.addWidget(induct_note, 0, 0, 1, 2)
-        autodetect_l_btn = QPushButton("Auto-detect L from high-frequency loop")
-        autodetect_l_btn.clicked.connect(self.on_autodetect_inductance)
-        induct_grid.addWidget(autodetect_l_btn, 1, 0, 1, 2)
-        self.inductance_spin = QDoubleSpinBox()
-        self.inductance_spin.setDecimals(4)
-        self.inductance_spin.setRange(-1_000_000, 1_000_000)
-        self.inductance_spin.setSuffix(" µH")
-        self.inductance_spin.valueChanged.connect(self._on_inductance_changed)
-        induct_grid.addWidget(QLabel("Series inductance L:"), 2, 0)
-        induct_grid.addWidget(self.inductance_spin, 2, 1)
-        self.inductance_checkbox = QCheckBox("Remove this inductance from all analyses below")
+        self.inductance_checkbox = QCheckBox("Remove inductive loop points (Im(Z) > 0 near the highest frequency)")
         self.inductance_checkbox.toggled.connect(self._on_inductance_changed)
-        induct_grid.addWidget(self.inductance_checkbox, 3, 0, 1, 2)
+        induct_grid.addWidget(self.inductance_checkbox, 1, 0, 1, 2)
+        self.inductance_status_label = QLabel("")
+        self.inductance_status_label.setWordWrap(True)
+        self.inductance_status_label.setStyleSheet(f"color: {theme.INK_DIM};")
+        induct_grid.addWidget(self.inductance_status_label, 2, 0, 1, 2)
         induct_section.addLayout(induct_grid)
         self.data_section.addWidget(induct_section)
 
@@ -299,6 +293,11 @@ class EisTab(QWidget):
             ("Results summary", self.results_text), ("Data table", self.table),
             sizes=[320, 200, 160, 160],
         )
+        # Guarantees the plot/table area can never be crushed below a
+        # usable size now that the right panel is wrapped in a scroll
+        # area (see make_scrollable_panel(right) below) -- a too-short
+        # window scrolls instead of shrinking the plot to a sliver.
+        results_splitter.setMinimumHeight(840)
         right_layout.addWidget(results_splitter, stretch=1)
         yield_to_event_loop()  # plot/table splitter is the other big chunk -- yield again before the remaining (usually lighter) widgets
 
@@ -508,10 +507,10 @@ class EisTab(QWidget):
         return freq[order], zre[order], zim[order]
 
     def _get_eis_arrays(self):
-        """freq/Z_re/Z_im with the series-inductance correction applied if
-        the user has checked "Remove this inductance" -- the single choke
-        point every calculation/fit in this tab reads through, so toggling
-        the checkbox transparently affects preview, capacitance,
+        """freq/Z_re/Z_im with the inductive-loop points cropped out if
+        the user has checked "Remove inductive loop points" -- the single
+        choke point every calculation/fit in this tab reads through, so
+        toggling the checkbox transparently affects preview, capacitance,
         conductivity, and circuit fitting alike without ever mutating
         self.df."""
         raw = self._get_eis_arrays_raw()
@@ -519,46 +518,32 @@ class EisTab(QWidget):
             return None
         freq, zre, zim = raw
         if self.inductance_checkbox.isChecked():
-            l_henries = self.inductance_spin.value() * 1e-6  # µH -> H
-            zre, zim = eis.remove_inductance(freq, zre, zim, l_henries)
+            freq, zre, zim = eis.crop_inductive_loop_points(freq, zre, zim)
         return freq, zre, zim
-
-    def on_autodetect_inductance(self):
-        raw = self._get_eis_arrays_raw()
-        if raw is None:
-            return
-        freq, _zre, zim = raw
-        try:
-            l_henries = eis.fit_inductance_from_high_frequency(freq, zim)
-        except ValueError as e:
-            QMessageBox.warning(self, "No inductive loop found", str(e))
-            return
-        n_points = eis.inductive_point_count(freq, zim)
-        self.inductance_spin.blockSignals(True)
-        self.inductance_spin.setValue(l_henries * 1e6)  # H -> µH
-        self.inductance_spin.blockSignals(False)
-        self.inductance_checkbox.setChecked(True)
-
-        confidence_note = ""
-        if n_points <= 3:
-            confidence_note = (
-                f" -- fit from only {n_points} points, right at the edge of the spectrum; "
-                "treat this L as a rough estimate and check the preview plot before trusting it."
-            )
-        show_toast(
-            self,
-            f"Fitted series inductance L = {l_henries * 1e6:.4g} µH from {n_points} high-frequency "
-            f"point(s) with Im(Z) > 0 -- now applied to all analyses below (uncheck to "
-            f"remove).{confidence_note}",
-        )
-        self.on_preview()
 
     def _on_inductance_changed(self):
         if self.df is None:
             return
-        if "-- select --" not in (self.zre_combo.currentText(), self.zim_combo.currentText(),
-                                   self.freq_combo.currentText()):
-            self.on_preview()
+        if "-- select --" in (self.zre_combo.currentText(), self.zim_combo.currentText(),
+                               self.freq_combo.currentText()):
+            return
+        if self.inductance_checkbox.isChecked():
+            raw = self._get_eis_arrays_raw()
+            if raw is not None:
+                freq, _zre, zim = raw
+                n_points = eis.inductive_point_count(freq, zim)
+                if n_points == 0:
+                    self.inductance_status_label.setText(
+                        "No inductive loop found at the highest frequency -- nothing removed."
+                    )
+                else:
+                    self.inductance_status_label.setText(
+                        f"Removed {n_points} point(s) from the highest-frequency end "
+                        f"({len(freq) - n_points} of {len(freq)} points remain)."
+                    )
+        else:
+            self.inductance_status_label.setText("")
+        self.on_preview()
 
     def on_remove_selected_rows(self):
         if self.df is None:
@@ -893,7 +878,6 @@ class EisTab(QWidget):
 
         zim_sign_idx = self.zim_sign_combo.currentIndex()
         inductance_on = self.inductance_checkbox.isChecked()
-        l_henries = self.inductance_spin.value() * 1e-6
 
         # Loading files, auto-detecting columns, and any per-file cycle
         # dialog all touch Qt widgets/dialogs, so this whole pass runs on
@@ -946,7 +930,7 @@ class EisTab(QWidget):
             order = np.argsort(-freq)
             freq, zre, zim = freq[order], zre[order], zim[order]
             if inductance_on:
-                zre, zim = eis.remove_inductance(freq, zre, zim, l_henries)
+                freq, zre, zim = eis.crop_inductive_loop_points(freq, zre, zim)
 
             prepared.append((fname, freq, zre, zim))
 

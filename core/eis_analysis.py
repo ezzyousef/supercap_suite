@@ -277,6 +277,45 @@ def remove_inductance(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: 
     return zre.copy(), zim_corrected
 
 
+def crop_inductive_loop_points(frequency_hz: np.ndarray, z_re_ohm: np.ndarray,
+                                z_im_ohm: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Simpler alternative to remove_inductance()/fit_inductance_from_high_
+    frequency(): instead of estimating a series inductance L and
+    subtracting j*omega*L from every point (which depends on how
+    precisely L can be fit -- an imprecise fit was found to visibly
+    distort the corrected curve, see remove_inductance's history), this
+    just DELETES the contiguous run of points with Im(Z) > 0 starting
+    from the highest frequency -- i.e. the actual inductive loop itself
+    -- and returns the remaining (freq, z_re, z_im) arrays, shorter than
+    the input by however many points were removed. No inductance value
+    is estimated or subtracted anywhere, so there's nothing to get
+    slightly wrong: every remaining point is untouched raw data.
+
+    This is a legitimate, commonly-used practical approach when the
+    inductive loop is a minor cable/connector artifact not worth
+    modeling explicitly (as opposed to the "L-" circuit variants in
+    circuit_library.py, which fit L as part of a full CNLS circuit fit
+    -- appropriate when the inductance itself needs to be reported as a
+    result, not just discarded).
+
+    Returns the input arrays UNCHANGED (as copies) if there's no
+    contiguous positive run at the highest frequency at all -- i.e. this
+    is a safe no-op on a spectrum with no inductive loop, never raises.
+    """
+    f = np.asarray(frequency_hz, dtype=float)
+    zre = np.asarray(z_re_ohm, dtype=float)
+    zim = np.asarray(z_im_ohm, dtype=float)
+    if not (len(f) == len(zre) == len(zim)):
+        raise ValueError("frequency_hz, z_re_ohm, and z_im_ohm must be equal-length arrays")
+    if len(f) == 0:
+        return f.copy(), zre.copy(), zim.copy()
+
+    order = np.argsort(-f)
+    f_sorted, zre_sorted, zim_sorted = f[order], zre[order], zim[order]
+    n_drop = _count_leading_positive(zim_sorted)
+    return f_sorted[n_drop:].copy(), zre_sorted[n_drop:].copy(), zim_sorted[n_drop:].copy()
+
+
 # ---------------------------------------------------------------------------
 # Equivalent circuit fitting (complex nonlinear least squares)
 # ---------------------------------------------------------------------------
