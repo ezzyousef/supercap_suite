@@ -31,6 +31,7 @@ class EisTab(QWidget):
     def __init__(self):
         super().__init__()
         self.df: pd.DataFrame | None = None
+        self._undo_df_snapshot: pd.DataFrame | None = None
         self.last_result: dict | None = None
         self.last_raw_df: pd.DataFrame | None = None
         self.batch_df: pd.DataFrame | None = None
@@ -338,6 +339,11 @@ class EisTab(QWidget):
         )
         remove_rows_btn.clicked.connect(self.on_remove_selected_rows)
         table_actions_row.addWidget(remove_rows_btn)
+        self.undo_remove_rows_btn = QPushButton("↶ Undo row removal")
+        self.undo_remove_rows_btn.setEnabled(False)
+        self.undo_remove_rows_btn.setToolTip("Restores the data table to how it was just before the last row removal.")
+        self.undo_remove_rows_btn.clicked.connect(self.on_undo_remove_rows)
+        table_actions_row.addWidget(self.undo_remove_rows_btn)
         table_actions_row.addStretch()
         right_layout.addLayout(table_actions_row)
 
@@ -421,6 +427,8 @@ class EisTab(QWidget):
         if isinstance(df, dict):
             df = list(df.values())[0]
         self.df = df
+        self._undo_df_snapshot = None  # a fresh file load makes any pending row-removal undo stale
+        self.undo_remove_rows_btn.setEnabled(False)
         self.status_label.setText(f"Loaded {len(df)} rows, {len(df.columns)} columns")
 
         cols = list(df.columns)
@@ -645,6 +653,8 @@ class EisTab(QWidget):
         if new_df.empty:
             QMessageBox.warning(self, "Cannot remove all rows", "At least one row must remain.")
             return
+        self._undo_df_snapshot = self.df
+        self.undo_remove_rows_btn.setEnabled(True)
         self.df = new_df
         self._on_cycle_column_changed()  # cycle-value list may need to shrink
         self.table_model.set_dataframe(self._current_df())
@@ -653,6 +663,20 @@ class EisTab(QWidget):
                                    self.freq_combo.currentText()):
             self.on_preview()
         show_toast(self, f"Removed {len(rows)} row(s) -- {len(self.df)} rows remain.")
+
+    def on_undo_remove_rows(self):
+        if self._undo_df_snapshot is None:
+            return
+        self.df = self._undo_df_snapshot
+        self._undo_df_snapshot = None
+        self.undo_remove_rows_btn.setEnabled(False)
+        self._on_cycle_column_changed()
+        self.table_model.set_dataframe(self._current_df())
+        self.status_label.setText(f"Loaded {len(self.df)} rows, {len(self.df.columns)} columns (row removal undone)")
+        if "-- select --" not in (self.zre_combo.currentText(), self.zim_combo.currentText(),
+                                   self.freq_combo.currentText()):
+            self.on_preview()
+        show_toast(self, f"Undid row removal -- {len(self.df)} rows restored.")
 
     def on_preview(self):
         data = self._get_eis_arrays()

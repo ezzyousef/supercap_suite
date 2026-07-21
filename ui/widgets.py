@@ -1078,6 +1078,7 @@ class RecordLogPanel(QGroupBox):
         self._sheet_prefix = sheet_prefix
         self._rows: list[dict] = []
         self._get_results = None
+        self._undo_snapshot: list[dict] | None = None
 
         # A native checkable QGroupBox only dims/enables its children on
         # toggle, it doesn't collapse them out of the layout -- so the
@@ -1146,6 +1147,11 @@ class RecordLogPanel(QGroupBox):
         self.clear_btn.setEnabled(False)
         self.clear_btn.clicked.connect(self._clear)
         btn_row.addWidget(self.clear_btn)
+        self.undo_btn = QPushButton("↶ Undo")
+        self.undo_btn.setEnabled(False)
+        self.undo_btn.setToolTip("Restores the log to how it was just before the last row removal or Clear log.")
+        self.undo_btn.clicked.connect(self._undo)
+        btn_row.addWidget(self.undo_btn)
         layout.addLayout(btn_row)
 
     def _on_group_toggled(self, checked: bool):
@@ -1165,6 +1171,12 @@ class RecordLogPanel(QGroupBox):
         row = {"Sample / run": label, "Recorded at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
         row.update(results)
         self._rows.append(row)
+        # A new row makes any pending undo snapshot stale (restoring it
+        # would silently discard this just-recorded row), so recording
+        # invalidates undo -- it's only ever valid immediately after a
+        # removal/clear, before anything else happens.
+        self._undo_snapshot = None
+        self.undo_btn.setEnabled(False)
         self._refresh_table()
         self.export_log_btn.setEnabled(True)
         self.save_log_as_btn.setEnabled(True)
@@ -1180,6 +1192,7 @@ class RecordLogPanel(QGroupBox):
         if not rows:
             QMessageBox.information(self, "No row selected", "Select a row in the table first.")
             return
+        self._undo_snapshot = list(self._rows)
         for r in rows:
             if 0 <= r < len(self._rows):
                 del self._rows[r]
@@ -1189,6 +1202,7 @@ class RecordLogPanel(QGroupBox):
         self.save_log_as_btn.setEnabled(has_rows)
         self.remove_btn.setEnabled(has_rows)
         self.clear_btn.setEnabled(has_rows)
+        self.undo_btn.setEnabled(True)
 
     def _clear(self):
         if not self._rows:
@@ -1198,12 +1212,27 @@ class RecordLogPanel(QGroupBox):
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
+        self._undo_snapshot = list(self._rows)
         self._rows = []
         self._refresh_table()
         self.export_log_btn.setEnabled(False)
         self.save_log_as_btn.setEnabled(False)
         self.remove_btn.setEnabled(False)
         self.clear_btn.setEnabled(False)
+        self.undo_btn.setEnabled(True)
+
+    def _undo(self):
+        if self._undo_snapshot is None:
+            return
+        self._rows = self._undo_snapshot
+        self._undo_snapshot = None
+        self._refresh_table()
+        has_rows = bool(self._rows)
+        self.export_log_btn.setEnabled(has_rows)
+        self.save_log_as_btn.setEnabled(has_rows)
+        self.remove_btn.setEnabled(has_rows)
+        self.clear_btn.setEnabled(has_rows)
+        self.undo_btn.setEnabled(False)
 
     def _export_log(self, mode: str = "ask"):
         if not self._rows:

@@ -997,6 +997,7 @@ class GcdRateTool(QWidget):
         super().__init__()
         self.df: pd.DataFrame | None = None
         self._segments = []  # list of dicts: current_a, t_s, v_v, label
+        self._undo_segments_snapshot: list | None = None
         self._detected_segments: list = []
         self.last_result: dict | None = None
         self.last_result_df: pd.DataFrame | None = None
@@ -1125,6 +1126,11 @@ class GcdRateTool(QWidget):
         remove_btn = QPushButton("Remove selected segment")
         remove_btn.clicked.connect(self.on_remove_segment)
         list_layout.addWidget(remove_btn)
+        self.undo_remove_segment_btn = QPushButton("↶ Undo remove segment")
+        self.undo_remove_segment_btn.setEnabled(False)
+        self.undo_remove_segment_btn.setToolTip("Restores the segment list to how it was just before the last removal.")
+        self.undo_remove_segment_btn.clicked.connect(self.on_undo_remove_segment)
+        list_layout.addWidget(self.undo_remove_segment_btn)
         right_layout.addWidget(list_box)
 
         self.plot = PlotPanel()
@@ -1290,13 +1296,30 @@ class GcdRateTool(QWidget):
         label = f"I={current_a:.6g} A, rows {start}-{end}"
         self._segments.append({"current_a": current_a, "t_s": t, "v_v": v, "label": label})
         self.seg_list.addItem(label)
+        # A newly added segment makes any pending undo snapshot stale
+        # (restoring it would silently discard this segment) -- undo is
+        # only ever valid immediately after a removal, before anything else happens.
+        self._undo_segments_snapshot = None
+        self.undo_remove_segment_btn.setEnabled(False)
 
     def on_remove_segment(self):
         row = self.seg_list.currentRow()
         if row < 0:
             return
+        self._undo_segments_snapshot = list(self._segments)
         self.seg_list.takeItem(row)
         del self._segments[row]
+        self.undo_remove_segment_btn.setEnabled(True)
+
+    def on_undo_remove_segment(self):
+        if self._undo_segments_snapshot is None:
+            return
+        self._segments = self._undo_segments_snapshot
+        self._undo_segments_snapshot = None
+        self.seg_list.clear()
+        for seg in self._segments:
+            self.seg_list.addItem(seg["label"])
+        self.undo_remove_segment_btn.setEnabled(False)
 
     def _redraw_rate_plot(self, df: pd.DataFrame | None = None):
         if df is None:
