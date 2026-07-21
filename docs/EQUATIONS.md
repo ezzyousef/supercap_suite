@@ -575,10 +575,30 @@ practical interpretation threshold, **not a value from Boukamp's paper** --
 commonly-cited informal guidance treats <1% as excellent, ~1-5% as typical
 for a real (not ultra-clean) cell, and consistently >5% (especially with a
 systematic, not random-looking, trend vs. frequency) as a sign the
-measurement should be re-checked. Always look at the residual-vs-frequency
-shape, not just the single number. Uses the same inductive-loop-cropped
-data (Section 6, "Inductive loop removal") as every other calculation in
-the EIS tab.
+measurement should be re-checked. Running the test plots Re(Z)/Im(Z)
+residual (% of |Z|) vs. frequency directly, not just the single max/mean
+number, since that random-vs-systematic distinction is the actual signal
+this test is meant to surface and isn't visible from the numbers alone.
+Uses the same inductive-loop-cropped data (Section 6, "Inductive loop
+removal") as every other calculation in the EIS tab.
+
+## 6c. Bode plot
+
+```
+|Z|   = sqrt(Z'^2 + Z''^2)
+phase = atan2(Z'', Z')                (degrees)
+```
+Standard textbook impedance-magnitude/phase definitions -- the alternative
+EIS view to the Nyquist plot that every commercial EIS tool offers
+alongside it (NOVA, ZView, EC-Lab, Gamry Echem Analyst), since a Nyquist
+plot's Z'/-Z'' axes can visually compress or hide frequency-dependent
+behavior (e.g. a phase transition) that's obvious once |Z| and phase are
+plotted directly against log(frequency). The EIS tab's "Show as Bode
+plot" checkbox re-plots the SAME loaded (and, if enabled, inductive-loop-
+cropped) Z data this way instead of as a Nyquist plot -- no new
+measurement or fit, purely a different view of the same numbers, drawn
+with a secondary (twin) y-axis for phase alongside the primary log|Z|
+axis.
 
 ## 7. GCD/CV rate capability and retention
 

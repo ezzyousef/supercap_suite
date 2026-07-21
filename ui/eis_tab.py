@@ -33,6 +33,7 @@ class EisTab(QWidget):
         self.df: pd.DataFrame | None = None
         self._undo_df_snapshot: pd.DataFrame | None = None
         self._redo_df_snapshot: pd.DataFrame | None = None
+        self._bode_twin_ax = None  # tracks the Bode plot's phase twin-axis, if currently shown -- see _reset_plot_axes
         self.last_result: dict | None = None
         self.last_raw_df: pd.DataFrame | None = None
         self.batch_df: pd.DataFrame | None = None
@@ -137,9 +138,18 @@ class EisTab(QWidget):
         cycle_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
         col_grid.addWidget(cycle_note, 6, 0, 1, 2)
 
-        preview_btn = QPushButton("Load & preview Nyquist / Bode")
+        preview_btn = QPushButton("Load & preview spectrum")
         preview_btn.clicked.connect(self.on_preview)
         col_grid.addWidget(preview_btn, 7, 0, 1, 2)
+        self.bode_checkbox = QCheckBox("Show as Bode plot (|Z| & phase vs. frequency) instead of Nyquist")
+        self.bode_checkbox.setToolTip(
+            "|Z| = sqrt(Z'^2 + Z''^2), phase = atan2(Z'', Z') -- the standard "
+            "alternative EIS view (every commercial EIS tool offers both): "
+            "Bode makes frequency-dependent behavior and phase transitions "
+            "explicit in a way the Nyquist plot's Z'/-Z'' axes don't."
+        )
+        self.bode_checkbox.toggled.connect(self._on_bode_toggle_changed)
+        col_grid.addWidget(self.bode_checkbox, 8, 0, 1, 2)
         col_section.addLayout(col_grid)
         self.data_section.addWidget(col_section)
 
@@ -636,6 +646,27 @@ class EisTab(QWidget):
             "Spectrum failed the Kramers-Kronig validity check -- see the results panel."
         ])
 
+        # Plots the residual trend itself -- the text above can only report
+        # a single max/mean number, but a RANDOM-looking scatter around
+        # zero vs. a SYSTEMATIC trend with frequency is the actual signal
+        # this test is meant to surface (see the module comment above
+        # kramers_kronig_test for why), and that distinction isn't visible
+        # from the numbers alone.
+        self._reset_plot_axes()
+        self.plot.ax.axhline(0, color=theme.INK_DIM, linewidth=0.8)
+        self.plot.ax.plot(result.frequency_hz, result.residual_re_percent, "o-",
+                           color=theme.RAW, markersize=3, linewidth=1, label="Re(Z) residual")
+        self.plot.ax.plot(result.frequency_hz, result.residual_im_percent, "s--",
+                           color=theme.FIT, markersize=3, linewidth=1, label="Im(Z) residual")
+        self.plot.ax.set_xscale("log")
+        self.plot.ax.set_xlabel("Frequency (Hz)")
+        self.plot.ax.set_ylabel("Residual (% of |Z|)")
+        self.plot.ax.set_title(f"Kramers-Kronig residuals — {verdict}")
+        self.plot.ax.legend(fontsize=8)
+        theme.apply_plot_style(self.plot.ax)
+        self.plot.fig.tight_layout()
+        self.plot.draw()
+
         self.last_result = {
             "Kramers-Kronig verdict": verdict,
             "Max residual (%)": result.max_residual_percent,
@@ -714,17 +745,53 @@ class EisTab(QWidget):
             self.on_preview()
         show_toast(self, f"Redid row removal -- {len(self.df)} rows remain.")
 
+    def _reset_plot_axes(self):
+        """Clears the main results plot for a fresh redraw. Also removes
+        any leftover Bode-plot phase twin-axis first -- ax.clear() only
+        clears the axes it's called on, not a sibling twinx() axis, which
+        would otherwise linger (a stale phase axis/label) behind a later
+        Nyquist or fit-overlay plot drawn on the primary axes."""
+        if self._bode_twin_ax is not None:
+            self._bode_twin_ax.remove()
+            self._bode_twin_ax = None
+        self.plot.ax.clear()
+
+    def _on_bode_toggle_changed(self):
+        if self.df is None:
+            return
+        if "-- select --" in (self.zre_combo.currentText(), self.zim_combo.currentText(),
+                               self.freq_combo.currentText()):
+            return
+        self.on_preview()
+
     def on_preview(self):
         data = self._get_eis_arrays()
         if data is None:
             return
         freq, zre, zim = data
-        self.plot.ax.clear()
-        self.plot.ax.plot(zre, -zim, "o-", color=theme.RAW, markersize=3, linewidth=1)
-        self.plot.ax.set_xlabel("Z' (Ω)")
-        self.plot.ax.set_ylabel("-Z'' (Ω)")
-        self.plot.ax.set_title("Nyquist plot")
-        self.plot.ax.set_aspect("equal", adjustable="datalim")
+        self._reset_plot_axes()
+        if self.bode_checkbox.isChecked():
+            order = np.argsort(freq)
+            f_sorted = freq[order]
+            z_mag = np.sqrt(zre[order] ** 2 + zim[order] ** 2)
+            phase_deg = np.degrees(np.arctan2(zim[order], zre[order]))
+            self.plot.ax.plot(f_sorted, z_mag, "o-", color=theme.RAW, markersize=3, linewidth=1, label="|Z|")
+            self.plot.ax.set_xscale("log")
+            self.plot.ax.set_yscale("log")
+            self.plot.ax.set_xlabel("Frequency (Hz)")
+            self.plot.ax.set_ylabel("|Z| (Ω)", color=theme.RAW)
+            self.plot.ax.tick_params(axis="y", labelcolor=theme.RAW)
+            self._bode_twin_ax = self.plot.ax.twinx()
+            self._bode_twin_ax.plot(f_sorted, phase_deg, "s--", color=theme.FIT, markersize=3, linewidth=1, label="Phase")
+            self._bode_twin_ax.set_ylabel("Phase (degrees)", color=theme.FIT)
+            self._bode_twin_ax.tick_params(axis="y", labelcolor=theme.FIT)
+            self.plot.ax.set_title("Bode plot")
+        else:
+            self.plot.ax.plot(zre, -zim, "o-", color=theme.RAW, markersize=3, linewidth=1)
+            self.plot.ax.set_xlabel("Z' (Ω)")
+            self.plot.ax.set_ylabel("-Z'' (Ω)")
+            self.plot.ax.set_title("Nyquist plot")
+            self.plot.ax.set_aspect("equal", adjustable="datalim")
         theme.apply_plot_style(self.plot.ax)
         self.plot.fig.tight_layout()
         self.plot.draw()
@@ -838,6 +905,9 @@ class EisTab(QWidget):
         self.last_raw_df = None
         self.results_text.clear()
         self.result_card.clear()
+        if self._bode_twin_ax is not None:
+            self._bode_twin_ax.remove()
+            self._bode_twin_ax = None
         show_empty_state(self.plot, "Load an EIS file, then preview, compute, or fit a circuit")
         self.circuit_diagram.ax.clear()
         self.circuit_diagram.ax.axis("off")
@@ -972,7 +1042,7 @@ class EisTab(QWidget):
             card_warnings.append("Reduced χ² is large -- check convergence before trusting this fit.")
         self.result_card.set_warnings(card_warnings)
 
-        self.plot.ax.clear()
+        self._reset_plot_axes()
         self.plot.ax.plot(zre, -zim, "o", color=theme.RAW, markersize=4, label="Data (raw)")
         self.plot.ax.plot(result.z_fit_re, -result.z_fit_im, "--", color=theme.FIT, linewidth=1.5,
                            label=f"{result.display_name} fit")
