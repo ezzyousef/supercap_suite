@@ -20,7 +20,7 @@ from .widgets import (
     PlotWidget, PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
     make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
-    attach_section_restore_menu, yield_to_event_loop,
+    attach_section_restore_menu, yield_to_event_loop, install_undo_redo_shortcuts,
 )
 from .workers import AnalysisWorker, set_controls_busy
 from .circuit_diagram import draw_circuit
@@ -32,6 +32,7 @@ class EisTab(QWidget):
         super().__init__()
         self.df: pd.DataFrame | None = None
         self._undo_df_snapshot: pd.DataFrame | None = None
+        self._redo_df_snapshot: pd.DataFrame | None = None
         self.last_result: dict | None = None
         self.last_raw_df: pd.DataFrame | None = None
         self.batch_df: pd.DataFrame | None = None
@@ -341,11 +342,23 @@ class EisTab(QWidget):
         table_actions_row.addWidget(remove_rows_btn)
         self.undo_remove_rows_btn = QPushButton("↶ Undo row removal")
         self.undo_remove_rows_btn.setEnabled(False)
-        self.undo_remove_rows_btn.setToolTip("Restores the data table to how it was just before the last row removal.")
+        self.undo_remove_rows_btn.setToolTip(
+            "Restores the data table to how it was just before the last "
+            "row removal. Shortcut: Ctrl+X (while the data table has focus)."
+        )
         self.undo_remove_rows_btn.clicked.connect(self.on_undo_remove_rows)
         table_actions_row.addWidget(self.undo_remove_rows_btn)
+        self.redo_remove_rows_btn = QPushButton("↷ Redo row removal")
+        self.redo_remove_rows_btn.setEnabled(False)
+        self.redo_remove_rows_btn.setToolTip(
+            "Re-applies the last row removal after an Undo. "
+            "Shortcut: Ctrl+Y (while the data table has focus)."
+        )
+        self.redo_remove_rows_btn.clicked.connect(self.on_redo_remove_rows)
+        table_actions_row.addWidget(self.redo_remove_rows_btn)
         table_actions_row.addStretch()
         right_layout.addLayout(table_actions_row)
+        install_undo_redo_shortcuts(self.table, self.on_undo_remove_rows, self.on_redo_remove_rows)
 
         diagram_export_row = QHBoxLayout()
         self.export_diagram_btn = QPushButton("⬇ Export circuit diagram as image…")
@@ -427,8 +440,11 @@ class EisTab(QWidget):
         if isinstance(df, dict):
             df = list(df.values())[0]
         self.df = df
-        self._undo_df_snapshot = None  # a fresh file load makes any pending row-removal undo stale
+        # A fresh file load makes any pending row-removal undo/redo stale.
+        self._undo_df_snapshot = None
+        self._redo_df_snapshot = None
         self.undo_remove_rows_btn.setEnabled(False)
+        self.redo_remove_rows_btn.setEnabled(False)
         self.status_label.setText(f"Loaded {len(df)} rows, {len(df.columns)} columns")
 
         cols = list(df.columns)
@@ -654,7 +670,9 @@ class EisTab(QWidget):
             QMessageBox.warning(self, "Cannot remove all rows", "At least one row must remain.")
             return
         self._undo_df_snapshot = self.df
+        self._redo_df_snapshot = None  # a new removal starts a new history branch
         self.undo_remove_rows_btn.setEnabled(True)
+        self.redo_remove_rows_btn.setEnabled(False)
         self.df = new_df
         self._on_cycle_column_changed()  # cycle-value list may need to shrink
         self.table_model.set_dataframe(self._current_df())
@@ -667,9 +685,11 @@ class EisTab(QWidget):
     def on_undo_remove_rows(self):
         if self._undo_df_snapshot is None:
             return
+        self._redo_df_snapshot = self.df
         self.df = self._undo_df_snapshot
         self._undo_df_snapshot = None
         self.undo_remove_rows_btn.setEnabled(False)
+        self.redo_remove_rows_btn.setEnabled(True)
         self._on_cycle_column_changed()
         self.table_model.set_dataframe(self._current_df())
         self.status_label.setText(f"Loaded {len(self.df)} rows, {len(self.df.columns)} columns (row removal undone)")
@@ -677,6 +697,22 @@ class EisTab(QWidget):
                                    self.freq_combo.currentText()):
             self.on_preview()
         show_toast(self, f"Undid row removal -- {len(self.df)} rows restored.")
+
+    def on_redo_remove_rows(self):
+        if self._redo_df_snapshot is None:
+            return
+        self._undo_df_snapshot = self.df
+        self.df = self._redo_df_snapshot
+        self._redo_df_snapshot = None
+        self.undo_remove_rows_btn.setEnabled(True)
+        self.redo_remove_rows_btn.setEnabled(False)
+        self._on_cycle_column_changed()
+        self.table_model.set_dataframe(self._current_df())
+        self.status_label.setText(f"Loaded {len(self.df)} rows, {len(self.df.columns)} columns (row removal re-applied)")
+        if "-- select --" not in (self.zre_combo.currentText(), self.zim_combo.currentText(),
+                                   self.freq_combo.currentText()):
+            self.on_preview()
+        show_toast(self, f"Redid row removal -- {len(self.df)} rows remain.")
 
     def on_preview(self):
         data = self._get_eis_arrays()

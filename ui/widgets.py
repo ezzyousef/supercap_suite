@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 from PySide6.QtCore import Qt, QAbstractTableModel, QTimer, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QTableView, QPushButton, QFileDialog, QInputDialog, QMessageBox, QLineEdit,
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QGroupBox, QSplitter,
@@ -575,6 +575,31 @@ def remove_selected_table_rows(table: QTableView, df: pd.DataFrame) -> pd.DataFr
     return df.drop(df.index[rows]).reset_index(drop=True)
 
 
+def install_undo_redo_shortcuts(scope_widget: QWidget, undo_callback, redo_callback) -> tuple:
+    """Binds Ctrl+X (undo) / Ctrl+Y (redo) as keyboard shortcuts scoped to
+    `scope_widget` -- active only while focus is somewhere inside that
+    widget or one of its children (Qt.WidgetWithChildrenShortcut).
+
+    Deliberately scoped NARROWLY to one specific widget (e.g. a tab's own
+    data table) rather than broadly to a whole tab: a tab can have TWO
+    independent undo stacks at once (its own data-table undo, plus the
+    separate "Recorded results" log's undo via RecordLogPanel) -- if both
+    used the same key sequence scoped to the whole tab, Qt would find two
+    simultaneously-active shortcuts and refuse to fire EITHER of them
+    ("ambiguous shortcut"), silently breaking both. Scoping each shortcut
+    to the specific widget the corresponding action operates on (the data
+    table itself, or the RecordLogPanel itself) keeps the two focus
+    regions disjoint so only one shortcut is ever active at a time.
+    """
+    undo_shortcut = QShortcut(QKeySequence("Ctrl+X"), scope_widget)
+    undo_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+    undo_shortcut.activated.connect(undo_callback)
+    redo_shortcut = QShortcut(QKeySequence("Ctrl+Y"), scope_widget)
+    redo_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+    redo_shortcut.activated.connect(redo_callback)
+    return undo_shortcut, redo_shortcut
+
+
 def _make_collapsible_splitter_pane(splitter: QSplitter, title: str, widget: QWidget,
                                      start_expanded: bool = True) -> "CollapsibleSection":
     """Wrap `widget` in a titled, individually-collapsible header before
@@ -1079,6 +1104,7 @@ class RecordLogPanel(QGroupBox):
         self._rows: list[dict] = []
         self._get_results = None
         self._undo_snapshot: list[dict] | None = None
+        self._redo_snapshot: list[dict] | None = None
 
         # A native checkable QGroupBox only dims/enables its children on
         # toggle, it doesn't collapse them out of the layout -- so the
@@ -1149,10 +1175,22 @@ class RecordLogPanel(QGroupBox):
         btn_row.addWidget(self.clear_btn)
         self.undo_btn = QPushButton("↶ Undo")
         self.undo_btn.setEnabled(False)
-        self.undo_btn.setToolTip("Restores the log to how it was just before the last row removal or Clear log.")
+        self.undo_btn.setToolTip(
+            "Restores the log to how it was just before the last row "
+            "removal or Clear log. Shortcut: Ctrl+X (while this panel has focus)."
+        )
         self.undo_btn.clicked.connect(self._undo)
         btn_row.addWidget(self.undo_btn)
+        self.redo_btn = QPushButton("↷ Redo")
+        self.redo_btn.setEnabled(False)
+        self.redo_btn.setToolTip(
+            "Re-applies the last row removal or Clear log after an Undo. "
+            "Shortcut: Ctrl+Y (while this panel has focus)."
+        )
+        self.redo_btn.clicked.connect(self._redo)
+        btn_row.addWidget(self.redo_btn)
         layout.addLayout(btn_row)
+        install_undo_redo_shortcuts(self, self._undo, self._redo)
 
     def _on_group_toggled(self, checked: bool):
         self._body.setVisible(checked)
@@ -1171,12 +1209,14 @@ class RecordLogPanel(QGroupBox):
         row = {"Sample / run": label, "Recorded at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
         row.update(results)
         self._rows.append(row)
-        # A new row makes any pending undo snapshot stale (restoring it
-        # would silently discard this just-recorded row), so recording
-        # invalidates undo -- it's only ever valid immediately after a
-        # removal/clear, before anything else happens.
+        # A new row makes any pending undo/redo snapshot stale (restoring
+        # one would silently discard this just-recorded row), so recording
+        # invalidates both -- undo/redo are only ever valid immediately
+        # after a removal/clear/undo, before anything else happens.
         self._undo_snapshot = None
+        self._redo_snapshot = None
         self.undo_btn.setEnabled(False)
+        self.redo_btn.setEnabled(False)
         self._refresh_table()
         self.export_log_btn.setEnabled(True)
         self.save_log_as_btn.setEnabled(True)
@@ -1193,6 +1233,7 @@ class RecordLogPanel(QGroupBox):
             QMessageBox.information(self, "No row selected", "Select a row in the table first.")
             return
         self._undo_snapshot = list(self._rows)
+        self._redo_snapshot = None  # a new destructive action starts a new history branch
         for r in rows:
             if 0 <= r < len(self._rows):
                 del self._rows[r]
@@ -1203,6 +1244,7 @@ class RecordLogPanel(QGroupBox):
         self.remove_btn.setEnabled(has_rows)
         self.clear_btn.setEnabled(has_rows)
         self.undo_btn.setEnabled(True)
+        self.redo_btn.setEnabled(False)
 
     def _clear(self):
         if not self._rows:
@@ -1213,6 +1255,7 @@ class RecordLogPanel(QGroupBox):
         if confirm != QMessageBox.StandardButton.Yes:
             return
         self._undo_snapshot = list(self._rows)
+        self._redo_snapshot = None
         self._rows = []
         self._refresh_table()
         self.export_log_btn.setEnabled(False)
@@ -1220,10 +1263,12 @@ class RecordLogPanel(QGroupBox):
         self.remove_btn.setEnabled(False)
         self.clear_btn.setEnabled(False)
         self.undo_btn.setEnabled(True)
+        self.redo_btn.setEnabled(False)
 
     def _undo(self):
         if self._undo_snapshot is None:
             return
+        self._redo_snapshot = list(self._rows)
         self._rows = self._undo_snapshot
         self._undo_snapshot = None
         self._refresh_table()
@@ -1233,6 +1278,22 @@ class RecordLogPanel(QGroupBox):
         self.remove_btn.setEnabled(has_rows)
         self.clear_btn.setEnabled(has_rows)
         self.undo_btn.setEnabled(False)
+        self.redo_btn.setEnabled(True)
+
+    def _redo(self):
+        if self._redo_snapshot is None:
+            return
+        self._undo_snapshot = list(self._rows)
+        self._rows = self._redo_snapshot
+        self._redo_snapshot = None
+        self._refresh_table()
+        has_rows = bool(self._rows)
+        self.export_log_btn.setEnabled(has_rows)
+        self.save_log_as_btn.setEnabled(has_rows)
+        self.remove_btn.setEnabled(has_rows)
+        self.clear_btn.setEnabled(has_rows)
+        self.undo_btn.setEnabled(True)
+        self.redo_btn.setEnabled(False)
 
     def _export_log(self, mode: str = "ask"):
         if not self._rows:
