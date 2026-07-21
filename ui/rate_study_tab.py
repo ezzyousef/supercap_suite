@@ -483,7 +483,7 @@ class CvRateTool(QWidget):
         self.record_panel.bind(lambda: self.last_result)
         right_layout.addWidget(self.record_panel)
 
-        splitter.addWidget(right)
+        splitter.addWidget(make_scrollable_panel(right))
         splitter.setSizes([420, 700])
         configure_collapsible_main_splitter(splitter)
         attach_section_restore_menu(right, right.findChildren(CollapsibleSection) + right.findChildren(RecordLogPanel))
@@ -1143,7 +1143,7 @@ class GcdRateTool(QWidget):
         self.record_panel.bind(lambda: self.last_result)
         right_layout.addWidget(self.record_panel)
 
-        splitter.addWidget(right)
+        splitter.addWidget(make_scrollable_panel(right))
         splitter.setSizes([420, 700])
         configure_collapsible_main_splitter(splitter)
         attach_section_restore_menu(right, right.findChildren(CollapsibleSection) + right.findChildren(RecordLogPanel))

@@ -349,7 +349,7 @@ class EisTab(QWidget):
         batch_section.addWidget(self.batch_export_btn)
         right_layout.addWidget(batch_section)
 
-        splitter.addWidget(right)
+        splitter.addWidget(make_scrollable_panel(right))
         splitter.setSizes([420, 700])
         configure_collapsible_main_splitter(splitter)
         attach_section_restore_menu(right, right.findChildren(CollapsibleSection) + right.findChildren(RecordLogPanel))
