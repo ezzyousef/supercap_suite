@@ -322,6 +322,27 @@ which fixed confirmed local-minimum failures in several circuits during
 self-consistency testing (fitting each circuit to its own noise-free
 synthetic data and checking the true parameters are recovered).
 
+**Auto-detect's pinned-vs-unpinned tie-break**: `auto_fit_equivalent_circuit`'s
+initial screening pass (all candidates, `max_nfev=60`, no multistart) is
+deliberately fast and therefore noisy -- reliable enough to rank clearly
+different circuits, but not to fairly compare two NEAR-DEGENERATE ones
+(e.g. two circuits differing only by a redundant CPE-vs-plain-element
+choice, which can fit EQUALLY well since a CPE with n=1 is mathematically
+identical to a plain capacitor). Reproduced directly: with only a
+same-cap-kind two-stage circuit registered, auto-detect could surface a
+fit with a CPE exponent pinned at its bound; after the mixed-kind
+sibling was added specifically to avoid that (see the two-stage circuit
+family above), the fast screening pass could STILL pick the pinned
+variant, because its own screening-only chi-squared happened to edge out
+the unpinned sibling's screening-only chi-squared even though a properly
+converged fit of the unpinned sibling is at least as good. Auto-detect
+now re-fits a short list (capped at 8) of the best-screening candidates
+with full multistart BEFORE the final comparison, then prefers a
+candidate with no bound-pinning warning as long as it's within 5% of the
+best refit reduced chi-squared -- so a redundant, pinned circuit is only
+ever reported when no equally-good unpinned alternative exists among the
+candidates tried.
+
 Base element impedances (all with per-element sourcing in
 `circuit_library.py`'s own module docstring):
 

@@ -467,6 +467,38 @@ def test_auto_fit_finds_a_near_perfect_fit_for_the_true_generating_circuit():
     assert best.reduced_chi_squared <= true_model_result.reduced_chi_squared
 
 
+def test_auto_fit_prefers_an_unpinned_circuit_over_a_redundant_pinned_one():
+    """Reproduces a real report: with only the QQ-only two-stage circuit
+    registered, auto-detect could surface a fit with 'Rct1_cap_n' pinned
+    at its upper bound (1.0) -- a CPE with n=1 is mathematically identical
+    to a plain capacitor, so the mixed-kind CQ/QC siblings (added for
+    exactly this reason, see supercap_twostage's docstring in
+    circuit_library.py) can fit EQUALLY well or better with no pinned
+    parameter at all. auto_fit_equivalent_circuit must not surface the
+    pinned QQ variant when an equally-good, unpinned sibling exists among
+    the candidates -- this requires re-fitting close screening candidates
+    with multistart before comparing (the fast screening-only chi-squared
+    is too noisy to reliably distinguish near-degenerate siblings)."""
+    freq = np.logspace(4, -3, 70)
+    omega = 2 * np.pi * freq
+    spec = cl.get_circuit("supercap_twostage_CC_Ws_L")
+    true_params = {
+        "L": 2e-6, "Rs": 16.0, "Rct1": 7.0, "Rct1_cap": 2e-4,
+        "Rct2": 8.0, "Rct2_cap": 0.02,
+        "Wb_Y0": 0.02, "Wb_B": 2.0,
+    }
+    z = cl.evaluate_circuit(spec.tree, omega, true_params)
+    candidates = [
+        "supercap_twostage_QQ_Ws_L", "supercap_twostage_CQ_Ws_L",
+        "supercap_twostage_QC_Ws_L", "supercap_twostage_CC_Ws_L",
+    ]
+
+    best, attempts = eis.auto_fit_equivalent_circuit(freq, z.real, z.imag, models=candidates)
+
+    assert not any("pinned at" in w for w in best.warnings)
+    assert best.reduced_chi_squared < 1e-6
+
+
 def test_warburg_open_diverges_at_low_frequency():
     """Reflective/blocking boundary -- |Z| must grow without bound as
     omega -> 0 (capacitive-like, nothing can escape)."""

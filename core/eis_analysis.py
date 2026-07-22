@@ -711,15 +711,45 @@ def auto_fit_equivalent_circuit(
         if progress_callback is not None:
             progress_callback(i + 1, len(candidates), m)
 
-    successful = [r for _, r, err in attempts if r is not None]
+    successful = [(m, r) for m, r, err in attempts if r is not None]
     if not successful:
         errs = "; ".join(f"{m}: {err}" for m, r, err in attempts if err)
         raise ValueError(f"No circuit model could be fit to this data. Attempts failed: {errs}")
 
-    best_screen = min(successful, key=lambda r: r.reduced_chi_squared)
-    # Final polish: re-fit the winner to full convergence (no nfev cap),
-    # with multistart -- affordable here since it's only ONE circuit, not
-    # the whole screening pass, and this is the result actually reported.
+    # The screening chi-squared above is a FAST fit (max_nfev=60, no
+    # multistart) and can be noisy specifically for near-degenerate
+    # models -- e.g. two circuits differing only by a redundant CPE-vs-
+    # plain-element choice are mathematically capable of fitting EQUALLY
+    # well (a CPE with n=1 is identical to a plain capacitor), but the
+    # fast screening pass doesn't reliably find that for the more
+    # constrained variant. Re-fit a short list of the best-screening
+    # candidates with full multistart (capped, so this stays cheap even
+    # when screening ~100 circuits) before comparing, rather than
+    # trusting the raw screening numbers for the tie-break below --
+    # otherwise a genuinely-tied simpler/unpinned model can look
+    # artificially worse than a redundant, pinned one purely because its
+    # fast screening fit got unlucky. This reproduces and fixes a real
+    # report where a QQ-only two-stage circuit kept winning auto-detect
+    # over its CQ sibling (added specifically to avoid the QQ variant's
+    # pinned-bound warning) even after CQ was registered.
+    successful.sort(key=lambda mr: mr[1].reduced_chi_squared)
+    shortlist = successful[:min(8, len(successful))]
+    refit = {}
+    for m, r in shortlist:
+        try:
+            refit[m] = fit_equivalent_circuit(frequency_hz, z_re_ohm, z_im_ohm, model=m, multistart=True)
+        except (ValueError, RuntimeError):
+            refit[m] = r  # keep the screening result if the refit itself fails
+
+    best_chi2 = min(r.reduced_chi_squared for r in refit.values())
+    tolerance = max(best_chi2 * 0.05, 1e-9)
+    competitive = [r for r in refit.values() if r.reduced_chi_squared <= best_chi2 + tolerance]
+    unpinned = [r for r in competitive if not any("pinned at" in w for w in r.warnings)]
+    best_screen = min(unpinned or competitive, key=lambda r: r.reduced_chi_squared)
+    attempts = [(m, refit.get(m, r), err) for m, r, err in attempts]
+    # Final polish: one more independent multistart re-fit of the winner
+    # -- cheap (one circuit), and multistart's randomized restarts mean
+    # this occasionally finds an even better optimum than the shortlist pass.
     best = fit_equivalent_circuit(frequency_hz, z_re_ohm, z_im_ohm, model=best_screen.model,
                                    multistart=True)
     attempts = [(m, best, err) if m == best_screen.model and r is not None else (m, r, err)
