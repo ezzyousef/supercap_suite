@@ -182,6 +182,57 @@ def show_toast(parent, text: str, kind: str = "success") -> None:
     ToastNotification(parent, text, kind)
 
 
+def warn_if_multiple_cycles_not_selected(parent, df, cycle_col_combo, cycle_value_combo) -> bool:
+    """Call before running any analysis that assumes its input is ONE
+    single, causal EIS sweep (Kramers-Kronig test, DRT/DCT, equivalent-
+    circuit fitting) on a tab that offers the EIS/DRT tabs' "cycle-number
+    column" filter. Returns True if it's safe to proceed (no cycle column
+    is selected, the column has only one distinct value, a SPECIFIC
+    cycle is already chosen, or the user explicitly confirms anyway) or
+    False if the user cancels.
+
+    Reproduced directly on a real 6-cycle PEIS file: analyzing all 222
+    rows (6 stacked 37-point cycles) together as one "spectrum" failed
+    the Kramers-Kronig test (25% max residual) and gave a poor DRT fit
+    (13% residual, "gamma still rising") for a reason that had NOTHING
+    to do with the measurement, the method, or its regularization --
+    splitting correctly into single 37-point cycles passed KK cleanly
+    (<1% residual) and dropped the DRT residual under 1%. The symptoms
+    of "all cycles accidentally mixed together" look identical to a
+    genuinely bad measurement or an unresolved low-frequency process, so
+    this is worth catching before the user chases the wrong problem.
+    """
+    col = cycle_col_combo.currentText()
+    if not col or col == "-- none / single spectrum --":
+        return True
+    if cycle_value_combo.currentIndex() > 0:
+        return True  # a specific cycle is already selected
+    if df is None or col not in df.columns:
+        return True
+    try:
+        n_distinct = df[col].dropna().nunique()
+    except Exception:
+        return True
+    if n_distinct <= 1:
+        return True
+    confirm = QMessageBox.warning(
+        parent, "Multiple cycles detected",
+        f"This file has {n_distinct} distinct values in the '{col}' column, and "
+        f"\"Cycle to analyze\" is still set to \"-- all rows --\" -- ALL {n_distinct} "
+        f"would be analyzed together as if they were ONE continuous sweep.\n\n"
+        f"If these are separate repeated/stacked PEIS spectra (the common case for "
+        f"a \"PEIS every N cycles\" protocol), mixing them this way produces a "
+        f"self-inconsistent-looking result: it can fail the Kramers-Kronig test and "
+        f"give a poor DRT/DCT/circuit fit for a reason that has nothing to do with "
+        f"the measurement or the method.\n\n"
+        f"Recommended: pick a specific cycle from the \"Cycle to analyze\" dropdown "
+        f"first.\n\nProceed anyway with all rows combined?",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    return confirm == QMessageBox.StandardButton.Yes
+
+
 def yield_to_event_loop() -> None:
     """Call from partway through a tab's `_build_ui()` (each one builds
     upwards of 100 widgets, ~0.3-1.4s of uninterrupted work measured on

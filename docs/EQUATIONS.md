@@ -924,6 +924,38 @@ on both is itself useful information (the raw Nyquist/Bode shape or the
 Kramers-Kronig test, Section 6b, may be more informative for that
 spectrum than either decomposition).
 
+**Automatic DCT cross-check** (`core.drt_analysis.
+compute_drt_with_dct_recommendation()`, what the DRT tab's "DRT" method
+actually calls): whenever `compute_drt()` raises ANY warning (rising
+tail, large residual, or both), this automatically ALSO runs
+`compute_dct()` on the same data and appends one more actionable
+recommendation -- switch to DCT if it fits substantially better (>=20%
+lower residual), or a note that DCT does not help either (check the raw
+Nyquist/Bode shape or the Kramers-Kronig test instead) if it doesn't.
+Added directly in response to a report where the plain "gamma is still
+rising"/"large residual" warnings gave no obvious next step. Verified on
+both directions with synthetic data (a genuine Maxwell/YARC-type
+admittance where DCT helps substantially; the series-topology case above
+where it does not) so this never silently assumes DCT is the fix --
+only checks it.
+
+**A separate, unrelated but easily-confused-for-the-same-symptom issue**:
+reproduced directly on a real 6-cycle low-temperature PEIS file --
+analyzing all 222 rows (6 stacked 37-point cycles, from a "PEIS every N
+cycles"-style protocol) together as one 222-point "spectrum" failed the
+Kramers-Kronig test (25% max residual) and gave a poor DRT fit (13%
+residual, "gamma still rising") for a reason that had NOTHING to do with
+the measurement, the method, or lambda -- splitting correctly into
+single 37-point cycles (via the existing cycle-number column filter)
+passed KK cleanly (<1% residual) and dropped the DRT residual under 1%.
+Both tabs now call `ui.widgets.warn_if_multiple_cycles_not_selected()`
+before fetching data for any analysis: if a cycle column is selected but
+still on "-- all rows --" and the column has more than one distinct
+value, a confirmation dialog explains the risk and defaults to No,
+rather than silently analyzing a self-inconsistent mixture that looks
+identical to a genuinely bad measurement or an unresolved low-frequency
+process.
+
 ---
 
 ## What this app deliberately does NOT do

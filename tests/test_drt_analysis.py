@@ -272,3 +272,54 @@ def test_compute_dct_does_not_universally_fix_a_series_topology_blocking_electro
 
     result = drt.compute_dct(freq, z.real, z.imag, lambda_reg=1e-3)
     assert result.residual_percent > 5.0
+
+
+# ---------------------------------------------------------------- compute_drt_with_dct_recommendation
+#
+# Reported directly on real -20C freezing-electrolyte PEIS data: the DRT
+# tab's "gamma still rising" + large-residual warnings gave no actionable
+# next step. compute_drt_with_dct_recommendation() automatically cross-
+# checks DCT whenever DRT warns at all, and appends a direct
+# recommendation either way.
+
+def test_dct_recommendation_suggests_switching_when_dct_fits_much_better():
+    """A genuine Maxwell/YARC-type admittance with a SMALL G_inf: as
+    f->0, Z=1/Y diverges (triggering DRT's large-residual warning), but Y
+    itself is a well-formed, bounded YARC admittance DCT should fit well."""
+    g_inf, gct, tau_yarc, phi = 1e-4, 0.2, 1e-3, 0.8
+    freq = np.logspace(4, -4, 70)
+    omega = 2 * np.pi * freq
+    y = g_inf + gct / (1 + (1j * omega * tau_yarc) ** phi)
+    z = 1.0 / y
+
+    result = drt.compute_drt_with_dct_recommendation(freq, z.real, z.imag, lambda_reg=1e-3)
+
+    assert any("fits this spectrum substantially better" in w for w in result.warnings)
+    assert any("Switch this tab's Method dropdown to DCT" in w for w in result.warnings)
+
+
+def test_dct_recommendation_says_dct_does_not_help_either_when_it_does_not():
+    """The series-topology case from test_compute_dct_does_not_universally_
+    fix_a_series_topology_blocking_electrode_spectrum -- DRT warns (rising
+    tail), but DCT genuinely fits WORSE here, not better, so the
+    recommendation must say so rather than assume DCT is always the fix."""
+    rs, rct, tau_zarc, phi = 5.0, 15.0, 5e-3, 0.85
+    c_low = 2.0
+    freq = np.logspace(4, -1.5, 60)
+    omega = 2 * np.pi * freq
+    z = rs + rct / (1 + (1j * omega * tau_zarc) ** phi) + 1.0 / (1j * omega * c_low)
+
+    result = drt.compute_drt_with_dct_recommendation(freq, z.real, z.imag, lambda_reg=1e-3)
+
+    assert any("does not fit this spectrum notably better either" in w for w in result.warnings)
+    assert not any("Switch this tab's Method dropdown to DCT" in w for w in result.warnings)
+
+
+def test_dct_recommendation_adds_nothing_for_a_clean_drt_fit():
+    rs, rct, tau_zarc, phi = 2.0, 50.0, 1e-3, 0.8
+    freq = np.logspace(5, -3, 60)
+    omega = 2 * np.pi * freq
+    z = rs + rct / (1 + (1j * omega * tau_zarc) ** phi)
+
+    result = drt.compute_drt_with_dct_recommendation(freq, z.real, z.imag, lambda_reg=1e-3)
+    assert result.warnings == []

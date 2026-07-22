@@ -364,6 +364,54 @@ def compute_drt(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.nda
     )
 
 
+def compute_drt_with_dct_recommendation(frequency_hz: np.ndarray, z_re_ohm: np.ndarray,
+                                         z_im_ohm: np.ndarray, lambda_reg: float = 1e-3) -> "DRTResult":
+    """Runs compute_drt() and, ONLY if it raised any warning (the rising-
+    tail blocking-electrode signature, a large residual, or both),
+    automatically ALSO runs compute_dct() on the same data as a direct,
+    actionable cross-check -- rather than leaving the user to discover
+    DCT (or that switching to it would NOT help either) only after
+    already seeing a warning with no obvious next step. Appends one more
+    entry to the returned DRTResult.warnings:
+      - if DCT fits substantially better (>=20% lower residual): tells
+        the user to switch this tab's Method dropdown to DCT;
+      - otherwise: tells the user DCT does not help either, and suggests
+        checking the raw Nyquist/Bode shape or the Kramers-Kronig test
+        instead, since neither decomposition may suit this spectrum
+        (reproduced directly: a series-topology blocking-electrode
+        spectrum where DCT fits WORSE than DRT, not better -- see
+        compute_dct's own docstring and tests -- so this comparison must
+        never assume DCT is the fix, only check it).
+
+    Silently falls back to the plain compute_drt() result (no extra
+    warning) if compute_dct() itself raises for this data.
+    """
+    result = compute_drt(frequency_hz, z_re_ohm, z_im_ohm, lambda_reg=lambda_reg)
+    if not result.warnings:
+        return result
+    try:
+        dct_result = compute_dct(frequency_hz, z_re_ohm, z_im_ohm, lambda_reg=lambda_reg)
+    except ValueError:
+        return result
+    if dct_result.residual_percent < result.residual_percent * 0.8:
+        result.warnings.append(
+            f"Automatically tried DCT (the admittance-domain method built for exactly this "
+            f"kind of blocking-electrode case) as a cross-check: it fits this spectrum "
+            f"substantially better ({dct_result.residual_percent:.3g}% residual vs "
+            f"{result.residual_percent:.3g}% for DRT). Switch this tab's Method dropdown to "
+            f"DCT and re-run to use it."
+        )
+    else:
+        result.warnings.append(
+            f"Also tried DCT automatically as a cross-check: it does not fit this spectrum "
+            f"notably better either ({dct_result.residual_percent:.3g}% residual). Neither "
+            f"decomposition may be well-suited to this data -- check the raw Nyquist/Bode "
+            f"shape directly, or run the Kramers-Kronig validity test (EIS tab) to check "
+            f"whether the measurement itself is self-consistent."
+        )
+    return result
+
+
 @dataclass
 class DCTPeak:
     tau_s: float

@@ -22,7 +22,7 @@ from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
     make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
-    attach_section_restore_menu, yield_to_event_loop,
+    attach_section_restore_menu, yield_to_event_loop, warn_if_multiple_cycles_not_selected,
 )
 from .workers import AnalysisWorker, set_controls_busy
 from . import theme, formula_sources
@@ -360,6 +360,8 @@ class DrtTab(QWidget):
         if self.df is None:
             QMessageBox.warning(self, "No data", "Load a file first.")
             return None
+        if not warn_if_multiple_cycles_not_selected(self, self.df, self.cycle_col_combo, self.cycle_value_combo):
+            return None
         df = self._current_df()
         zre_col, zim_col, f_col = (self.zre_combo.currentText(), self.zim_combo.currentText(),
                                     self.freq_combo.currentText())
@@ -394,7 +396,12 @@ class DrtTab(QWidget):
                            busy_texts={self.run_btn: f"Running {method.upper()} (may take a few seconds)…"})
         self.status_label.setText(f"Running {method.upper()} analysis… (window stays responsive)")
 
-        compute_fn = drt.compute_dct if method == "dct" else drt.compute_drt
+        # The "drt" method automatically cross-checks against DCT (and
+        # gives a direct recommendation either way) whenever DRT raises
+        # any warning -- see compute_drt_with_dct_recommendation's
+        # docstring. "dct" has no analogous "try DRT instead" check since
+        # DRT is the default/first thing a user would already have tried.
+        compute_fn = drt.compute_dct if method == "dct" else drt.compute_drt_with_dct_recommendation
         worker = AnalysisWorker(lambda: compute_fn(freq, zre, zim, lambda_reg=lambda_reg))
         self._worker = worker
         worker.succeeded.connect(self._on_dct_done if method == "dct" else self._on_drt_done)

@@ -21,6 +21,7 @@ from .widgets import (
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
     make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
     attach_section_restore_menu, yield_to_event_loop, install_undo_redo_shortcuts,
+    warn_if_multiple_cycles_not_selected,
 )
 from .workers import AnalysisWorker, set_controls_busy
 from .circuit_diagram import draw_circuit
@@ -551,6 +552,8 @@ class EisTab(QWidget):
         _get_eis_arrays()."""
         if self.df is None:
             QMessageBox.warning(self, "No data", "Load a file first.")
+            return None
+        if not warn_if_multiple_cycles_not_selected(self, self.df, self.cycle_col_combo, self.cycle_value_combo):
             return None
         df = self._current_df()
         zre_col, zim_col, f_col = (self.zre_combo.currentText(), self.zim_combo.currentText(),
