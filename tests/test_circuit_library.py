@@ -552,6 +552,36 @@ def test_cpe_reduces_to_ideal_capacitor_when_n_equals_one():
     np.testing.assert_allclose(z_q, z_c, rtol=1e-9)
 
 
+def test_cpe_exponent_pinned_at_n_equals_one_gets_a_reassuring_not_a_cautionary_message():
+    """n=1 is not an arbitrary numerical ceiling like any other pinned
+    bound -- it's the exact, physically well-defined point where a CPE
+    IS a plain capacitor (see the test above). A real report showed this
+    generic 'artificial ceiling ... treat with caution' phrasing reading
+    as an alarming error even when the underlying fit is essentially
+    perfect (chi2 ~1e-17) and the "problem" is just that the library's
+    plain-capacitor sibling for that specific branch wasn't tried. The
+    message for this specific case should read as a finding, not a
+    caution, and must NOT contain 'pinned at' (auto_fit_equivalent_
+    circuit's tie-break in eis_analysis.py treats that substring as
+    the marker of a genuinely concerning pinned bound)."""
+    freq = np.logspace(4, -3, 70)
+    omega = 2 * np.pi * freq
+    spec = cl.get_circuit("supercap_twostage_CC_Ws_L")
+    true_params = {
+        "L": 2e-6, "Rs": 16.0, "Rct1": 7.0, "Rct1_cap": 2e-4,
+        "Rct2": 8.0, "Rct2_cap": 0.02,
+        "Wb_Y0": 0.02, "Wb_B": 2.0,
+    }
+    z = cl.evaluate_circuit(spec.tree, omega, true_params)
+
+    result = eis.fit_equivalent_circuit(freq, z.real, z.imag, model="supercap_twostage_QQ_Ws_L", multistart=True)
+
+    assert result.reduced_chi_squared < 1e-6
+    assert len(result.warnings) >= 1
+    assert any("settled at n=1" in w and "IDEAL capacitor" in w for w in result.warnings)
+    assert not any("pinned at" in w for w in result.warnings)
+
+
 # ---------------------------------------------------------------- inductance removal
 
 def test_fit_inductance_from_high_frequency_recovers_known_inductance():

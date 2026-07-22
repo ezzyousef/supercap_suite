@@ -615,11 +615,34 @@ def fit_equivalent_circuit(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_
                 f"represent), not that you've precisely measured a tiny value."
             )
         elif active > 0:
-            warnings_list.append(
-                f"'{name}' is pinned at its upper search bound ({val:.4g}) -- the optimizer "
-                f"hit an artificial ceiling rather than a true optimum; treat this value with "
-                f"caution."
-            )
+            # A CPE exponent 'n' pinned at its upper bound (1.0) is a
+            # DIFFERENT situation than any other parameter hitting a
+            # search-bound ceiling: n=1 is not an arbitrary numerical
+            # limit, it is the exact, physically well-defined point at
+            # which a CPE IS a plain capacitor (Z = 1/(Y0*(jw)^n) with
+            # n=1 reduces exactly to Z = 1/(jw*Y0), i.e. an ideal
+            # capacitor -- see circuit_library.py's own CPE-reduces-to-C
+            # self-consistency test). This is the fit correctly reporting
+            # "this element behaves ideally here," not the optimizer
+            # struggling against an artificial wall -- phrased separately
+            # so it reads as a finding, not a caution, especially since a
+            # circuit with a plain-C sibling for this exact element may
+            # not always exist among the circuits actually tried.
+            if param_kinds.get(name) == "n" and val >= 0.999:
+                warnings_list.append(
+                    f"'{name}' = {val:.4g} -- this branch's CPE has settled at n=1, i.e. it "
+                    f"behaves as an IDEAL capacitor here (a CPE with n=1 is mathematically "
+                    f"identical to a plain capacitor). This is a legitimate fit result, not an "
+                    f"optimizer failure -- if a plain-capacitor variant of this circuit is "
+                    f"available in the library, it will fit equally well with one fewer "
+                    f"parameter and no such note."
+                )
+            else:
+                warnings_list.append(
+                    f"'{name}' is pinned at its upper search bound ({val:.4g}) -- the optimizer "
+                    f"hit an artificial ceiling rather than a true optimum; treat this value with "
+                    f"caution."
+                )
 
     # Resistance-overestimation diagnostic: this catches a DIFFERENT, more
     # dangerous failure mode than bound-pinning above -- one where the
