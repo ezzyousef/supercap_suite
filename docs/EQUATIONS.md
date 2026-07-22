@@ -740,6 +740,39 @@ regularization order to the paper's first-derivative penalty, chosen
 here because it avoids needing the closed-form derivative of the PWL
 basis function).
 
+**Collocation grid extension (edge-artifact fix)**: basis functions
+compactly supported ONLY within [tau_min, tau_max] (the plain choice)
+force gamma to exactly zero at those edges. If the true underlying
+process's relaxation extends beyond what was actually measured -- very
+common for a supercapacitor's near-vertical low-frequency capacitive
+tail, which implies relaxation times longer than the measurement
+covered -- the deconvolution has nowhere to put that "missing" weight
+except a sharp, physically implausible spike jammed into the very last
+edge collocation point (reproduced from a real reported case: a ~17%
+model residual and a spike at the largest tau shown). `compute_drt()`
+extends the collocation grid a few points past each measured boundary,
+at the same log-spacing as the measured grid (`n_extra = max(5, N/5)`
+points per side) -- the same idea Wan et al. 2015 sec. 2.1 highlight as
+an advantage of RBF discretization's naturally infinite support, applied
+here to PWL via extra collocation points instead of switching basis
+families. This does not "fix" the underlying physical limitation (a
+bounded DRT model still cannot represent a truly diverging low-frequency
+impedance -- see the frequency-region caveat below), but it lets that
+mass spread out naturally across the extended grid instead of being
+clipped into one artificial spike, which both reduces the residual
+substantially and makes the still-real underlying issue visually
+identifiable (a gradually rising tail) rather than a misleading sharp
+artifact. `DRTResult.within_measured_range` (a bool array matching
+`tau_s`/`gamma`) flags which collocation points are data-constrained vs.
+extrapolated; peaks in the extrapolated region are marked
+`DRTPeak.within_measured_range=False` and labeled "EXTRAPOLATED" in the
+DRT tab's results text, and shaded on the plot. If gamma is still rising
+at the largest computed tau even after this extension, `compute_drt()`
+adds an explicit warning (`DRTResult.warnings`) rather than let it pass
+as an unremarkable-looking rising tail -- see the frequency-region
+caveat below for why this specifically happens with blocking-electrode
+systems.
+
 **Self-consistency verification**: no closed-form DRT exists for most
 circuits, but one does for a single ZARC element (a resistor in parallel
 with a CPE) -- `core.drt_analysis.analytical_zarc_drt()` implements the

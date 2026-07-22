@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from core.data_io import load_data_file, list_excel_sheets, DataLoadError
+from core.data_io import load_data_file, list_excel_sheets, find_column, DataLoadError
 from core import eis_analysis as eis
 from core import drt_analysis as drt
 from .widgets import (
@@ -81,6 +81,27 @@ class DrtTab(QWidget):
         ])
         col_grid.addWidget(QLabel("Im(Z) sign convention:"), 3, 0)
         col_grid.addWidget(self.zim_sign_combo, 3, 1)
+
+        self.cycle_col_combo = QComboBox()
+        self.cycle_col_combo.currentIndexChanged.connect(self._on_cycle_column_changed)
+        col_grid.addWidget(QLabel("Cycle-number column (optional):"), 4, 0)
+        col_grid.addWidget(self.cycle_col_combo, 4, 1)
+        self.cycle_value_combo = QComboBox()
+        self.cycle_value_combo.setEnabled(False)
+        self.cycle_value_combo.currentIndexChanged.connect(self._on_cycle_value_changed)
+        col_grid.addWidget(QLabel("Cycle to analyze:"), 5, 0)
+        col_grid.addWidget(self.cycle_value_combo, 5, 1)
+        cycle_note = QLabel(
+            "If your file has multiple PEIS spectra stacked in one sheet "
+            "(one cycle-number column, several full frequency sweeps back "
+            "to back -- common for \"PEIS every N cycles\" EC-Lab "
+            "protocols), select the cycle-number column here, then pick "
+            "which cycle's sweep to analyze below. Leave on \"-- all rows "
+            "--\" for a file with a single spectrum."
+        )
+        cycle_note.setWordWrap(True)
+        cycle_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        col_grid.addWidget(cycle_note, 6, 0, 1, 2)
         col_section.addLayout(col_grid)
         self.data_section.addWidget(col_section)
 
@@ -240,21 +261,93 @@ class DrtTab(QWidget):
             combo.clear()
             combo.addItem("-- select --")
             combo.addItems([str(c) for c in cols])
+
+        # Auto-detect the likely Z real / Z imaginary / frequency columns
+        # by name (same convention/aliases as the EIS tab) so a
+        # standard-looking export needs no manual column picking at all.
+        zre_guess = find_column(df, "z_re")
+        zim_guess = find_column(df, "z_im")
+        f_guess = find_column(df, "freq")
+        if zre_guess:
+            self.zre_combo.setCurrentText(zre_guess)
+        if zim_guess:
+            self.zim_combo.setCurrentText(zim_guess)
+            if zim_guess.lower().startswith("-"):
+                self.zim_sign_combo.setCurrentIndex(0)
+        if f_guess:
+            self.freq_combo.setCurrentText(f_guess)
+
+        self.cycle_col_combo.blockSignals(True)
+        self.cycle_col_combo.clear()
+        self.cycle_col_combo.addItem("-- none / single spectrum --")
+        self.cycle_col_combo.addItems([str(c) for c in cols])
+        self.cycle_col_combo.blockSignals(False)
+        cycle_guess = find_column(df, "cycle")
+        if cycle_guess:
+            self.cycle_col_combo.setCurrentText(cycle_guess)  # triggers _on_cycle_column_changed
+        else:
+            self._on_cycle_column_changed()
+
+        self.table_model.set_dataframe(df)
         self.data_section.set_expanded(False)
+
+    def _on_cycle_column_changed(self):
+        self.cycle_value_combo.blockSignals(True)
+        self.cycle_value_combo.clear()
+        col = self.cycle_col_combo.currentText()
+        if self.df is None or col == "-- none / single spectrum --" or not col:
+            self.cycle_value_combo.addItem("-- all rows --")
+            self.cycle_value_combo.setEnabled(False)
+        else:
+            try:
+                values = sorted(self.df[col].dropna().unique().tolist())
+            except TypeError:
+                values = sorted(self.df[col].dropna().astype(str).unique().tolist())
+            self.cycle_value_combo.addItem("-- all rows --")
+            for v in values:
+                label = f"{v:g}" if isinstance(v, float) else str(v)
+                self.cycle_value_combo.addItem(f"Cycle {label}", userData=v)
+            self.cycle_value_combo.setEnabled(len(values) > 0)
+        self.cycle_value_combo.blockSignals(False)
+
+    def _on_cycle_value_changed(self):
+        if self.df is None:
+            return
+        df = self._current_df()
+        if df is not None:
+            self.table_model.set_dataframe(df)
+
+    def _current_df(self) -> pd.DataFrame | None:
+        """self.df, filtered to just the selected cycle's rows if a cycle
+        column and a specific cycle are chosen -- otherwise the full
+        dataframe unchanged."""
+        if self.df is None:
+            return None
+        col = self.cycle_col_combo.currentText()
+        if col == "-- none / single spectrum --" or not col:
+            return self.df
+        if self.cycle_value_combo.currentIndex() <= 0:  # "-- all rows --"
+            return self.df
+        cycle_value = self.cycle_value_combo.currentData()
+        return self.df[self.df[col] == cycle_value]
 
     def _get_eis_arrays(self):
         if self.df is None:
             QMessageBox.warning(self, "No data", "Load a file first.")
             return None
+        df = self._current_df()
         zre_col, zim_col, f_col = (self.zre_combo.currentText(), self.zim_combo.currentText(),
                                     self.freq_combo.currentText())
-        if any(c not in self.df.columns for c in (zre_col, zim_col, f_col)):
+        if any(c not in df.columns for c in (zre_col, zim_col, f_col)):
             QMessageBox.warning(self, "Missing columns", "Select Z real, Z imaginary, and frequency columns.")
             return None
+        if df.empty:
+            QMessageBox.warning(self, "No rows", "The selected cycle has no rows -- pick a different cycle.")
+            return None
         try:
-            zre = self.df[zre_col].astype(float).to_numpy()
-            zim_raw = self.df[zim_col].astype(float).to_numpy()
-            freq = self.df[f_col].astype(float).to_numpy()
+            zre = df[zre_col].astype(float).to_numpy()
+            zim_raw = df[zim_col].astype(float).to_numpy()
+            freq = df[f_col].astype(float).to_numpy()
         except (ValueError, TypeError):
             QMessageBox.critical(self, "Data error", "Selected columns are not numeric.")
             return None
@@ -288,11 +381,22 @@ class DrtTab(QWidget):
 
     def _on_drt_done(self, result: "drt.DRTResult"):
         self.plot.ax.clear()
+        # Shades the EXTENDED portion of the collocation grid (beyond the
+        # actually-measured frequency range, see core.drt_analysis.
+        # compute_drt) so it reads visually as less certain than the
+        # data-constrained region, not indistinguishable from it.
+        measured_tau = result.tau_s[result.within_measured_range]
+        if len(measured_tau) > 0:
+            if result.tau_s[0] < measured_tau[0]:
+                self.plot.ax.axvspan(result.tau_s[0], measured_tau[0], color=theme.INK_DIM, alpha=0.08)
+            if result.tau_s[-1] > measured_tau[-1]:
+                self.plot.ax.axvspan(measured_tau[-1], result.tau_s[-1], color=theme.INK_DIM, alpha=0.08)
         self.plot.ax.plot(result.tau_s, result.gamma, "-", color=theme.RAW, linewidth=1.5)
         for peak in result.peaks:
-            self.plot.ax.axvline(peak.tau_s, color=theme.FIT, linestyle="--", linewidth=0.8, alpha=0.7)
+            style = "--" if peak.within_measured_range else ":"
+            self.plot.ax.axvline(peak.tau_s, color=theme.FIT, linestyle=style, linewidth=0.8, alpha=0.7)
         self.plot.ax.set_xscale("log")
-        self.plot.ax.set_xlabel("τ (s)")
+        self.plot.ax.set_xlabel("τ (s)  (shaded = beyond measured frequency range)")
         self.plot.ax.set_ylabel("γ(ln τ) (Ω)")
         self.plot.ax.set_title(f"DRT — R∞ = {result.r_inf_ohm:.4g} Ω, residual {result.residual_percent:.3g}%")
         theme.apply_plot_style(self.plot.ax)
@@ -303,14 +407,17 @@ class DrtTab(QWidget):
             f"R∞ (high-frequency/ohmic resistance) = {result.r_inf_ohm:.6g} Ω",
             f"Regularization λ used = {result.lambda_used:.4g}",
             f"Model residual (RMS % of |Z|) = {result.residual_percent:.4g}%",
-            "",
-            f"{len(result.peaks)} peak(s) detected:",
         ]
+        for w in result.warnings:
+            lines.append(f"\n⚠ {w}")
+        lines.append("")
+        lines.append(f"{len(result.peaks)} peak(s) detected:")
         if not result.peaks:
             lines.append("  (none found -- try a smaller λ, or check the loaded spectrum has a resolvable feature)")
         for i, peak in enumerate(result.peaks, 1):
+            extrapolated = "" if peak.within_measured_range else "  [EXTRAPOLATED -- beyond the measured frequency range, less certain]"
             lines.append(
-                f"\n{i}. τ = {peak.tau_s:.4g} s  (f = {peak.frequency_hz:.4g} Hz),  γ = {peak.gamma:.4g} Ω"
+                f"\n{i}. τ = {peak.tau_s:.4g} s  (f = {peak.frequency_hz:.4g} Hz),  γ = {peak.gamma:.4g} Ω{extrapolated}"
             )
             lines.append(f"   Region: {peak.region}")
             lines.append(f"   {peak.explanation}")
@@ -322,10 +429,7 @@ class DrtTab(QWidget):
             ("Peaks detected", str(len(result.peaks))),
             ("Regularization λ", f"{result.lambda_used:.4g}"),
         ])
-        self.result_card.set_warnings(
-            [] if result.residual_percent < 5.0 else
-            ["Model residual is large -- try a different λ, or check the data for inductive-loop/noise issues."]
-        )
+        self.result_card.set_warnings(result.warnings)
 
         self.last_result = {
             "R_inf (ohmic resistance, Ω)": result.r_inf_ohm,
@@ -338,13 +442,20 @@ class DrtTab(QWidget):
             self.last_result[f"Peak {i}: frequency (Hz)"] = peak.frequency_hz
             self.last_result[f"Peak {i}: gamma (Ω)"] = peak.gamma
             self.last_result[f"Peak {i}: region"] = peak.region
+            self.last_result[f"Peak {i}: within measured range"] = peak.within_measured_range
 
+        # tau_s/gamma live on the EXTENDED collocation grid (see
+        # core.drt_analysis.compute_drt), a different length than
+        # frequency_hz/model_z_re_ohm/model_z_im_ohm (the measured-
+        # frequency-only forward-model fit) -- exporting the tau/gamma
+        # curve itself (the actual DRT result) rather than combining
+        # mismatched-length columns into one table. "graph_x_"/"graph_y_"
+        # naming matches core.origin_export's column-picking convention,
+        # so a "Send to OriginLab" export auto-creates a tau-vs-gamma graph.
         self.last_raw_df = pd.DataFrame({
-            "tau_s": result.tau_s,
-            "gamma_ohm": result.gamma,
-            "frequency_hz": result.frequency_hz,
-            "model_z_re_ohm": result.model_z_re_ohm,
-            "model_z_im_ohm": result.model_z_im_ohm,
+            "graph_x_tau_s": result.tau_s,
+            "graph_y_gamma_ohm": result.gamma,
+            "within_measured_range": result.within_measured_range,
         })
         self.export_btn.setEnabled(True)
         self.configure_section.set_expanded(True)

@@ -104,3 +104,80 @@ def test_inductive_loop_checkbox_actually_crops_points_before_drt_runs():
     freq_cropped, _, _ = tab._get_eis_arrays()
 
     assert len(freq_cropped) < len(freq_raw)
+
+
+def test_loading_a_file_auto_detects_frequency_and_z_columns(tmp_path):
+    freq = np.logspace(4, -2, 30)
+    omega = 2 * np.pi * freq
+    z = 2.0 + 50.0 / (1 + 1j * omega * 1e-3)
+    df = pd.DataFrame({"freq/Hz": freq, "z_re/ohm": z.real, "-z_im/ohm": -z.imag})
+    csv_path = tmp_path / "auto_detect.csv"
+    df.to_csv(csv_path, index=False)
+
+    tab = DrtTab()
+    tab._load_dataframe(str(csv_path), sheet_name=0)
+
+    assert tab.freq_combo.currentText() != "-- select --"
+    assert tab.zre_combo.currentText() != "-- select --"
+    assert tab.zim_combo.currentText() != "-- select --"
+    assert tab.zim_sign_combo.currentIndex() == 0  # "-z_im" column name should select the "-Im(Z)" convention
+
+
+def test_loading_a_file_with_a_cycle_column_populates_cycle_selection(tmp_path):
+    freq = np.logspace(4, -2, 20)
+    omega = 2 * np.pi * freq
+    rows = []
+    for cyc, rct in [(1, 50.0), (2, 60.0)]:
+        z = 2.0 + rct / (1 + 1j * omega * 1e-3)
+        for f, zre, zim in zip(freq, z.real, z.imag):
+            rows.append({"cycle number": cyc, "freq": f, "zre": zre, "zim": zim})
+    df = pd.DataFrame(rows)
+    csv_path = tmp_path / "cycles.csv"
+    df.to_csv(csv_path, index=False)
+
+    tab = DrtTab()
+    tab._load_dataframe(str(csv_path), sheet_name=0)
+
+    assert tab.cycle_col_combo.currentText() == "cycle number"
+    assert tab.cycle_value_combo.count() == 3  # "-- all rows --" + 2 distinct cycles
+
+    tab.zre_combo.setCurrentText("zre")
+    tab.zim_combo.setCurrentText("zim")
+    tab.freq_combo.setCurrentText("freq")
+    tab.zim_sign_combo.setCurrentIndex(1)
+
+    tab.cycle_value_combo.setCurrentIndex(1)
+    freq_c1, zre_c1, _ = tab._get_eis_arrays()
+    tab.cycle_value_combo.setCurrentIndex(2)
+    freq_c2, zre_c2, _ = tab._get_eis_arrays()
+
+    assert len(freq_c1) == 20 and len(freq_c2) == 20
+    assert not np.allclose(zre_c1, zre_c2)  # different Rct per cycle -> genuinely different data selected
+
+
+def test_running_drt_on_one_cycle_uses_only_that_cycles_data():
+    freq = np.logspace(4, -2, 20)
+    omega = 2 * np.pi * freq
+    rows = []
+    for cyc, rct in [(1, 50.0), (2, 60.0)]:
+        z = 2.0 + rct / (1 + 1j * omega * 1e-3)
+        for f, zre, zim in zip(freq, z.real, z.imag):
+            rows.append({"cycle number": cyc, "freq": f, "zre": zre, "zim": zim})
+    df = pd.DataFrame(rows)
+
+    tab = DrtTab()
+    tab.df = df
+    tab.cycle_col_combo.clear()
+    tab.cycle_col_combo.addItem("-- none / single spectrum --")
+    tab.cycle_col_combo.addItem("cycle number")
+    tab.cycle_col_combo.setCurrentText("cycle number")  # triggers _on_cycle_column_changed
+    for combo, col in [(tab.freq_combo, "freq"), (tab.zre_combo, "zre"), (tab.zim_combo, "zim")]:
+        combo.clear()
+        combo.addItem("-- select --")
+        combo.addItem(col)
+        combo.setCurrentText(col)
+    tab.zim_sign_combo.setCurrentIndex(1)
+    tab.cycle_value_combo.setCurrentIndex(1)  # Cycle 1 only
+
+    freq_sel, zre_sel, _ = tab._get_eis_arrays()
+    assert len(freq_sel) == 20  # not 40 -- the other cycle's rows are excluded

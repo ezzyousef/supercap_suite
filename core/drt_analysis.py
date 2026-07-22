@@ -63,19 +63,22 @@ class DRTPeak:
     gamma: float
     region: str
     explanation: str
+    within_measured_range: bool = True
 
 
 @dataclass
 class DRTResult:
-    tau_s: np.ndarray
-    gamma: np.ndarray
+    tau_s: np.ndarray              # collocation grid, EXTENDED beyond the measured range (see compute_drt)
+    gamma: np.ndarray              # same length as tau_s
+    within_measured_range: np.ndarray  # bool array, same length as tau_s -- see compute_drt
     r_inf_ohm: float
     lambda_used: float
-    frequency_hz: np.ndarray       # ascending tau order, matches tau_s/gamma
+    frequency_hz: np.ndarray       # the MEASURED frequencies only -- matches model_z_re_ohm/model_z_im_ohm, NOT tau_s/gamma
     model_z_re_ohm: np.ndarray
     model_z_im_ohm: np.ndarray
     residual_percent: float
     peaks: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
 
 
 # Practical, literature-informed frequency-region bands for interpreting
@@ -225,37 +228,67 @@ def compute_drt(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.nda
     zre_sorted = zre[order]
     zim_sorted = zim[order]
 
-    tau = 1.0 / (2.0 * np.pi * f_sorted)
-    tau = tau[::-1]  # ascending tau (descending frequency)
+    tau_meas = 1.0 / (2.0 * np.pi * f_sorted)
+    tau_meas = tau_meas[::-1]  # ascending tau (descending frequency)
     zre_by_tau = zre_sorted[::-1]
     zim_by_tau = zim_sorted[::-1]
     f_by_tau = f_sorted[::-1]
 
-    n = len(tau)
-    ln_tau = np.log(tau)
+    n = len(tau_meas)
+    ln_tau_meas = np.log(tau_meas)
 
-    a_re = np.zeros((n, n))
-    a_im = np.zeros((n, n))
-    for m in range(n):
+    # Extend the collocation grid beyond the strictly measured tau range.
+    # Basis functions compactly supported ONLY within [tau_min, tau_max]
+    # force gamma to exactly zero at those edges -- if the true underlying
+    # process's relaxation extends beyond what was actually measured
+    # (very common for a supercapacitor's near-vertical low-frequency
+    # capacitive tail, which implies relaxation times longer than the
+    # measurement covered), the deconvolution has nowhere to put that
+    # "missing" weight except a sharp, physically implausible spike
+    # jammed into the very last edge collocation point. Extending the
+    # grid a bit past each measured boundary -- the same idea Wan et al.
+    # 2015 sec. 2.1 highlight as an advantage of RBF discretization's
+    # naturally infinite support, applied here to PWL via a handful of
+    # extra collocation points at the same log-spacing as the measured
+    # grid -- gives that mass room to spread out naturally instead of
+    # being clipped into one artificial spike. Peaks landing in the
+    # extended region are flagged (DRTPeak.within_measured_range=False):
+    # they are less certain than a peak directly constrained by data,
+    # since no measurement was actually taken there.
+    median_step = float(np.median(np.diff(ln_tau_meas))) if n > 1 else 1.0
+    n_extra = max(5, n // 5)
+    extra_lo = ln_tau_meas[0] - median_step * np.arange(n_extra, 0, -1)
+    extra_hi = ln_tau_meas[-1] + median_step * np.arange(1, n_extra + 1)
+    ln_tau = np.concatenate([extra_lo, ln_tau_meas, extra_hi])
+    tau = np.exp(ln_tau)
+    within_range = np.concatenate([
+        np.zeros(n_extra, dtype=bool), np.ones(n, dtype=bool), np.zeros(n_extra, dtype=bool),
+    ])
+    m_total = len(tau)
+
+    a_re = np.zeros((n, m_total))
+    a_im = np.zeros((n, m_total))
+    for m in range(m_total):
         y_lo = ln_tau[m - 1] - ln_tau[m] if m > 0 else -(ln_tau[m + 1] - ln_tau[m])
-        y_hi = ln_tau[m + 1] - ln_tau[m] if m < n - 1 else -(ln_tau[m - 1] - ln_tau[m])
+        y_hi = ln_tau[m + 1] - ln_tau[m] if m < m_total - 1 else -(ln_tau[m - 1] - ln_tau[m])
         for k in range(n):
-            re_val, im_val = _hat_function_integral_re_im(tau[k], tau[m], y_lo, y_hi)
+            re_val, im_val = _hat_function_integral_re_im(tau_meas[k], tau[m], y_lo, y_hi)
             a_re[k, m] = re_val
             a_im[k, m] = im_val
 
-    # Second-difference regularization matrix: (D gamma)_i = gamma_{i-1} - 2*gamma_i + gamma_{i+1}
-    d = np.zeros((max(n - 2, 0), n))
-    for i in range(n - 2):
+    # Second-difference regularization matrix over the full EXTENDED grid:
+    # (D gamma)_i = gamma_{i-1} - 2*gamma_i + gamma_{i+1}
+    d = np.zeros((max(m_total - 2, 0), m_total))
+    for i in range(m_total - 2):
         d[i, i] = 1.0
         d[i, i + 1] = -2.0
         d[i, i + 2] = 1.0
 
     # Design matrix: column 0 is R_inf (contributes 1 to every real-part
-    # row, 0 to imaginary/regularization rows); columns 1..n are the DRT
-    # weights gamma_m.
+    # row, 0 to imaginary/regularization rows); columns 1..m_total are
+    # the DRT weights gamma_m over the extended grid.
     n_reg = d.shape[0]
-    design = np.zeros((2 * n + n_reg, 1 + n))
+    design = np.zeros((2 * n + n_reg, 1 + m_total))
     design[:n, 0] = 1.0
     design[:n, 1:] = a_re
     design[n:2 * n, 1:] = a_im
@@ -279,14 +312,42 @@ def compute_drt(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.nda
     for idx in peaks_idx:
         region, explanation = classify_region(tau[idx])
         peaks.append(DRTPeak(
-            tau_s=float(tau[idx]), frequency_hz=float(f_by_tau[idx]),
+            tau_s=float(tau[idx]), frequency_hz=float(1.0 / (2.0 * np.pi * tau[idx])),
             gamma=float(gamma[idx]), region=region, explanation=explanation,
+            within_measured_range=bool(within_range[idx]),
         ))
 
+    result_warnings = []
+    # Even with the extended grid above, a real blocking-electrode (i.e.
+    # supercapacitor/battery) low-frequency capacitive tail that the
+    # measurement didn't extend low enough to fully resolve will keep
+    # gamma RISING all the way to the largest tau collocation point
+    # (never turning over into a proper peak, since no true local maximum
+    # exists within the computed range) -- this is the documented
+    # "increasing series of peaks" signature for blocking electrodes (Py,
+    # Maradesa & Ciucci 2024), not a numerical bug. Flag it explicitly
+    # rather than let it pass as an unremarkable-looking rising tail.
+    if gamma.max() > 0 and gamma[-1] > 0.3 * gamma.max():
+        result_warnings.append(
+            "gamma is still RISING at the largest relaxation times computed (even after "
+            "extending the collocation grid past the measured range) -- the low-frequency "
+            "process is likely not fully resolved. This is the expected signature for "
+            "blocking-electrode systems (supercapacitors, batteries) whose near-vertical "
+            "low-frequency Nyquist tail a bounded DRT model cannot fully represent -- "
+            "extending the measurement to lower frequency would help; treat this region's "
+            "peak count/shape with caution in the meantime."
+        )
+    if residual_percent > 5.0:
+        result_warnings.append(
+            f"Model residual is large ({residual_percent:.3g}% RMS) -- try a different "
+            "lambda, check for an unremoved inductive loop, or check the data for noise issues."
+        )
+
     return DRTResult(
-        tau_s=tau, gamma=gamma, r_inf_ohm=float(r_inf), lambda_used=lambda_reg,
+        tau_s=tau, gamma=gamma, within_measured_range=within_range,
+        r_inf_ohm=float(r_inf), lambda_used=lambda_reg,
         frequency_hz=f_by_tau, model_z_re_ohm=model_re, model_z_im_ohm=model_im,
-        residual_percent=residual_percent, peaks=peaks,
+        residual_percent=residual_percent, peaks=peaks, warnings=result_warnings,
     )
 
 

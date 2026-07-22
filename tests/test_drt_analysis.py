@@ -102,3 +102,64 @@ def test_classify_region_matches_expected_bands():
     assert "High" in high
     assert "Mid" in mid
     assert "Low" in low
+
+
+def test_compute_drt_extends_the_collocation_grid_beyond_the_measured_range():
+    rs, rct, tau_zarc, phi = 2.0, 50.0, 1e-3, 0.8
+    freq = np.logspace(5, -3, 60)
+    omega = 2 * np.pi * freq
+    z = rs + rct / (1 + (1j * omega * tau_zarc) ** phi)
+
+    result = drt.compute_drt(freq, z.real, z.imag, lambda_reg=1e-3)
+
+    assert len(result.tau_s) > len(freq)  # extended grid has more collocation points than measured frequencies
+    assert len(result.tau_s) == len(result.gamma) == len(result.within_measured_range)
+    assert len(result.frequency_hz) == len(freq)  # frequency_hz/model_z_* stay at the measured length
+    assert len(result.model_z_re_ohm) == len(freq)
+    assert result.within_measured_range.sum() == len(freq)  # exactly the measured points are flagged True
+    tau_measured = 1.0 / (2 * np.pi * freq)
+    assert result.tau_s.min() < tau_measured.min()  # grid extends below the smallest measured tau
+    assert result.tau_s.max() > tau_measured.max()  # and above the largest
+
+
+def test_compute_drt_flags_a_rising_low_frequency_tail_as_a_warning():
+    """Reproduces the exact failure mode from a real reported screenshot:
+    a spectrum whose low-frequency (near-vertical, blocking-electrode-
+    like) capacitive tail is truncated before it's fully resolved. Before
+    the grid-extension fix this produced one sharp spike jammed at the
+    edge of the collocation grid and a large (~17%) residual; the fix
+    should both reduce the residual substantially AND surface an explicit
+    warning about the still-rising tail rather than silently showing a
+    now-smaller-looking but still misleading result."""
+    rs, rct, tau_zarc, phi = 5.0, 15.0, 5e-3, 0.85
+    c_low = 2.0  # a large low-frequency series capacitance (near-vertical Nyquist tail)
+    freq = np.logspace(4, -1.5, 60)  # truncated before the tail is fully resolved
+    omega = 2 * np.pi * freq
+    z = rs + rct / (1 + (1j * omega * tau_zarc) ** phi) + 1.0 / (1j * omega * c_low)
+
+    result = drt.compute_drt(freq, z.real, z.imag, lambda_reg=1e-3)
+
+    assert result.residual_percent < 2.0  # much better than the ~17% seen before the fix
+    assert any("RISING" in w for w in result.warnings)
+
+
+def test_compute_drt_clean_spectrum_produces_no_warnings():
+    rs, rct, tau_zarc, phi = 2.0, 50.0, 1e-3, 0.8
+    freq = np.logspace(5, -3, 60)
+    omega = 2 * np.pi * freq
+    z = rs + rct / (1 + (1j * omega * tau_zarc) ** phi)
+
+    result = drt.compute_drt(freq, z.real, z.imag, lambda_reg=1e-3)
+    assert result.warnings == []
+
+
+def test_compute_drt_large_residual_produces_a_warning():
+    # Deliberately mismatched/noisy data that no reasonable DRT can fit
+    # well, to exercise the large-residual warning path.
+    freq = np.logspace(4, -2, 40)
+    rng = np.random.default_rng(0)
+    zre = rng.uniform(-50, 50, size=len(freq))
+    zim = rng.uniform(-50, 50, size=len(freq))
+    result = drt.compute_drt(freq, zre, zim, lambda_reg=1e-3)
+    assert result.residual_percent > 5.0
+    assert any("residual is large" in w for w in result.warnings)
