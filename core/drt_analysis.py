@@ -177,6 +177,46 @@ def _hat_function_integral_re_im(tau_n: float, tau_m: float, y_lo: float, y_hi: 
     return re_val, im_val
 
 
+def _build_extended_grid_and_kernels(tau_meas: np.ndarray) -> tuple:
+    """Shared by compute_drt() and compute_dct(): builds the collocation
+    grid EXTENDED beyond the measured tau range (see compute_drt's
+    docstring for why -- the same edge-artifact concern applies equally
+    to DCT), plus the PWL-basis/RC-kernel design matrices (a_re, a_im:
+    shape (N measured, M extended collocation points)) and the second-
+    difference regularization matrix (shape (M-2, M)) over the extended
+    grid. Returns (tau, within_range, a_re, a_im, d)."""
+    n = len(tau_meas)
+    ln_tau_meas = np.log(tau_meas)
+    median_step = float(np.median(np.diff(ln_tau_meas))) if n > 1 else 1.0
+    n_extra = max(5, n // 5)
+    extra_lo = ln_tau_meas[0] - median_step * np.arange(n_extra, 0, -1)
+    extra_hi = ln_tau_meas[-1] + median_step * np.arange(1, n_extra + 1)
+    ln_tau = np.concatenate([extra_lo, ln_tau_meas, extra_hi])
+    tau = np.exp(ln_tau)
+    within_range = np.concatenate([
+        np.zeros(n_extra, dtype=bool), np.ones(n, dtype=bool), np.zeros(n_extra, dtype=bool),
+    ])
+    m_total = len(tau)
+
+    a_re = np.zeros((n, m_total))
+    a_im = np.zeros((n, m_total))
+    for m in range(m_total):
+        y_lo = ln_tau[m - 1] - ln_tau[m] if m > 0 else -(ln_tau[m + 1] - ln_tau[m])
+        y_hi = ln_tau[m + 1] - ln_tau[m] if m < m_total - 1 else -(ln_tau[m - 1] - ln_tau[m])
+        for k in range(n):
+            re_val, im_val = _hat_function_integral_re_im(tau_meas[k], tau[m], y_lo, y_hi)
+            a_re[k, m] = re_val
+            a_im[k, m] = im_val
+
+    d = np.zeros((max(m_total - 2, 0), m_total))
+    for i in range(m_total - 2):
+        d[i, i] = 1.0
+        d[i, i + 1] = -2.0
+        d[i, i + 2] = 1.0
+
+    return tau, within_range, a_re, a_im, d
+
+
 def compute_drt(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.ndarray,
                  lambda_reg: float = 1e-3) -> "DRTResult":
     """Tikhonov-regularized DRT deconvolution using a piecewise-linear
@@ -235,7 +275,6 @@ def compute_drt(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.nda
     f_by_tau = f_sorted[::-1]
 
     n = len(tau_meas)
-    ln_tau_meas = np.log(tau_meas)
 
     # Extend the collocation grid beyond the strictly measured tau range.
     # Basis functions compactly supported ONLY within [tau_min, tau_max]
@@ -255,34 +294,8 @@ def compute_drt(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.nda
     # extended region are flagged (DRTPeak.within_measured_range=False):
     # they are less certain than a peak directly constrained by data,
     # since no measurement was actually taken there.
-    median_step = float(np.median(np.diff(ln_tau_meas))) if n > 1 else 1.0
-    n_extra = max(5, n // 5)
-    extra_lo = ln_tau_meas[0] - median_step * np.arange(n_extra, 0, -1)
-    extra_hi = ln_tau_meas[-1] + median_step * np.arange(1, n_extra + 1)
-    ln_tau = np.concatenate([extra_lo, ln_tau_meas, extra_hi])
-    tau = np.exp(ln_tau)
-    within_range = np.concatenate([
-        np.zeros(n_extra, dtype=bool), np.ones(n, dtype=bool), np.zeros(n_extra, dtype=bool),
-    ])
+    tau, within_range, a_re, a_im, d = _build_extended_grid_and_kernels(tau_meas)
     m_total = len(tau)
-
-    a_re = np.zeros((n, m_total))
-    a_im = np.zeros((n, m_total))
-    for m in range(m_total):
-        y_lo = ln_tau[m - 1] - ln_tau[m] if m > 0 else -(ln_tau[m + 1] - ln_tau[m])
-        y_hi = ln_tau[m + 1] - ln_tau[m] if m < m_total - 1 else -(ln_tau[m - 1] - ln_tau[m])
-        for k in range(n):
-            re_val, im_val = _hat_function_integral_re_im(tau_meas[k], tau[m], y_lo, y_hi)
-            a_re[k, m] = re_val
-            a_im[k, m] = im_val
-
-    # Second-difference regularization matrix over the full EXTENDED grid:
-    # (D gamma)_i = gamma_{i-1} - 2*gamma_i + gamma_{i+1}
-    d = np.zeros((max(m_total - 2, 0), m_total))
-    for i in range(m_total - 2):
-        d[i, i] = 1.0
-        d[i, i + 1] = -2.0
-        d[i, i + 2] = 1.0
 
     # Design matrix: column 0 is R_inf (contributes 1 to every real-part
     # row, 0 to imaginary/regularization rows); columns 1..m_total are
@@ -347,6 +360,160 @@ def compute_drt(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.nda
         tau_s=tau, gamma=gamma, within_measured_range=within_range,
         r_inf_ohm=float(r_inf), lambda_used=lambda_reg,
         frequency_hz=f_by_tau, model_z_re_ohm=model_re, model_z_im_ohm=model_im,
+        residual_percent=residual_percent, peaks=peaks, warnings=result_warnings,
+    )
+
+
+@dataclass
+class DCTPeak:
+    tau_s: float
+    frequency_hz: float
+    gamma: float
+    region: str
+    explanation: str
+    within_measured_range: bool = True
+
+
+@dataclass
+class DCTResult:
+    tau_s: np.ndarray              # collocation grid, EXTENDED beyond the measured range (see compute_drt)
+    gamma: np.ndarray              # same length as tau_s
+    within_measured_range: np.ndarray  # bool array, same length as tau_s
+    g0_s: float                    # zero-frequency conductance
+    c0_f: float                    # instantaneous/high-frequency capacitance
+    lambda_used: float
+    frequency_hz: np.ndarray       # the MEASURED frequencies only
+    model_y_re_s: np.ndarray
+    model_y_im_s: np.ndarray
+    residual_percent: float
+    peaks: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
+
+
+def compute_dct(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.ndarray,
+                 lambda_reg: float = 1e-3) -> "DCTResult":
+    """Distribution of Capacitive Times (DCT): the ADMITTANCE-domain
+    counterpart to compute_drt(), purpose-built for BLOCKING-electrode
+    systems -- i.e. exactly supercapacitors and batteries -- where
+    classical DRT structurally cannot represent the data well. compute_drt()
+    fits Z(f) = R_inf + integral[gamma_DRT/(1+j*2*pi*f*tau) dlntau], whose
+    model impedance is mathematically forced to a FINITE value as f->0;
+    a real blocking electrode's impedance instead keeps growing
+    (unbounded) toward DC (the near-vertical low-frequency Nyquist tail),
+    which DRT can only approximate by piling gamma up in an ever-
+    increasing series of peaks toward the largest computed tau rather
+    than resolving one genuine feature (compute_drt() detects and warns
+    about exactly this pattern). DCT sidesteps the problem by fitting the
+    ADMITTANCE Y(f) = 1/Z(f) instead, whose model
+
+        Y_DCT(f) = j*2*pi*f*C0 + G0 + integral[ gamma_DCT(ln tau) / (1 + j*2*pi*f*tau) dlntau ]
+
+    (eq. 2-3 in the source below) tends to a FINITE admittance (not
+    impedance) as f->0 -- exactly the behavior a blocking electrode's
+    admittance actually has (Y->0, i.e. Z->infinity, as f->0 is
+    perfectly representable: it just means G0 and gamma_DCT's total mass
+    are small). Uses the SAME piecewise-linear/extended-grid/Tikhonov/
+    NNLS machinery as compute_drt() (see that function's docstring for
+    the discretization and regularization details), just applied to Y
+    instead of Z, with an added free parameter C0 (the DCT counterpart to
+    DRT's R_inf) capturing the instantaneous/high-frequency capacitance.
+
+    Source: B. Py, A. Maradesa, F. Ciucci, "From theory to practice:
+    Unlocking the distribution of capacitive times in electrochemical
+    impedance spectroscopy," Electrochimica Acta 479 (2024) 143741,
+    eq. 2-3 for the admittance model. G0 and C0 are both solved for
+    jointly with gamma_DCT via non-negative least squares -- both are
+    physically non-negative quantities (a conductance and a
+    capacitance), the same reasoning compute_drt() uses for R_inf.
+
+    Raises ValueError if the input arrays are mismatched, have fewer than
+    5 points, contain a zero impedance (undefined admittance), or scipy
+    is unavailable.
+    """
+    if not _HAVE_SCIPY:
+        raise ValueError("scipy is required for DCT analysis")
+    f = np.asarray(frequency_hz, dtype=float)
+    zre = np.asarray(z_re_ohm, dtype=float)
+    zim = np.asarray(z_im_ohm, dtype=float)
+    if not (len(f) == len(zre) == len(zim)):
+        raise ValueError("frequency_hz, z_re_ohm, and z_im_ohm must be equal-length arrays")
+    if len(f) < 5:
+        raise ValueError("DCT analysis needs at least 5 frequency points")
+    z_complex = zre + 1j * zim
+    if np.any(z_complex == 0):
+        raise ValueError("Z=0 encountered -- cannot compute the admittance Y=1/Z for DCT analysis")
+
+    order = np.argsort(f)  # ascending frequency
+    f_sorted = f[order]
+    y_sorted = 1.0 / z_complex[order]
+
+    tau_meas = 1.0 / (2.0 * np.pi * f_sorted)
+    tau_meas = tau_meas[::-1]  # ascending tau (descending frequency)
+    yre_by_tau = y_sorted.real[::-1]
+    yim_by_tau = y_sorted.imag[::-1]
+    f_by_tau = f_sorted[::-1]
+    omega_by_tau = 2.0 * np.pi * f_by_tau
+
+    n = len(tau_meas)
+    tau, within_range, a_re, a_im, d = _build_extended_grid_and_kernels(tau_meas)
+    m_total = len(tau)
+
+    # Design matrix: column 0 is G0 (contributes 1 to every real-part
+    # row), column 1 is C0 (contributes omega to every imaginary-part
+    # row -- Im(Y) = omega*C0 for a plain capacitor's admittance);
+    # columns 2..m_total+1 are the DCT weights gamma_m over the extended grid.
+    n_reg = d.shape[0]
+    design = np.zeros((2 * n + n_reg, 2 + m_total))
+    design[:n, 0] = 1.0
+    design[n:2 * n, 1] = omega_by_tau
+    design[:n, 2:] = a_re
+    design[n:2 * n, 2:] = a_im
+    design[2 * n:, 2:] = np.sqrt(lambda_reg) * d
+    target = np.concatenate([yre_by_tau, yim_by_tau, np.zeros(n_reg)])
+
+    coeffs, _ = nnls(design, target)
+    g0 = coeffs[0]
+    c0 = coeffs[1]
+    gamma = coeffs[2:]
+
+    model_re = g0 + a_re @ gamma
+    model_im = omega_by_tau * c0 + a_im @ gamma
+    y_mag = np.sqrt(yre_by_tau ** 2 + yim_by_tau ** 2)
+    y_mag = np.where(y_mag == 0, np.finfo(float).eps, y_mag)
+    residual_percent = float(np.sqrt(np.mean(
+        ((yre_by_tau - model_re) ** 2 + (yim_by_tau - model_im) ** 2) / y_mag ** 2
+    )) * 100.0)
+
+    peaks_idx, _ = find_peaks(gamma, prominence=max(gamma.max() * 0.02, 1e-12))
+    peaks = []
+    for idx in peaks_idx:
+        region, explanation = classify_region(tau[idx])
+        peaks.append(DCTPeak(
+            tau_s=float(tau[idx]), frequency_hz=float(1.0 / (2.0 * np.pi * tau[idx])),
+            gamma=float(gamma[idx]), region=region, explanation=explanation,
+            within_measured_range=bool(within_range[idx]),
+        ))
+
+    result_warnings = []
+    if gamma.max() > 0 and gamma[-1] > 0.3 * gamma.max():
+        result_warnings.append(
+            "gamma is still RISING at the largest relaxation times computed (even after "
+            "extending the collocation grid past the measured range) -- unlike DRT, this is "
+            "NOT the expected signature for a blocking electrode (DCT is specifically built "
+            "to represent that case without a rising tail); a genuinely still-rising DCT tail "
+            "more likely means the measurement itself didn't extend to low enough frequency to "
+            "resolve this process at all, or there's a modeling/data issue worth checking."
+        )
+    if residual_percent > 5.0:
+        result_warnings.append(
+            f"Model residual is large ({residual_percent:.3g}% RMS) -- try a different "
+            "lambda, check for an unremoved inductive loop, or check the data for noise issues."
+        )
+
+    return DCTResult(
+        tau_s=tau, gamma=gamma, within_measured_range=within_range,
+        g0_s=float(g0), c0_f=float(c0), lambda_used=lambda_reg,
+        frequency_hz=f_by_tau, model_y_re_s=model_re, model_y_im_s=model_im,
         residual_percent=residual_percent, peaks=peaks, warnings=result_warnings,
     )
 

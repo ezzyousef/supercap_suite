@@ -294,7 +294,23 @@ chi-squared, and two independent kinds of explicit warning:
 
 - **Bound-pinning**: a parameter pinned at its search bound (a strong
   sign the model doesn't actually need that element -- see the Warburg
-  discussion below).
+  discussion below). One specific case gets DIFFERENT phrasing: a CPE
+  exponent `n` pinned at its upper bound (1.0) is not an arbitrary
+  numerical ceiling like any other pinned bound -- it's the exact,
+  physically well-defined point where a CPE mathematically IS a plain
+  capacitor (`Z = 1/(Y0*(jw)^n)` at n=1 reduces exactly to `Z = 1/(jw*Y0)`,
+  verified in `test_cpe_reduces_to_ideal_capacitor_when_n_equals_one`).
+  Reported directly: the generic "artificial ceiling ... treat with
+  caution" wording read as an alarming error even for an essentially
+  perfect fit (reduced chi-squared ~1e-17), when the actual situation is
+  just that this branch behaves ideally and, if a plain-capacitor sibling
+  of the circuit exists in the library, it would fit equally well with
+  one fewer parameter. This case is now phrased as a finding ("this
+  branch's CPE has settled at n=1, i.e. it behaves as an IDEAL capacitor
+  here") rather than a caution, and deliberately does NOT contain the
+  substring "pinned at" -- `auto_fit_equivalent_circuit`'s tie-break
+  (below) uses that substring to detect genuinely concerning pinned
+  bounds, and an n=1 CPE is not one of them.
 - **Resistance overestimation**: a fitted resistance (any "R"-kind
   parameter except `Rleak`, which is designed to be large) that's more
   than 20x the measured data's own real-axis span (`max(Z') -
@@ -847,11 +863,66 @@ batteries): B. Py, A. Maradesa, F. Ciucci, *Electrochimica Acta* 479
 mathematically forced to a FINITE value as f->0, which cannot
 represent a real blocking electrode's diverging low-frequency
 impedance -- this is exactly why that paper introduces the distribution
-of capacitive times (DCT) as a complementary admittance-based method for
-blocking electrodes specifically; DCT is not implemented in this app
-(DRT is standard practice and adequate outside the specific low-
-frequency divergence case), noted here as a possible future addition if
-the low-frequency caveat proves limiting in practice.
+of capacitive times (DCT), implemented as a second method (Section 10a)
+for exactly this case.
+
+## 10a. DCT (Distribution of Capacitive Times)
+
+```
+Y(f) = j*2*pi*f*C0 + G0 + integral[ gamma_DCT(ln tau) / (1 + j*2*pi*f*tau) dlntau ]
+```
+The ADMITTANCE-domain counterpart to DRT, added specifically for the
+blocking-electrode low-frequency limitation documented above. DRT's model
+impedance is mathematically forced to a FINITE value as f->0 -- unable to
+represent a real blocking electrode's diverging low-frequency impedance
+(the near-vertical Nyquist tail), which shows up as gamma piling into an
+ever-increasing series of peaks toward the largest computed relaxation
+time rather than resolving one genuine feature. DCT fits the admittance
+Y(f) = 1/Z(f) instead, whose model tends to a FINITE value (not a
+divergence) as f->0 for exactly this case -- a real blocking electrode's
+Y simply approaches zero there, which G0 and the DCT weights can
+represent directly.
+
+`core.drt_analysis.compute_dct()` reuses the exact same piecewise-linear
+discretization, collocation-grid extension, Tikhonov regularization, and
+non-negative-least-squares machinery as `compute_drt()` (see Section 10
+above for the full discretization discussion -- it applies identically
+here), just fit against Y instead of Z, with an added free parameter C0
+(the instantaneous/high-frequency capacitance, the DCT counterpart to
+DRT's R_inf) alongside G0 (the zero-frequency conductance). Source:
+B. Py, A. Maradesa, F. Ciucci, *Electrochimica Acta* 479 (2024) 143741,
+eq. 2-3 for the admittance model.
+
+**Self-consistency verification**: the YARC element (eq. 21 in the
+source paper) -- the admittance-domain analog of a ZARC, `Y(f) = G_inf +
+Gct/(1+(j*2*pi*f*tau_YARC)^phi)` -- has a DCT closed form that the source
+paper states is IDENTICAL in functional form to the ZARC's DRT closed
+form (Section 10 above), with Gct substituted for Rct. `compute_dct()`
+is verified against this directly: forward-compute Y_YARC(f) from known
+G_inf/Gct/tau_YARC/phi, convert to Z=1/Y (matching what a real
+measurement provides), run `compute_dct()`, and confirm G0, the peak
+position, and the peak "area" all recover the true YARC parameters (see
+`tests/test_drt_analysis.py`).
+
+**DCT is not a guaranteed fix for every blocking-electrode spectrum.**
+It fits well when the underlying admittance genuinely has a Maxwell-type
+structure (a parallel combination of resistor-capacitor-pairs-in-series
+branches, per the source paper's own circuit-mapping discussion) -- the
+YARC case above is exactly this. A spectrum built as a pure SERIES
+combination (e.g. Rs + a ZARC + a series capacitor -- a Voigt-type
+topology, exactly what DRT itself is suited for) is not automatically
+well-represented by DCT's admittance model either, even though it also
+technically has a diverging low-frequency impedance. This was found
+directly while validating the fix: DCT gave a ~76% residual on such a
+spectrum, confirmed as a genuine topology mismatch (not a numerical bug)
+via the same self-consistency standard used everywhere else in this
+app -- `tests/test_drt_analysis.py` documents this case explicitly so a
+future change doesn't "fix" it by silently forcing a small residual
+regardless of whether the data supports it. **Always check the reported
+residual for BOTH methods** before trusting either one; a large residual
+on both is itself useful information (the raw Nyquist/Bode shape or the
+Kramers-Kronig test, Section 6b, may be more informative for that
+spectrum than either decomposition).
 
 ---
 

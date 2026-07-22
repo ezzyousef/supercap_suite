@@ -180,6 +180,26 @@ B. Py, A. Maradesa, F. Ciucci, <i>Electrochimica Acta</i> 479 (2024)
 automatically optimized against this data -- try a few values.
 """
 
+DCT_ANALYSIS = """
+<code>Y(f) = j2&pi;fC0 + G0 + &int; &gamma;(ln&tau;) / (1 + j2&pi;f&tau;) dln&tau;</code><br>
+Distribution of Capacitive Times: the ADMITTANCE-domain counterpart to
+DRT, purpose-built for BLOCKING-electrode systems (supercapacitors,
+batteries). DRT's model impedance is mathematically forced to a FINITE
+value as f&rarr;0, which cannot represent a real blocking electrode's
+diverging low-frequency impedance (the near-vertical Nyquist tail); DCT
+fits the admittance Y(f)=1/Z(f) instead, whose model tends to a finite
+value as f&rarr;0 for exactly this case. Uses the same piecewise-linear/
+extended-grid/Tikhonov/NNLS machinery as DRT, applied to Y instead of Z,
+with an added free parameter C0 (the instantaneous/high-frequency
+capacitance) alongside G0 (the DCT counterpart to DRT's R_inf). Source:
+B. Py, A. Maradesa, F. Ciucci, <i>Electrochimica Acta</i> 479 (2024)
+143741, eq. 2-3. DCT is NOT a guaranteed fix for every blocking-electrode
+spectrum -- it fits well when the underlying admittance has a Maxwell-
+type (parallel-branches) structure, verified here against the YARC
+element's closed-form admittance, but not every real spectrum does.
+Always check the reported residual before trusting either DRT or DCT.
+"""
+
 KRAMERS_KRONIG = """
 <code>Z(&omega;) = R_inf + &sum;_k [ R_k / (1 + j&omega;&tau;_k) ]</code><br>
 Linear Kramers-Kronig validity test: a generic Voigt-element chain with

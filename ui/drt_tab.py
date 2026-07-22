@@ -125,19 +125,43 @@ class DrtTab(QWidget):
         self.configure_section = CollapsibleSection("2) Configure", start_expanded=True)
         left_layout.addWidget(self.configure_section)
 
-        drt_section = CollapsibleSection("DRT deconvolution", start_expanded=True)
+        drt_section = CollapsibleSection("DRT / DCT deconvolution", start_expanded=True)
         drt_grid = QGridLayout()
         drt_note = QLabel(
-            "Deconvolves a continuous distribution of relaxation times "
-            "gamma(ln tau) directly from the spectrum, instead of "
-            "assuming one specific equivalent circuit up front -- every "
-            "parallel RC-like process in the cell shows up as one peak. "
-            "Detected peaks below are automatically labeled by frequency "
-            "region with an interpretive explanation (see the source note)."
+            "Deconvolves a continuous distribution of relaxation (DRT) or "
+            "capacitive (DCT) times directly from the spectrum, instead "
+            "of assuming one specific equivalent circuit up front -- "
+            "every parallel RC-like process in the cell shows up as one "
+            "peak. Detected peaks below are automatically labeled by "
+            "frequency region with an interpretive explanation (see the "
+            "source note)."
         )
         drt_note.setWordWrap(True)
         drt_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
         drt_grid.addWidget(drt_note, 0, 0, 1, 2)
+
+        self.method_combo = QComboBox()
+        self.method_combo.addItem(
+            "DRT (impedance) -- standard, but struggles at low frequency for blocking electrodes", "drt"
+        )
+        self.method_combo.addItem(
+            "DCT (admittance) -- for supercapacitors/batteries, if DRT's low-frequency tail won't resolve", "dct"
+        )
+        self.method_combo.setToolTip(
+            "DRT fits Z(f); its model impedance is mathematically forced "
+            "to a FINITE value as f->0, which cannot represent a real "
+            "blocking electrode's diverging low-frequency impedance (the "
+            "near-vertical Nyquist tail) -- this shows up as gamma still "
+            "rising at the largest computed relaxation time. DCT fits the "
+            "admittance Y(f)=1/Z(f) instead, which tends to a finite "
+            "value as f->0 for exactly this case. DCT is NOT a guaranteed "
+            "fix, though -- it fits well when the underlying admittance "
+            "has a Maxwell-type (parallel-branches) structure, but not "
+            "every blocking-electrode spectrum does. Always check the "
+            "reported residual before trusting either one."
+        )
+        drt_grid.addWidget(QLabel("Method:"), 1, 0)
+        drt_grid.addWidget(self.method_combo, 1, 1)
 
         self.lambda_spin = QDoubleSpinBox()
         self.lambda_spin.setDecimals(6)
@@ -146,18 +170,19 @@ class DrtTab(QWidget):
         self.lambda_spin.setValue(1e-3)
         self.lambda_spin.setToolTip(
             "Regularization strength (Tikhonov lambda) -- larger gives a "
-            "smoother/less oscillatory DRT but can over-smooth real "
+            "smoother/less oscillatory result but can over-smooth real "
             "features; smaller gives more detail but can show spurious "
             "oscillation. A practical default, not automatically "
             "optimized against this data -- try a few values."
         )
-        drt_grid.addWidget(QLabel("Regularization λ:"), 1, 0)
-        drt_grid.addWidget(self.lambda_spin, 1, 1)
+        drt_grid.addWidget(QLabel("Regularization λ:"), 2, 0)
+        drt_grid.addWidget(self.lambda_spin, 2, 1)
 
-        self.run_btn = QPushButton("▶ Run DRT analysis")
+        self.run_btn = QPushButton("▶ Run analysis")
         self.run_btn.clicked.connect(self.on_run)
-        drt_grid.addWidget(self.run_btn, 2, 0, 1, 2)
-        drt_grid.addWidget(theme.make_source_button(self, "DRT deconvolution", formula_sources.DRT_ANALYSIS), 3, 0, 1, 2)
+        drt_grid.addWidget(self.run_btn, 3, 0, 1, 2)
+        drt_grid.addWidget(theme.make_source_button(self, "DRT deconvolution", formula_sources.DRT_ANALYSIS), 4, 0, 1, 2)
+        drt_grid.addWidget(theme.make_source_button(self, "DCT deconvolution", formula_sources.DCT_ANALYSIS), 5, 0, 1, 2)
         drt_section.addLayout(drt_grid)
         self.configure_section.addWidget(drt_section)
 
@@ -363,14 +388,17 @@ class DrtTab(QWidget):
             return
         freq, zre, zim = data
         lambda_reg = self.lambda_spin.value()
+        method = self.method_combo.currentData()
 
-        set_controls_busy([self.run_btn], True, busy_texts={self.run_btn: "Running DRT (may take a few seconds)…"})
-        self.status_label.setText("Running DRT analysis… (window stays responsive)")
+        set_controls_busy([self.run_btn], True,
+                           busy_texts={self.run_btn: f"Running {method.upper()} (may take a few seconds)…"})
+        self.status_label.setText(f"Running {method.upper()} analysis… (window stays responsive)")
 
-        worker = AnalysisWorker(lambda: drt.compute_drt(freq, zre, zim, lambda_reg=lambda_reg))
+        compute_fn = drt.compute_dct if method == "dct" else drt.compute_drt
+        worker = AnalysisWorker(lambda: compute_fn(freq, zre, zim, lambda_reg=lambda_reg))
         self._worker = worker
-        worker.succeeded.connect(self._on_drt_done)
-        worker.failed.connect(lambda msg: QMessageBox.critical(self, "DRT analysis failed", msg))
+        worker.succeeded.connect(self._on_dct_done if method == "dct" else self._on_drt_done)
+        worker.failed.connect(lambda msg: QMessageBox.critical(self, f"{method.upper()} analysis failed", msg))
         worker.finished.connect(self._on_worker_finished)
         worker.start()
 
@@ -455,6 +483,77 @@ class DrtTab(QWidget):
         self.last_raw_df = pd.DataFrame({
             "graph_x_tau_s": result.tau_s,
             "graph_y_gamma_ohm": result.gamma,
+            "within_measured_range": result.within_measured_range,
+        })
+        self.export_btn.setEnabled(True)
+        self.configure_section.set_expanded(True)
+
+    def _on_dct_done(self, result: "drt.DCTResult"):
+        self.plot.ax.clear()
+        measured_tau = result.tau_s[result.within_measured_range]
+        if len(measured_tau) > 0:
+            if result.tau_s[0] < measured_tau[0]:
+                self.plot.ax.axvspan(result.tau_s[0], measured_tau[0], color=theme.INK_DIM, alpha=0.08)
+            if result.tau_s[-1] > measured_tau[-1]:
+                self.plot.ax.axvspan(measured_tau[-1], result.tau_s[-1], color=theme.INK_DIM, alpha=0.08)
+        self.plot.ax.plot(result.tau_s, result.gamma, "-", color=theme.RAW, linewidth=1.5)
+        for peak in result.peaks:
+            style = "--" if peak.within_measured_range else ":"
+            self.plot.ax.axvline(peak.tau_s, color=theme.FIT, linestyle=style, linewidth=0.8, alpha=0.7)
+        self.plot.ax.set_xscale("log")
+        self.plot.ax.set_xlabel("τ (s)  (shaded = beyond measured frequency range)")
+        self.plot.ax.set_ylabel("γ(ln τ) (S)")
+        self.plot.ax.set_title(f"DCT — G0 = {result.g0_s:.4g} S, residual {result.residual_percent:.3g}%")
+        theme.apply_plot_style(self.plot.ax)
+        self.plot.fig.tight_layout()
+        self.plot.draw()
+
+        lines = [
+            f"G0 (zero-frequency conductance) = {result.g0_s:.6g} S",
+            f"C0 (instantaneous/high-frequency capacitance) = {result.c0_f:.6g} F",
+            f"Regularization λ used = {result.lambda_used:.4g}",
+            f"Model residual (RMS % of |Y|) = {result.residual_percent:.4g}%",
+        ]
+        for w in result.warnings:
+            lines.append(f"\n⚠ {w}")
+        lines.append("")
+        lines.append(f"{len(result.peaks)} peak(s) detected:")
+        if not result.peaks:
+            lines.append("  (none found -- try a smaller λ, or check the loaded spectrum has a resolvable feature)")
+        for i, peak in enumerate(result.peaks, 1):
+            extrapolated = "" if peak.within_measured_range else "  [EXTRAPOLATED -- beyond the measured frequency range, less certain]"
+            lines.append(
+                f"\n{i}. τ = {peak.tau_s:.4g} s  (f = {peak.frequency_hz:.4g} Hz),  γ = {peak.gamma:.4g} S{extrapolated}"
+            )
+            lines.append(f"   Region: {peak.region}")
+            lines.append(f"   {peak.explanation}")
+        self.results_text.setPlainText("\n".join(lines))
+
+        self.result_card.set_headline("G0 (zero-frequency conductance)", f"{result.g0_s:.4g} S")
+        self.result_card.set_secondary([
+            ("C0 (instantaneous capacitance)", f"{result.c0_f:.4g} F"),
+            ("Model residual", f"{result.residual_percent:.3g}%"),
+            ("Peaks detected", str(len(result.peaks))),
+        ])
+        self.result_card.set_warnings(result.warnings)
+
+        self.last_result = {
+            "G0, zero-frequency conductance (S)": result.g0_s,
+            "C0, instantaneous capacitance (F)": result.c0_f,
+            "Regularization lambda": result.lambda_used,
+            "Model residual (RMS % of |Y|)": result.residual_percent,
+            "Peaks detected": len(result.peaks),
+        }
+        for i, peak in enumerate(result.peaks, 1):
+            self.last_result[f"Peak {i}: tau (s)"] = peak.tau_s
+            self.last_result[f"Peak {i}: frequency (Hz)"] = peak.frequency_hz
+            self.last_result[f"Peak {i}: gamma (S)"] = peak.gamma
+            self.last_result[f"Peak {i}: region"] = peak.region
+            self.last_result[f"Peak {i}: within measured range"] = peak.within_measured_range
+
+        self.last_raw_df = pd.DataFrame({
+            "graph_x_tau_s": result.tau_s,
+            "graph_y_gamma_s": result.gamma,
             "within_measured_range": result.within_measured_range,
         })
         self.export_btn.setEnabled(True)

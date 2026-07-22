@@ -181,3 +181,35 @@ def test_running_drt_on_one_cycle_uses_only_that_cycles_data():
 
     freq_sel, zre_sel, _ = tab._get_eis_arrays()
     assert len(freq_sel) == 20  # not 40 -- the other cycle's rows are excluded
+
+
+def test_dct_method_selection_runs_dct_and_populates_dct_specific_results():
+    tab = DrtTab()
+    g_inf, gct, tau_yarc, phi = 0.05, 0.2, 1e-3, 0.8
+    freq = np.logspace(4, -3, 60)
+    omega = 2 * np.pi * freq
+    y = g_inf + gct / (1 + (1j * omega * tau_yarc) ** phi)
+    z = 1.0 / y
+    df = pd.DataFrame({"freq": freq, "zre": z.real, "zim": z.imag})
+    tab.df = df
+    for combo, col in [(tab.freq_combo, "freq"), (tab.zre_combo, "zre"), (tab.zim_combo, "zim")]:
+        combo.clear()
+        combo.addItem("-- select --")
+        combo.addItem(col)
+        combo.setCurrentText(col)
+    tab.zim_sign_combo.setCurrentIndex(1)
+    tab.method_combo.setCurrentIndex(tab.method_combo.findData("dct"))
+
+    _run_and_wait(tab)
+
+    assert "DCT" in tab.plot.ax.get_title()
+    assert tab.last_result is not None
+    assert tab.last_result["G0, zero-frequency conductance (S)"] == pytest.approx(g_inf, rel=0.2)
+    assert "C0, instantaneous capacitance (F)" in tab.last_result
+    assert tab.export_btn.isEnabled()
+    assert "graph_y_gamma_s" in tab.last_raw_df.columns
+
+
+def test_drt_method_is_the_default_selection():
+    tab = DrtTab()
+    assert tab.method_combo.currentData() == "drt"

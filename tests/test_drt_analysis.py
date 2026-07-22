@@ -163,3 +163,112 @@ def test_compute_drt_large_residual_produces_a_warning():
     result = drt.compute_drt(freq, zre, zim, lambda_reg=1e-3)
     assert result.residual_percent > 5.0
     assert any("residual is large" in w for w in result.warnings)
+
+
+# ---------------------------------------------------------------- DCT (Distribution of Capacitive Times)
+#
+# DCT is the admittance-domain counterpart to DRT, built for BLOCKING-
+# electrode systems (Py, Maradesa & Ciucci, Electrochimica Acta 479
+# (2024) 143741). Its own closed-form ground truth is the YARC element
+# (the admittance-domain analog of a ZARC): Y(f) = G_inf + Gct/(1+(i*2*
+# pi*f*tau_YARC)^phi). The source paper states the YARC's DCT has the
+# SAME functional form as the ZARC's DRT with Gct substituted for Rct --
+# so analytical_zarc_drt() is reused directly as the YARC's ground-truth
+# DCT rather than needing a second, separately-derived formula.
+
+def test_compute_dct_recovers_g0_and_yarc_peak_position_and_area():
+    g_inf, gct, tau_yarc, phi = 0.05, 0.2, 1e-3, 0.8
+    freq = np.logspace(4, -3, 60)
+    omega = 2 * np.pi * freq
+    y = g_inf + gct / (1 + (1j * omega * tau_yarc) ** phi)
+    z = 1.0 / y
+
+    result = drt.compute_dct(freq, z.real, z.imag, lambda_reg=1e-3)
+
+    assert result.g0_s == pytest.approx(g_inf, rel=0.1)
+    assert result.c0_f == pytest.approx(0.0, abs=1e-6)
+    assert result.residual_percent < 1.0
+
+    assert len(result.peaks) == 1
+    peak = result.peaks[0]
+    assert np.log(peak.tau_s) == pytest.approx(np.log(tau_yarc), abs=0.3)
+
+    # Same "area under gamma d(ln tau) recovers the element's characteristic
+    # magnitude" property compute_drt's ZARC test relies on, here for Gct.
+    area = np.trapezoid(result.gamma, np.log(result.tau_s))
+    assert area == pytest.approx(gct, rel=0.1)
+
+
+def test_compute_dct_requires_at_least_five_points():
+    with pytest.raises(ValueError):
+        drt.compute_dct(np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0]))
+
+
+def test_compute_dct_requires_equal_length_arrays():
+    with pytest.raises(ValueError):
+        drt.compute_dct(np.ones(10), np.ones(9), np.ones(10))
+
+
+def test_compute_dct_raises_on_zero_impedance():
+    freq = np.logspace(4, -2, 10)
+    zre = np.zeros(10)
+    zim = np.zeros(10)
+    with pytest.raises(ValueError):
+        drt.compute_dct(freq, zre, zim)
+
+
+def test_compute_dct_extends_the_collocation_grid_beyond_the_measured_range():
+    g_inf, gct, tau_yarc, phi = 0.05, 0.2, 1e-3, 0.8
+    freq = np.logspace(4, -3, 60)
+    omega = 2 * np.pi * freq
+    y = g_inf + gct / (1 + (1j * omega * tau_yarc) ** phi)
+    z = 1.0 / y
+
+    result = drt.compute_dct(freq, z.real, z.imag, lambda_reg=1e-3)
+
+    assert len(result.tau_s) > len(freq)
+    assert len(result.tau_s) == len(result.gamma) == len(result.within_measured_range)
+    assert len(result.frequency_hz) == len(freq)
+    assert result.within_measured_range.sum() == len(freq)
+
+
+def test_compute_dct_clean_yarc_spectrum_produces_no_warnings():
+    g_inf, gct, tau_yarc, phi = 0.05, 0.2, 1e-3, 0.8
+    freq = np.logspace(4, -3, 60)
+    omega = 2 * np.pi * freq
+    y = g_inf + gct / (1 + (1j * omega * tau_yarc) ** phi)
+    z = 1.0 / y
+
+    result = drt.compute_dct(freq, z.real, z.imag, lambda_reg=1e-3)
+    assert result.warnings == []
+
+
+def test_compute_dct_large_residual_produces_a_warning():
+    freq = np.logspace(4, -2, 40)
+    rng = np.random.default_rng(0)
+    zre = rng.uniform(1, 50, size=len(freq))  # avoid exact zero impedance
+    zim = rng.uniform(-50, 50, size=len(freq))
+    result = drt.compute_dct(freq, zre, zim, lambda_reg=1e-3)
+    assert result.residual_percent > 5.0
+    assert any("residual is large" in w for w in result.warnings)
+
+
+def test_compute_dct_does_not_universally_fix_a_series_topology_blocking_electrode_spectrum():
+    """DCT is a complementary decomposition, not a guaranteed fix for
+    every blocking-electrode spectrum: it fits well when the underlying
+    admittance genuinely has a Maxwell-type (parallel-branches) structure
+    (see the YARC test above), but a spectrum built as a SERIES
+    combination (Rs + a ZARC + a series capacitor -- a Voigt-type
+    topology, exactly what DRT itself is suited for) is not automatically
+    well-represented by DCT's admittance model either. This is expected,
+    honest behavior, not a bug -- documented so a future change doesn't
+    "fix" this test by silently forcing DCT to always report a small
+    residual regardless of whether the data actually supports it."""
+    rs, rct, tau_zarc, phi = 5.0, 15.0, 5e-3, 0.85
+    c_low = 2.0
+    freq = np.logspace(4, -1.5, 60)
+    omega = 2 * np.pi * freq
+    z = rs + rct / (1 + (1j * omega * tau_zarc) ** phi) + 1.0 / (1j * omega * c_low)
+
+    result = drt.compute_dct(freq, z.real, z.imag, lambda_reg=1e-3)
+    assert result.residual_percent > 5.0
