@@ -881,6 +881,7 @@ def _run_origin_send(parent, sheet_prefix: str, results: dict, raw_data, source_
     core.origin_export._plot_worksheet_data), and reports success/
     failure the same way every other action in this app does: a toast
     for success, a clear dialog for failure, never a silent no-op."""
+    was_active = origin_export.is_session_active()
     try:
         result = origin_export.send_to_origin(sheet_prefix, results, raw_data, source_note)
     except origin_export.OriginNotAvailableError as e:
@@ -889,6 +890,28 @@ def _run_origin_send(parent, sheet_prefix: str, results: dict, raw_data, source_
     except Exception as e:
         QMessageBox.critical(parent, "Send to OriginLab failed", str(e))
         return
+    if not was_active:
+        # This send just launched a brand-new Origin session -- Origin's
+        # own COM-automation safety behavior blocks the user from closing
+        # IT directly (its own window X button/File>Exit) while a
+        # controlling client (this app) stays connected, surfacing as
+        # Origin's own "cannot be closed because it is being controlled
+        # by another application" dialog. Reported directly as confusing
+        # -- explained once, right when Origin's window first appears,
+        # rather than leaving the user to discover the workaround (this
+        # app's own "Close Origin session" action, which releases the
+        # COM connection first) only after hitting that dialog.
+        QMessageBox.information(
+            parent, "Origin session started",
+            "Origin/OriginPro just launched, under this app's control.\n\n"
+            "To close Origin WITHOUT closing Supercapacitor Suite, use "
+            "this tab's Export menu -> \"Close Origin session\" -- "
+            "clicking Origin's own window-close (X) button won't work "
+            "directly while this app stays connected to it (Origin will "
+            "refuse with a \"being controlled by another application\" "
+            "message). This app's own close action releases that "
+            "connection first, so Origin closes cleanly either way."
+        )
     if result.graph_error:
         show_toast(
             parent,
