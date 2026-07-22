@@ -61,6 +61,36 @@ def test_plot_worksheet_data_single_prefix_graph_x_y_convention():
     }
 
 
+def test_plot_worksheet_data_separate_fit_x_column_for_curves_like_nyquist_overlays():
+    """A Nyquist plot's fit overlay has its OWN X values (the fitted Z',
+    which differs point-by-point from the measured Z') -- unlike Trasatti/
+    Dunn's/Randles-Sevcik where fit and raw share one independent
+    variable. Reported directly: without a separate fit-x column, the
+    generic fallback (first column = X, every other column = Y) plotted
+    frequency on the X axis with Z_re/Z_im as two unrelated Y line
+    series, instead of the intended Z' vs -Z'' Nyquist shape."""
+    df = pd.DataFrame({
+        "graph_x_z_re_ohm": [10.0, 20.0, 30.0],
+        "graph_y_neg_z_im_ohm": [1.0, 2.0, 0.5],
+        "graph_fit_x_z_re_ohm": [10.1, 19.8, 30.2],
+        "graph_fit_y_neg_z_im_ohm": [1.05, 1.9, 0.6],
+    })
+    col_index = {c: i for i, c in enumerate(df.columns)}
+    op, gl = _mock_origin()
+    wks = MagicMock()
+
+    created = oe._plot_worksheet_data(op, wks, df, col_index, "EIS")
+
+    assert created is True
+    assert op.new_graph.call_count == 1
+    calls = gl.add_plot.call_args_list
+    assert len(calls) == 2
+    raw_call = next(c for c in calls if c.kwargs["coly"] == col_index["graph_y_neg_z_im_ohm"])
+    fit_call = next(c for c in calls if c.kwargs["coly"] == col_index["graph_fit_y_neg_z_im_ohm"])
+    assert raw_call.kwargs["colx"] == col_index["graph_x_z_re_ohm"]
+    assert fit_call.kwargs["colx"] == col_index["graph_fit_x_z_re_ohm"]  # NOT the raw x column
+
+
 def test_plot_worksheet_data_dual_prefix_creates_two_separate_graphs():
     df = pd.DataFrame({
         "outer_graph_x_v": [1, 2], "outer_graph_y_c": [3, 4],

@@ -221,43 +221,59 @@ def _plot_worksheet_data(op, wks, raw_df: pd.DataFrame, col_index_by_name: dict,
     Column-picking rule, cheapest-first:
       1. This app's own "plotted curve" naming convention (used by every
          scan-rate-based analysis tab, e.g. Rate Study's Dunn's/
-         Trasatti's/Randles-Sevcik tools): any column named
-         "graph_x_..." is an X axis, "graph_y_..." / "graph_fit_y_..."
-         columns sharing the SAME prefix (e.g. "outer_graph_x_.../
-         outer_graph_y_...", or no prefix at all for a single-curve tab)
-         are its Y series -- so raw data and its overlaid fit line land
-         on one graph together, and Trasatti's two extrapolations (outer/
-         total) each get their own graph.
+         Trasatti's/Randles-Sevcik tools, and the EIS tab's Nyquist +
+         fit-overlay export): any column named "graph_x_..." is an X
+         axis, "graph_y_..." columns sharing the SAME prefix (e.g.
+         "outer_graph_x_.../outer_graph_y_...", or no prefix at all for a
+         single-curve tab) are its Y series against that X column. A
+         SEPARATE "graph_fit_x_..." may be given for "graph_fit_y_..."
+         columns to plot against instead -- needed whenever the fit
+         curve's own X values genuinely differ from the raw data's X
+         values point-by-point (e.g. a Nyquist plot, where the fitted
+         Z' at each frequency is close to but not identical to the
+         measured Z'; unlike Trasatti/Dunn's/Randles-Sevcik, where the
+         fit is a function of the SAME independent variable as the raw
+         data and can safely share one X column). Falls back to the
+         group's "graph_x_..." column when no "graph_fit_x_..." is given,
+         preserving that existing single-shared-x behavior exactly.
       2. Otherwise (most tabs' plain raw-curve export, e.g. time_s/
-         heat_flow_mw, potential_v/current_a, frequency_hz/z_re_ohm/
-         z_im_ohm): the FIRST column is the X axis, every OTHER numeric
-         column is a Y series on one graph.
+         heat_flow_mw, potential_v/current_a): the FIRST column is the X
+         axis, every OTHER numeric column is a Y series on one graph.
     """
     import re
 
-    graph_x_cols = [c for c in raw_df.columns if "graph_x_" in str(c)]
+    graph_x_cols = [c for c in raw_df.columns if "graph_x_" in str(c) or "graph_fit_x_" in str(c)]
     if graph_x_cols:
-        # Group by whatever prefix precedes "graph_x_" (e.g. "outer_",
-        # "total_", or "" for the single-curve case) -- each group gets
-        # its own graph, sharing that group's X column.
+        # Group by whatever prefix precedes "graph_(x|fit_x)_" (e.g.
+        # "outer_", "total_", or "" for the single-curve case) -- each
+        # group gets its own graph.
         groups: dict[str, dict] = {}
         for c in raw_df.columns:
             name = str(c)
-            m = re.match(r"^(.*?)graph_(x|y|fit_y)_", name)
+            m = re.match(r"^(.*?)graph_(x|y|fit_x|fit_y)_", name)
             if not m:
                 continue
             prefix, kind = m.group(1), m.group(2)
-            g = groups.setdefault(prefix, {"x": None, "ys": []})
+            g = groups.setdefault(prefix, {"x": None, "fit_x": None, "ys": [], "fit_ys": []})
             if kind == "x":
                 g["x"] = name
-            else:
+            elif kind == "fit_x":
+                g["fit_x"] = name
+            elif kind == "y":
                 g["ys"].append(name)
+            else:
+                g["fit_ys"].append(name)
         created = False
         for prefix, g in groups.items():
-            if g["x"] is not None and g["ys"]:
+            series = []
+            if g["x"] is not None:
+                series += [(col_index_by_name[g["x"]], col_index_by_name[y]) for y in g["ys"]]
+            fit_x = g["fit_x"] or g["x"]
+            if fit_x is not None:
+                series += [(col_index_by_name[fit_x], col_index_by_name[y]) for y in g["fit_ys"]]
+            if series:
                 title = f"{sheet_label} — {prefix.rstrip('_')}" if prefix else sheet_label
-                _create_origin_graph(op, wks, col_index_by_name[g["x"]],
-                                      [col_index_by_name[y] for y in g["ys"]], title[:60])
+                _create_origin_graph(op, wks, series, title[:60])
                 created = True
         return created
 
@@ -265,15 +281,20 @@ def _plot_worksheet_data(op, wks, raw_df: pd.DataFrame, col_index_by_name: dict,
     if len(numeric_cols) >= 2:
         x_col = numeric_cols[0]
         y_cols = numeric_cols[1:]
-        _create_origin_graph(op, wks, col_index_by_name[str(x_col)],
-                              [col_index_by_name[str(y)] for y in y_cols], sheet_label[:60])
+        series = [(col_index_by_name[str(x_col)], col_index_by_name[str(y)]) for y in y_cols]
+        _create_origin_graph(op, wks, series, sheet_label[:60])
         return True
     return False
 
 
-def _create_origin_graph(op, wks, x_col_index: int, y_col_indices: list, title: str) -> None:
+def _create_origin_graph(op, wks, series: list[tuple[int, int]], title: str) -> None:
+    """`series` is a list of (x_col_index, y_col_index) pairs -- each
+    pair becomes its own plotted curve on the SAME graph layer, allowing
+    curves with genuinely different X columns (e.g. a Nyquist plot's raw
+    data and its fit overlay) to be overlaid together, not just multiple
+    Y series sharing one X."""
     graph = op.new_graph(template="line", lname=title)
     gl = graph[0]
-    for y_idx in y_col_indices:
-        gl.add_plot(wks, coly=y_idx, colx=x_col_index)
+    for x_idx, y_idx in series:
+        gl.add_plot(wks, coly=y_idx, colx=x_idx)
     gl.rescale()

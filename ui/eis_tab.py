@@ -37,6 +37,8 @@ class EisTab(QWidget):
         self.last_result: dict | None = None
         self.last_raw_df: pd.DataFrame | None = None
         self.batch_df: pd.DataFrame | None = None
+        self._last_fit_spec = None    # circuit_library.CircuitSpec of the most recent fit, for diagram redraws
+        self._last_fit_params: dict | None = None
         # Keep a reference to whichever fit worker is currently running --
         # QThread objects with no live Python reference can be garbage-
         # collected mid-run, which would silently kill the fit.
@@ -371,6 +373,16 @@ class EisTab(QWidget):
         install_undo_redo_shortcuts(self.table, self.on_undo_remove_rows, self.on_redo_remove_rows)
 
         diagram_export_row = QHBoxLayout()
+        self.diagram_values_checkbox = QCheckBox("Show fitted values on diagram")
+        self.diagram_values_checkbox.setChecked(True)
+        self.diagram_values_checkbox.setToolTip(
+            "Uncheck to draw/export just the bare circuit schematic (element "
+            "symbols and topology only) with no fitted numbers on it -- e.g. "
+            "for a publication figure where the values are reported "
+            "separately in a table."
+        )
+        self.diagram_values_checkbox.toggled.connect(self._redraw_circuit_diagram)
+        diagram_export_row.addWidget(self.diagram_values_checkbox)
         self.export_diagram_btn = QPushButton("⬇ Export circuit diagram as image…")
         self.export_diagram_btn.setEnabled(False)
         self.export_diagram_btn.clicked.connect(self.on_export_diagram)
@@ -903,6 +915,8 @@ class EisTab(QWidget):
         # result), so it's intentionally left alone here.
         self.last_result = None
         self.last_raw_df = None
+        self._last_fit_spec = None
+        self._last_fit_params = None
         self.results_text.clear()
         self.result_card.clear()
         if self._bode_twin_ax is not None:
@@ -1063,13 +1077,34 @@ class EisTab(QWidget):
             self.last_result[f"{name} (fitted)"] = val
             if not np.isnan(err):
                 self.last_result[f"{name} (± error)"] = err
-        self.last_raw_df = pd.DataFrame({"frequency_hz": freq, "z_re_ohm": zre, "z_im_ohm": zim})
+        # graph_x_/graph_y_ (raw) and graph_fit_x_/graph_fit_y_ (fit) are
+        # deliberately SEPARATE x columns, not a shared one -- unlike a
+        # scan-rate-vs-metric fit (Trasatti/Dunn's/Randles-Sevcik), a
+        # Nyquist plot's fitted Z' differs point-by-point from the
+        # measured Z', so core.origin_export needs its own x column for
+        # the fit curve to plot the correct Z' vs -Z'' Nyquist shape
+        # (not frequency vs. two unrelated Z_re/Z_im line series, which a
+        # single shared "first column = x" fallback produced).
+        self.last_raw_df = pd.DataFrame({
+            "frequency_hz": freq,
+            "graph_x_z_re_ohm": zre,
+            "graph_y_neg_z_im_ohm": -zim,
+            "graph_fit_x_z_re_ohm": result.z_fit_re,
+            "graph_fit_y_neg_z_im_ohm": -result.z_fit_im,
+        })
         self.export_btn.setEnabled(True)
 
-        spec = circuits.get_circuit(result.model)
-        draw_circuit(self.circuit_diagram.fig, spec, params=result.params)
-        self.circuit_diagram.draw()
+        self._last_fit_spec = circuits.get_circuit(result.model)
+        self._last_fit_params = result.params
+        self._redraw_circuit_diagram()
         self.export_diagram_btn.setEnabled(True)
+
+    def _redraw_circuit_diagram(self):
+        if self._last_fit_spec is None:
+            return
+        params = self._last_fit_params if self.diagram_values_checkbox.isChecked() else None
+        draw_circuit(self.circuit_diagram.fig, self._last_fit_spec, params=params)
+        self.circuit_diagram.draw()
 
     def on_import_multi_files(self):
         if self._fit_worker is not None:
