@@ -14,7 +14,7 @@ neither of two ambiguous shortcuts.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
 from core import origin_export
 from labkit.qt.about import AboutPage
@@ -142,19 +142,33 @@ class ToolPage(QWidget):
         # One tick later the splitters have their real widths.
         QTimer.singleShot(0, self._fit_panes)
 
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        # Re-balance once the window stops changing size, not on every pixel.
+        if not hasattr(self, "_resize_timer"):
+            self._resize_timer = QTimer(self)
+            self._resize_timer.setSingleShot(True)
+            self._resize_timer.setInterval(150)
+            self._resize_timer.timeout.connect(self._fit_panes)
+        self._resize_timer.start()
+
     def _fit_panes(self) -> None:
-        balance_main_splitters(self)
+        if balance_main_splitters(self):
+            QTimer.singleShot(80, self._fit_panes)          # a splitter has no real width yet
         relax_combo_widths(self.tool)
 
     def leaf(self) -> QWidget:
         """The visible tool, descending into the nested sub-tabs of Rate Study, DSC and the
-        calculator, so Ctrl+O / Ctrl+E act on what is actually on screen."""
+        calculator (whose forms sit in scroll areas), so Ctrl+O / Ctrl+E act on what is
+        actually on screen."""
         widget = self.tool
         while widget is not None:
             inner = widget.findChild(QTabWidget)
             if inner is None or inner.currentWidget() is None:
                 break
             widget = inner.currentWidget()
+            if isinstance(widget, QScrollArea) and widget.widget() is not None:
+                widget = widget.widget()
         return widget
 
     def on_open_file(self) -> None:

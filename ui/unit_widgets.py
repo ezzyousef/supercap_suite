@@ -11,7 +11,7 @@ for compound-unit fields like scan rate (V/s) that core.units' single-
 category system can't represent directly -- `.value_base()` returns the
 ratio in the app's base scan-rate unit, V/s.
 """
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QDoubleSpinBox, QComboBox, QLabel
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QDoubleSpinBox, QComboBox, QLabel
 
 from core import units as u
 
@@ -65,16 +65,22 @@ class CompoundRateSpinBox(QWidget):
                  denominator_value: float = 1.0, denominator_unit: str = "s",
                  parent=None):
         super().__init__(parent)
-        layout = QHBoxLayout(self)
+        # Two rows ("50 mV" / "per 1 s") rather than one: side by side the two value-and-unit
+        # boxes were 690 px wide and forced the whole settings panel to scroll sideways.
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
 
         self.numerator = UnitValueSpinBox("voltage", numerator_value, numerator_unit,
                                            decimals=4, minimum=0.000001, maximum=1e6)
         layout.addWidget(self.numerator)
-        layout.addWidget(QLabel("per"))
+        per_row = QHBoxLayout()
+        per_row.setContentsMargins(0, 0, 0, 0)
+        per_row.addWidget(QLabel("per"))
         self.denominator = UnitValueSpinBox("time", denominator_value, denominator_unit,
                                              decimals=4, minimum=0.000001, maximum=1e6)
-        layout.addWidget(self.denominator)
+        per_row.addWidget(self.denominator, 1)
+        layout.addLayout(per_row)
 
     def value_base(self) -> float:
         """Scan rate in V/s (voltage base unit / time base unit)."""

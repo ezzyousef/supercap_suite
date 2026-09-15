@@ -81,6 +81,16 @@ class PlotWidget(FigureCanvas):
         theme.apply_plot_style(self.ax)
         self.draw()
 
+    def resizeEvent(self, event):  # noqa: N802 - Qt naming
+        # The layout was fitted when the plot was drawn; after the canvas is resized the tick
+        # labels at the edges were cut off. Re-fit before the redraw the resize schedules.
+        super().resizeEvent(event)
+        if any(ax.has_data() for ax in self.fig.axes):
+            try:
+                self.fig.tight_layout()
+            except Exception:  # noqa: BLE001 - layout is best effort
+                pass
+
 
 class PlotPanel(QWidget):
     """A PlotWidget with matplotlib's built-in navigation toolbar attached
@@ -105,6 +115,8 @@ class PlotPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         self.canvas = PlotWidget(figsize=figsize)
+        # Below this a plot is unreadable: the results area scrolls instead of squashing it.
+        self.canvas.setMinimumHeight(260)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         layout.addWidget(self.toolbar)
         layout.addWidget(self.canvas)
@@ -431,7 +443,9 @@ class CollapsibleSection(QWidget):
 
         self.body = QWidget()
         self.body_layout = QVBoxLayout(self.body)
-        self.body_layout.setContentsMargins(14, 4, 0, 4)
+        # A small indent: sections nest two deep, and every level's indent is width the
+        # settings panel has to find on a small window.
+        self.body_layout.setContentsMargins(8, 4, 0, 4)
         if not start_expanded:
             # Only call setVisible when it's actually changing anything --
             # a freshly-created child widget is already visible-by-default
@@ -718,7 +732,7 @@ def make_resizable_results_panel(*titled_widgets, sizes: list[int] | None = None
             real_items.append((title, widget))
     for title, widget in real_items:
         splitter.addWidget(_make_collapsible_splitter_pane(splitter, title, widget, start_expanded=True))
-    splitter.setSizes(sizes if sizes else [280, 140, 160][:len(real_items)])
+    splitter.setSizes(sizes if sizes else [360, 130, 160][:len(real_items)])
     return splitter
 
 
@@ -789,6 +803,8 @@ def make_scrollable_panel(widget: QWidget) -> QScrollArea:
     the panel's minimum width -- without it the right-hand edge of the
     panel (buttons, inputs) was silently clipped instead.
     """
+    if widget.layout() is not None:
+        widget.layout().setContentsMargins(4, 4, 8, 4)   # the scroll area already frames it
     scroll = QScrollArea()
     scroll.setWidget(widget)
     scroll.setWidgetResizable(True)
@@ -818,23 +834,41 @@ def relax_combo_widths(root: QWidget, min_chars: int = 12) -> None:
         combo.model().modelReset.connect(widen)
 
 
-def balance_main_splitters(root: QWidget, max_left_fraction: float = 0.46) -> None:
-    """Give each tab's settings pane (left) the width its content needs, up to a share of
-    the window, and the results pane (right) the rest — instead of fixed pixel sizes."""
+def balance_main_splitters(root: QWidget, max_left_fraction: float = 0.6, force: bool = False) -> bool:
+    """Give each tab's settings pane (left) the width its content needs and the results
+    pane (right) the rest, instead of fixed pixel sizes. When the window cannot fit both
+    panels' minimum widths, the shortfall is shared in proportion, so neither side is
+    clipped to nothing.
+
+    A splitter is balanced again only when its width changes a lot (the window was
+    resized), never after the user's own dragging. Returns True when some splitter has not
+    got its real width yet, so the caller can try again a moment later.
+    """
+    pending = False
     for splitter in root.findChildren(QSplitter):
-        if (splitter.property("_balanced") or not splitter.isVisible()
-                or splitter.orientation() != Qt.Orientation.Horizontal or splitter.count() != 2):
+        if (not splitter.isVisible() or splitter.orientation() != Qt.Orientation.Horizontal
+                or splitter.count() != 2):
             continue
         left, right = splitter.widget(0), splitter.widget(1)
         if not (isinstance(left, QScrollArea) and isinstance(right, QScrollArea)) or left.widget() is None:
             continue
         total = splitter.width() - splitter.handleWidth()
         if total < 400:
+            pending = True
             continue
-        need = left.widget().minimumSizeHint().width() + left.verticalScrollBar().sizeHint().width() + 4
-        width = int(max(340, min(need, total * max_left_fraction)))
+        last = splitter.property("_balanced_total")
+        if last is not None and not force and abs(int(last) - total) < 120:
+            continue
+        scrollbar = left.verticalScrollBar().sizeHint().width() + 4
+        need_left = left.widget().minimumSizeHint().width() + scrollbar
+        need_right = right.widget().minimumSizeHint().width() + scrollbar if right.widget() is not None else 0
+        width = min(need_left, int(total * max_left_fraction))
+        if need_left + need_right > total:
+            width = int(total * need_left / (need_left + need_right))
+        width = max(min(340, total // 2), min(width, total - 200))
         splitter.setSizes([width, total - width])
-        splitter.setProperty("_balanced", True)       # once: never undo the user's own dragging
+        splitter.setProperty("_balanced_total", total)
+    return pending
 
 
 def configure_collapsible_main_splitter(splitter: QSplitter) -> None:

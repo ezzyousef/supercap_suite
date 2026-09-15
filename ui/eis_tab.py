@@ -144,8 +144,10 @@ class EisTab(QWidget):
         preview_btn = QPushButton("Load && preview spectrum")
         preview_btn.clicked.connect(self.on_preview)
         col_grid.addWidget(preview_btn, 7, 0, 1, 2)
-        self.bode_checkbox = QCheckBox("Show as Bode plot (|Z| && phase vs. frequency) instead of Nyquist")
+        # Short label: a checkbox cannot wrap, and the long one forced the panel to scroll sideways.
+        self.bode_checkbox = QCheckBox("Show as Bode plot instead of Nyquist")
         self.bode_checkbox.setToolTip(
+            "Bode plot: |Z| and phase against frequency.\n"
             "|Z| = sqrt(Z'^2 + Z''^2), phase = atan2(Z'', Z') -- the standard "
             "alternative EIS view (every commercial EIS tool offers both): "
             "Bode makes frequency-dependent behavior and phase transitions "
@@ -173,7 +175,8 @@ class EisTab(QWidget):
         induct_note.setWordWrap(True)
         induct_note.setObjectName("Hint")
         induct_grid.addWidget(induct_note, 0, 0, 1, 2)
-        self.inductance_checkbox = QCheckBox("Remove inductive loop points (Im(Z) > 0 near the highest frequency)")
+        self.inductance_checkbox = QCheckBox("Remove inductive loop points")
+        self.inductance_checkbox.setToolTip("Removes the points with Im(Z) > 0 near the highest frequency.")
         self.inductance_checkbox.toggled.connect(self._on_inductance_changed)
         induct_grid.addWidget(self.inductance_checkbox, 1, 0, 1, 2)
         self.inductance_status_label = QLabel("")
@@ -315,6 +318,7 @@ class EisTab(QWidget):
         self.plot = PlotPanel()
         show_empty_state(self.plot, "Load an EIS file, then preview, compute, or fit a circuit")
         self.circuit_diagram = PlotWidget(figsize=(5, 2.6))
+        self.circuit_diagram.setMinimumHeight(200)      # a shorter diagram cut off its own title
         self.circuit_diagram.ax.axis("off")
         self.circuit_diagram.ax.set_title("Equivalent circuit diagram (fit a circuit to draw it)",
                                            fontsize=9, color=theme.INK_DIM)
@@ -388,9 +392,13 @@ class EisTab(QWidget):
         self.export_diagram_btn.setEnabled(False)
         self.export_diagram_btn.clicked.connect(self.on_export_diagram)
         diagram_export_row.addWidget(self.export_diagram_btn)
-        diagram_export_row.addWidget(make_maximize_results_button(splitter))
         diagram_export_row.addStretch()
         right_layout.addLayout(diagram_export_row)
+        # On its own row: sharing the diagram row made the results panel 560 px wide.
+        maximize_row = QHBoxLayout()
+        maximize_row.addStretch()
+        maximize_row.addWidget(make_maximize_results_button(splitter))
+        right_layout.addLayout(maximize_row)
 
         self.export_btn = make_export_button(
             self, "EIS", lambda: self.last_result, lambda: self.last_raw_df,

@@ -16,7 +16,7 @@ import pandas as pd
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel,
     QComboBox, QDoubleSpinBox, QSpinBox, QFileDialog, QMessageBox, QGroupBox,
-    QTextEdit, QSplitter, QTabWidget, QDialog, QFormLayout, QDialogButtonBox,
+    QTextEdit, QSplitter, QTabWidget, QDialog, QFormLayout, QDialogButtonBox, QScrollArea,
 )
 from PySide6.QtCore import Qt
 
@@ -37,12 +37,19 @@ class DscTab(QWidget):
     def __init__(self):
         super().__init__()
         root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
         inner = QTabWidget()
         root.addWidget(inner)
         self.water_tool = WaterTypeTool()
         self.enthalpy_tool = EnthalpyTool()
         inner.addTab(self.enthalpy_tool, "Raw curve → peak area / enthalpy")
-        inner.addTab(self.water_tool, "Water-type classification (free / bound)")
+        # The water-type form has no scroll area of its own: on a short window it was squeezed
+        # until its inputs were a few pixels tall.
+        water_scroll = QScrollArea()
+        water_scroll.setWidget(self.water_tool)
+        water_scroll.setWidgetResizable(True)
+        water_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        inner.addTab(water_scroll, "Water-type classification (free / bound)")
 
         # let the enthalpy tool push a computed peak area into the water tool
         self.enthalpy_tool.send_to_water_tool.connect(self.water_tool.receive_peak_area)

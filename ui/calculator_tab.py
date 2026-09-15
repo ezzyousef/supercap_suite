@@ -8,7 +8,7 @@ formula used.
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel,
-    QComboBox, QDoubleSpinBox, QMessageBox, QGroupBox, QTextEdit, QTabWidget
+    QComboBox, QDoubleSpinBox, QMessageBox, QGroupBox, QTextEdit, QTabWidget, QScrollArea
 )
 
 from core import gcd_analysis as gcd
@@ -30,18 +30,29 @@ def _spin(decimals=6, minimum=0.0, maximum=1e9, value=0.0, suffix=""):
     return s
 
 
+def _scrolling(widget: QWidget) -> QScrollArea:
+    """A calculator form in a vertical scroll area: on a short window the form scrolls
+    instead of squeezing its inputs and buttons below their readable height."""
+    scroll = QScrollArea()
+    scroll.setWidget(widget)
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+    return scroll
+
+
 class CalculatorTab(QWidget):
     def __init__(self):
         super().__init__()
         root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
         inner = QTabWidget()
         root.addWidget(inner)
-        inner.addTab(GcdCalculator(), "GCD capacitance")
-        inner.addTab(CvCalculator(), "CV capacitance")
-        inner.addTab(EnergyPowerCalculator(), "Energy / power density")
-        inner.addTab(ConductivityCalculator(), "Ionic conductivity")
-        inner.addTab(ElectrodeConversionCalculator(), "2e ↔ 3e conversions")
-        inner.addTab(EnthalpyCalculator(), "DSC enthalpy (from peak area)")
+        inner.addTab(_scrolling(GcdCalculator()), "GCD capacitance")
+        inner.addTab(_scrolling(CvCalculator()), "CV capacitance")
+        inner.addTab(_scrolling(EnergyPowerCalculator()), "Energy / power density")
+        inner.addTab(_scrolling(ConductivityCalculator()), "Ionic conductivity")
+        inner.addTab(_scrolling(ElectrodeConversionCalculator()), "2e ↔ 3e conversions")
+        inner.addTab(_scrolling(EnthalpyCalculator()), "DSC enthalpy (from peak area)")
 
 
 class GcdCalculator(QWidget):
