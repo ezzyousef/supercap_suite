@@ -50,6 +50,9 @@ publication — capacitance/energy numbers are highly sensitive to
 mass-basis and formula-choice conventions that this app cannot infer for
 you.
 
+**User guide:** `Supercap_Suite_User_Guide.docx` in this folder — every tool step by step, with
+screenshots.
+
 ## Interface (version 2)
 
 The window uses the lab's shared **labkit** interface — the same one as AeroLab Studio and
