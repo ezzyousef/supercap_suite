@@ -50,6 +50,26 @@ publication — capacitance/energy numbers are highly sensitive to
 mass-basis and formula-choice conventions that this app cannot infer for
 you.
 
+## Interface (version 2)
+
+The window uses the lab's shared **labkit** interface — the same one as AeroLab Studio and
+the DV1 Viscosity Logger:
+
+- A **navigation rail** groups the tools: Calculate · Charge storage (GCD, cycling stability,
+  CV, rate study) · Impedance (EIS, DRT) · Thermal (DSC) · Help (How to use, About).
+- **Light and dark themes** (Ctrl+T, or View menu); plots already on screen are recoloured in
+  place.
+- **Command palette** (Ctrl+K), **Ctrl+O** opens a file and **Ctrl+E** opens the export menu
+  of whichever tool (or sub-tool) is on screen, Ctrl+1…9 jump between tools.
+- **Undo / redo** stay per table: Ctrl+X / Ctrl+Y inside a data table or the recorded-results
+  log.
+- **Send to OriginLab** now builds publication-styled graphs: colour-blind-safe palette, data
+  as symbols and fits as lines in the data's colour, axis titles with units (Z′, −Z″, 1/√v…),
+  worksheet long names/units/comments, and the legend placed in the emptiest corner. Save or
+  close the Origin session from the export menu or the File menu.
+
+`python main.py --selftest` checks the whole application without opening a window.
+
 ## Install
 
 Requires Python 3.10+. If you're new to this, use `docs/BEGINNER_SETUP_VSCODE.md` instead of this section.
@@ -108,33 +128,18 @@ supercap_suite/
 
 ## Building a standalone executable / Windows installer
 
-See `docs/BEGINNER_SETUP_VSCODE.md` Step 10 for a beginner-friendly walkthrough. Short version:
-
-```bash
-pip install pyinstaller
-pyinstaller SupercapSuite.spec
-```
-
-This produces a single-file binary (`dist/SupercapSuite.exe` on Windows)
-that bundles Python and every dependency — it needs **nothing** installed
-on the machine it runs on, not even Python. It only builds for the OS you
-run it on — there is no cross-compiling from Linux to a Windows/macOS
-binary; to ship for a different OS, run PyInstaller on a machine with that
-OS installed.
-
-**Windows installer**: `dist/SupercapSuite.exe` alone is already runnable
-on any Windows PC with no install step — just copy the one file. For a
-proper installer instead (Start Menu shortcut, uninstaller, Add/Remove
-Programs entry), install [Inno Setup 6](https://jrsoftware.org/isdl.php)
-(free) once on the build machine, then run:
+See `docs/BEGINNER_SETUP_VSCODE.md` Step 10 for a beginner-friendly walkthrough. Short version
+(Windows, with PyInstaller and [Inno Setup 6](https://jrsoftware.org/isdl.php) installed):
 
 ```powershell
-.\build_installer.ps1
+.\build.ps1
 ```
 
-which builds the exe and compiles `installer/SupercapSuite.iss` into
-`installer/output/SupercapSuiteSetup.exe` — that one file is the complete
-installer; it needs nothing installed on the target PC either.
+This runs the tests, builds `dist\SupercapSuite\` (an onedir build that bundles Python and
+every dependency — nothing needs to be installed on the target PC), runs the built exe's
+`--selftest`, packs a portable zip and compiles `installer\SupercapSuite.iss` into
+`installer\output\SupercapSuiteSetup-<version>.exe` (Start Menu shortcut, uninstaller,
+Add/Remove Programs entry). PyInstaller only builds for the OS it runs on.
 
 ## Using the Manual Calculator tab
 

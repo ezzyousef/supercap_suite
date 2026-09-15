@@ -181,7 +181,7 @@ class _RateColumnMappingDialog(QDialog):
                 "than one block of similarly-named columns), then click OK."
             )
             hint.setWordWrap(True)
-            hint.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+            hint.setObjectName("Hint")
             layout.addRow(hint)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -443,7 +443,7 @@ class CvRateTool(QWidget):
             "the resulting percentages as indicative, not definitive."
         )
         note.setWordWrap(True)
-        note.setStyleSheet(f"color:{theme.INK_DIM}; font-style: italic;")
+        note.setObjectName("Hint")
         left_layout.addWidget(note)
 
         left_layout.addStretch()

@@ -101,7 +101,7 @@ class CyclingStabilityTab(QWidget):
             "same detector used by the GCD tab's auto-detect feature."
         )
         note.setWordWrap(True)
-        note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        note.setObjectName("Hint")
         self.data_section.addWidget(note)
 
         col_section = CollapsibleSection("Column mapping", start_expanded=True)
@@ -123,7 +123,7 @@ class CyclingStabilityTab(QWidget):
             "cycling, may need checking on noisy/asymmetric data)."
         )
         cycle_note.setWordWrap(True)
-        cycle_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        cycle_note.setObjectName("Hint")
         col_grid.addWidget(cycle_note, 3, 0, 1, 2)
         col_section.addLayout(col_grid)
         self.data_section.addWidget(col_section)
@@ -179,7 +179,7 @@ class CyclingStabilityTab(QWidget):
             "above, which always come from the full-resolution analysis."
         )
         downsample_note.setWordWrap(True)
-        downsample_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        downsample_note.setObjectName("Hint")
         downsample_section.addWidget(downsample_note)
 
         downsample_grid = QGridLayout()
@@ -217,7 +217,7 @@ class CyclingStabilityTab(QWidget):
         downsample_section.addLayout(downsample_btn_row)
 
         self.downsample_status_label = QLabel("")
-        self.downsample_status_label.setStyleSheet(f"color: {theme.INK_DIM};")
+        self.downsample_status_label.setObjectName("Hint")
         self.downsample_status_label.setWordWrap(True)
         downsample_section.addWidget(self.downsample_status_label)
 

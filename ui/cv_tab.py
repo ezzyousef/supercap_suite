@@ -115,7 +115,7 @@ class CvTab(QWidget):
             "a single cycle."
         )
         cycle_note.setWordWrap(True)
-        cycle_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        cycle_note.setObjectName("Hint")
         col_grid.addWidget(cycle_note, 4, 0, 1, 2)
 
         col_section.addLayout(col_grid)

@@ -23,7 +23,9 @@
 ; build_installer.ps1, which does both steps).
 
 #define MyAppName "Supercapacitor & DSC Analysis Suite"
-#define MyAppVersion "1.0.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "2.0.0"
+#endif
 #define MyAppPublisher "Ezzeldien Yousef"
 #define MyAppURL "mailto:ezzyousef2@aucegypt.edu"
 #define MyAppExeName "SupercapSuite.exe"

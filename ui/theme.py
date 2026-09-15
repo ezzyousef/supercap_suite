@@ -1,86 +1,83 @@
-"""App-wide visual design system.
+"""App-wide visual design, built on the lab's shared labkit theme (light and dark).
 
-Design brief this implements (see ui_enhancement_prompt.md): a calibrated
-instrument-panel look -- closer to potentiostat/oscilloscope software than
-a consumer SaaS dashboard -- because every number here is a measurement
-result a researcher needs to trust and trace, not a content-app metric.
-Light mode (not a cream/serif "generic AI" light theme, not dark mode).
+The window chrome comes from `labkit.qt.theme.stylesheet`, the same one AeroLab Studio and
+the DV1 Logger use; `extra_stylesheet()` adds the few widgets that exist only here
+(result cards, export/record/source buttons, collapsible section headers).
 
-Palette (6 named colors):
+Colour names kept from the original instrument-panel design, now resolved for the current
+theme every time they are read (`theme.RAW`, `theme.INK`, ...):
 
-    PANEL     #F3F4F6   app background          (instrument bezel, cool light gray)
-    SURFACE   #FFFFFF   panel/card/group-box     (raised control surface)
-    INK       #1B1E22   primary text              (high-contrast on panel)
-    INK_DIM   #5B6472   secondary/label text
-    RAW       #0B72B9   measured / raw-data trace  (blue, "channel 1")
-    FIT       #C4600C   fitted / derived trace     (burnt orange, "channel 2")
-    GOOD      #1E8A4C   in-spec / converged
-    WARN      #C0342B   out-of-spec / non-converged / error
-    GRID      #DEE2E7   plot gridlines & hairlines
+    INK       primary text / dark ink on plots
+    INK_DIM   secondary text, annotations
+    PANEL     plot background
+    SURFACE   raised surface
+    BORDER    spines and hairlines
+    GRID      gridlines
+    RAW       measured / raw-data trace   (palette colour 1 — Okabe–Ito blue in light)
+    FIT       fitted / derived trace       (palette colour 2 — vermillion in light)
+    GOOD      in-spec / converged
+    WARN      out-of-spec / error
 
-RAW vs FIT is the one color pair used consistently everywhere a plot shows
-both a measurement and a model/fit over it (GCD/CV segment vs baseline,
-EIS data vs equivalent-circuit fit, DSC curve vs baseline) -- reinforced
-with line style (solid vs dashed) and marker presence, not color alone, so
-it still reads for colorblind users.
-
-WCAG AA contrast: checked computationally (relative-luminance formula, not
-eyeballed) for every foreground/background pair actually used as text --
-INK/INK_DIM on PANEL/SURFACE, RAW as a link/button-text color, WARN/GOOD as
-text, white button-label text on RAW/GOOD/FIT button backgrounds. All pass
-at minimum the 3.0:1 large-text threshold; INK, INK_DIM, RAW-as-link, and
-WARN-as-text additionally clear the stricter 4.5:1 body-text threshold.
-GOOD/FIT as button-label backgrounds land at 4.0-4.4:1 (large-text tier:
-correct classification since button labels are bold, which WCAG treats as
-"large text" starting at 14pt) -- fine as used (button backgrounds only),
-would need darkening if ever reused as small body-text color.
+RAW vs FIT is reinforced with line style (solid vs dashed) and marker presence, not colour
+alone, so plots still read for colour-blind users. When the theme changes, figures that are
+already drawn are recoloured in place by `restyle_figure` — every artist whose colour is one
+of the old theme's tokens gets the matching token of the new theme.
 """
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter, QColor, QBrush
-from PySide6.QtWidgets import QPushButton, QMessageBox
+from __future__ import annotations
 
-PANEL = "#F3F4F6"
-SURFACE = "#FFFFFF"
-SURFACE_RAISED = "#EAECEF"
-INK = "#1B1E22"
-INK_DIM = "#5B6472"
-RAW = "#0B72B9"
-FIT = "#C4600C"
-GOOD = "#1E8A4C"
-WARN = "#C0342B"
-GRID = "#DEE2E7"
-BORDER = "#C7CCD3"
-ON_ACCENT = "#FFFFFF"
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtWidgets import QMessageBox, QPushButton
 
-# Hover/pressed shades of the three button accent colors (RAW=primary
-# actions, GOOD=export, FIT=record) -- darker on hover, darker still when
-# pressed, so every button gives clear, colored interactive feedback
-# instead of the flat neutral-outline look.
-RAW_HOVER, RAW_PRESSED = "#095E97", "#074A79"
-GOOD_HOVER, GOOD_PRESSED = "#186F3C", "#125730"
-FIT_HOVER, FIT_PRESSED = "#A34F09", "#823F07"
+from labkit.qt.theme import colours as _labkit_colours
+from labkit.style import PALETTES, THEMES
 
-# Lighter tints (gradient tops) for the tactile/3D button and tab treatment
-# -- top-lit, bottom-shaded, like a physical rocker switch on a lab
-# instrument panel rather than a flat SaaS chip.
-RAW_LIGHT = "#2E8FD1"
-GOOD_LIGHT = "#2FA35D"
-FIT_LIGHT = "#DC7B2E"
+AUTHOR_NAME = "Ezzeldien Yousef"
+AUTHOR_EMAIL = "ezzyousef2@aucegypt.edu"
+COPYRIGHT_YEAR = "2026"
 
-# One color per top-level tab, cycled in tab-insertion order (Manual
-# Calculator, GCD, CV, Rate Study, EIS, DSC, About) -- a small colored dot
-# icon per tab (see make_color_dot_icon) so each module reads as its own
-# instrument channel at a glance, the same "channel color" idea as RAW/FIT
-# in the plots, extended to wayfinding. WARN red is deliberately excluded
-# here (reserved for actual out-of-spec/error states, not tab identity).
-TAB_COLORS = [RAW, FIT, "#B8860B", GOOD, "#7A52A6", "#0E8A8A", "#B0407A", INK_DIM]
+UI_FONT_FAMILY = "Segoe UI"
+MONO_FONT_FAMILY = "Consolas"
+
+_mode = "light"
+_TOKEN_NAMES = ("INK", "INK_DIM", "PANEL", "SURFACE", "SURFACE_RAISED", "BORDER", "GRID",
+                "RAW", "FIT", "GOOD", "WARN", "ON_ACCENT")
+
+
+def mode() -> str:
+    return _mode
+
+
+def set_mode(new_mode: str) -> None:
+    global _mode
+    _mode = new_mode if new_mode in ("light", "dark") else "light"
+
+
+def tokens(for_mode: str | None = None) -> dict[str, str]:
+    """Every named colour for a theme."""
+    m = for_mode or _mode
+    c = _labkit_colours(m)
+    palette = PALETTES[THEMES[m].palette]
+    return {
+        "INK": c["fg"], "INK_DIM": c["muted"], "PANEL": c["surface"], "SURFACE": c["surface"],
+        "SURFACE_RAISED": c["raised"], "BORDER": c["border_strong"], "GRID": c["grid"],
+        "RAW": palette[0], "FIT": palette[1], "GOOD": c["good"], "WARN": c["bad"],
+        "ON_ACCENT": "#FFFFFF",
+    }
+
+
+def __getattr__(name: str):
+    # PEP 562: `theme.INK` etc. always answer for the current theme.
+    if name in _TOKEN_NAMES:
+        return tokens()[name]
+    if name == "TAB_COLORS":
+        t = tokens()
+        return [t["RAW"], t["FIT"], "#B8860B", t["GOOD"], "#7A52A6", "#0E8A8A", "#B0407A", t["INK_DIM"]]
+    raise AttributeError(name)
 
 
 def make_color_dot_icon(hex_color: str, size: int = 11) -> QIcon:
-    """A small filled circle icon in `hex_color`, used to give each tab a
-    distinct at-a-glance identity color (Qt style sheets can't target
-    individual QTabBar tabs by position, so this is done as a real icon
-    rather than per-tab CSS)."""
+    """A small filled circle icon in `hex_color`."""
     pix = QPixmap(size, size)
     pix.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pix)
@@ -91,232 +88,81 @@ def make_color_dot_icon(hex_color: str, size: int = 11) -> QIcon:
     painter.end()
     return QIcon(pix)
 
-AUTHOR_NAME = "Ezzeldien Yousef"
-AUTHOR_EMAIL = "ezzyousef2@aucegypt.edu"
-COPYRIGHT_YEAR = "2026"
 
-UI_FONT_FAMILY = "Segoe UI"
-MONO_FONT_FAMILY = "Consolas"
-
-QSS = f"""
-* {{
-    font-family: "{UI_FONT_FAMILY}";
-    color: {INK};
+# ---------------------------------------------------------------------------- stylesheet
+def extra_stylesheet(for_mode: str | None = None) -> str:
+    """Rules for widgets only this application has, appended to labkit's stylesheet."""
+    c = _labkit_colours(for_mode or _mode)
+    return f"""
+/* A dense analysis tool: slightly smaller type and padding than the shared default, so the
+   settings and results panes fit side by side at the default window size. */
+QWidget {{ font-size: 12px; }}
+QPushButton {{ padding: 5px 12px; }}
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{ padding: 4px 8px; }}
+QComboBox {{ padding-right: 26px; }}
+QSpinBox, QDoubleSpinBox {{ padding-right: 26px; }}
+QToolButton#exportButton, QPushButton#exportButton {{
+    background: {c['accent']}; color: #FFFFFF; border: 1px solid {c['accent']};
+    border-radius: 8px; padding: 7px 16px; font-weight: 600;
 }}
-QWidget {{
-    background-color: {PANEL};
+QToolButton#exportButton:hover, QPushButton#exportButton:hover {{ border-color: {c['fg']}; background: {c['accent']}; }}
+QToolButton#exportButton:disabled, QPushButton#exportButton:disabled {{ background: {c['sunken']}; color: {c['disabled']}; border-color: {c['border']}; }}
+QToolButton#exportButton::menu-indicator {{ image: none; width: 0; }}
+QPushButton#recordButton {{ color: {c['accent']}; border: 1px solid {c['accent']}; background: transparent; }}
+QPushButton#recordButton:hover {{ background: {c['hover']}; }}
+QPushButton#sourceButton, QGroupBox QPushButton#sourceButton {{
+    background: transparent; border: none; color: {c['accent']};
+    text-decoration: underline; font-weight: normal; padding: 2px 4px;
 }}
-QMainWindow, QTabWidget::pane {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 #EAF2FA, stop:0.45 {PANEL}, stop:1 #FBF4EC);
-    border: none;
+QPushButton#sourceButton:hover {{ color: {c['fg']}; background: transparent; }}
+QLabel#Hint {{ font-style: italic; }}
+QGroupBox#resultCard {{ border: 1px solid {c['border']}; border-left: 4px solid {c['accent']}; }}
+#ResultTitle {{ color: {c['muted']}; font-size: 12px; font-weight: 600; }}
+#ResultValue {{ color: {c['accent']}; font-size: 26px; font-weight: 700; }}
+#ResultKey {{ color: {c['muted']}; font-size: 11.5px; }}
+#ResultVal {{ color: {c['fg']}; font-size: 12.5px; font-weight: 600; }}
+#ResultWarning {{
+    background: {c['warn_bg']}; color: {c['fg']}; border-left: 3px solid {c['warn']};
+    padding: 6px 8px; border-radius: 4px; font-size: 11.5px;
 }}
-QTabBar::tab {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {SURFACE}, stop:1 {SURFACE_RAISED});
-    color: {INK_DIM};
-    padding: 8px 16px 7px 12px;
-    border: 1px solid {BORDER};
-    border-bottom: none;
-    border-top-left-radius: 5px;
-    border-top-right-radius: 5px;
-    margin-right: 3px;
+QToolButton#SectionToggle {{
+    border: none; font-weight: 650; color: {c['muted']}; padding: 4px 0; background: transparent;
 }}
-QTabBar::tab:hover {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FFFFFF, stop:1 {SURFACE});
-    color: {INK};
-}}
-QTabBar::tab:selected {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {SURFACE}, stop:1 {PANEL});
-    color: {INK};
-    border: 1px solid {BORDER};
-    border-top: 3px solid {RAW};
-    padding-top: 6px;
-    margin-bottom: -1px;
-    font-weight: 600;
-}}
-QGroupBox {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {SURFACE}, stop:1 #F6F7F8);
-    border: 1px solid {BORDER};
-    border-left: 4px solid {RAW};
-    border-radius: 4px;
-    margin-top: 10px;
-    padding-top: 12px;
-    padding-left: 4px;
-    font-weight: 600;
-    color: {INK_DIM};
-}}
-QGroupBox::title {{
-    subcontrol-origin: margin;
-    left: 8px;
-    padding: 0 4px;
-    color: {INK_DIM};
-    letter-spacing: 0.5px;
-}}
-QLabel {{
-    background: transparent;
-}}
-QPushButton {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {RAW_LIGHT}, stop:1 {RAW});
-    border: 1px solid {RAW_PRESSED};
-    border-radius: 4px;
-    padding: 6px 14px;
-    color: {ON_ACCENT};
-    font-weight: 600;
-}}
-QPushButton:hover {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #55B0EA, stop:1 {RAW_HOVER});
-}}
-QPushButton:pressed {{
-    background: {RAW_PRESSED};
-    padding-top: 7px;
-    padding-bottom: 5px;
-}}
-QPushButton:disabled {{
-    background: {SURFACE_RAISED};
-    color: {INK_DIM};
-    border-color: {BORDER};
-}}
-QPushButton#exportButton {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {GOOD_LIGHT}, stop:1 {GOOD});
-    border-color: {GOOD_PRESSED};
-    color: {ON_ACCENT};
-}}
-QPushButton#exportButton:hover {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4FC17E, stop:1 {GOOD_HOVER});
-}}
-QPushButton#exportButton:pressed {{
-    background: {GOOD_PRESSED};
-    padding-top: 7px;
-    padding-bottom: 5px;
-}}
-QPushButton#recordButton {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {FIT_LIGHT}, stop:1 {FIT});
-    border-color: {FIT_PRESSED};
-    color: {ON_ACCENT};
-}}
-QPushButton#recordButton:hover {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #F0A05A, stop:1 {FIT_HOVER});
-}}
-QPushButton#recordButton:pressed {{
-    background: {FIT_PRESSED};
-    padding-top: 7px;
-    padding-bottom: 5px;
-}}
-QPushButton#sourceButton {{
-    background: transparent;
-    border: none;
-    color: {RAW};
-    text-decoration: underline;
-    font-weight: normal;
-    padding: 2px 4px;
-}}
-QPushButton#sourceButton:hover {{
-    background: transparent;
-    color: {RAW_HOVER};
-}}
-QPushButton#sourceButton:pressed {{
-    background: transparent;
-    color: {RAW_PRESSED};
-}}
-QComboBox, QDoubleSpinBox, QSpinBox, QLineEdit {{
-    background-color: {PANEL};
-    border: 1px solid {BORDER};
-    border-radius: 3px;
-    padding: 3px 6px;
-    color: {INK};
-    selection-background-color: {RAW};
-}}
-QComboBox:focus, QDoubleSpinBox:focus, QSpinBox:focus, QLineEdit:focus {{
-    border: 2px solid {RAW};
-    padding: 2px 5px;
-}}
-QComboBox QAbstractItemView {{
-    background-color: {SURFACE};
-    color: {INK};
-    selection-background-color: {RAW};
-    selection-color: {ON_ACCENT};
-}}
-QTextEdit, QPlainTextEdit {{
-    background-color: {PANEL};
-    border: 1px solid {BORDER};
-    border-radius: 3px;
-    color: {INK};
-    font-family: "{MONO_FONT_FAMILY}";
-    font-size: 10.5pt;
-}}
-QTableView {{
-    background-color: {PANEL};
-    alternate-background-color: {SURFACE};
-    gridline-color: {GRID};
-    border: 1px solid {BORDER};
-    font-family: "{MONO_FONT_FAMILY}";
-    selection-background-color: {RAW};
-    selection-color: {ON_ACCENT};
-}}
-QHeaderView::section {{
-    background-color: {SURFACE_RAISED};
-    color: {INK_DIM};
-    padding: 4px;
-    border: 1px solid {BORDER};
-    border-bottom: 2px solid {RAW};
-    font-family: "{UI_FONT_FAMILY}";
-}}
-QTableWidget {{
-    background-color: {PANEL};
-    gridline-color: {GRID};
-    border: 1px solid {BORDER};
-    font-family: "{MONO_FONT_FAMILY}";
-}}
-QListWidget {{
-    background-color: {PANEL};
-    border: 1px solid {BORDER};
-}}
-QSplitter::handle {{
-    background-color: {BORDER};
-}}
-QSplitter::handle:hover {{
-    background-color: {RAW};
-}}
-QScrollBar:vertical, QScrollBar:horizontal {{
-    background: {SURFACE};
-    border: none;
-}}
-QScrollBar::handle {{
-    background: {BORDER};
-    border-radius: 3px;
-}}
-QScrollBar::handle:hover {{
-    background: {RAW};
-}}
-QRadioButton, QCheckBox {{
-    background: transparent;
-    spacing: 6px;
-}}
-QMessageBox {{
-    background-color: {SURFACE};
-}}
+QToolButton#SectionToggle:hover {{ color: {c['fg']}; background: transparent; }}
+QToolButton#SectionClose {{ border: none; color: {c['muted']}; padding: 2px 6px; background: transparent; }}
+QToolButton#SectionClose:hover {{ color: {c['bad']}; background: transparent; }}
+QLabel#GuideText {{ font-size: 13px; }}
+QAbstractScrollArea::corner {{ background: transparent; border: none; }}
 """
 
 
-def apply_theme(app) -> None:
-    app.setStyleSheet(QSS)
+def apply_theme(app, for_mode: str | None = None) -> None:
+    """Style a bare QApplication (used by tests and tools that open a tab on its own)."""
+    from labkit.qt.theme import stylesheet
+    if for_mode:
+        set_mode(for_mode)
+    app.setStyleSheet(stylesheet(_mode) + extra_stylesheet(_mode))
     app.setFont(QFont(UI_FONT_FAMILY, 9))
     apply_matplotlib_rcparams()
 
 
+def set_status_style(label, kind: str) -> None:
+    """Colour a status label good / warn / bad through the stylesheet, so it follows the theme."""
+    label.setObjectName({"good": "GoodText", "warn": "WarnText", "bad": "BadText"}.get(kind, ""))
+    label.style().unpolish(label)
+    label.style().polish(label)
+
+
+# ---------------------------------------------------------------------------- plots
 def apply_matplotlib_rcparams() -> None:
-    """App-wide matplotlib defaults, set once at startup, so every plot
-    that doesn't explicitly override a color (most do, via RAW/FIT/GOOD --
-    but any that don't, e.g. a quick ax.plot() with no color kwarg) still
-    lands on this app's brand palette instead of matplotlib's own default
-    blue/orange cycler, plus consistent DPI/font size matching the rest of
-    the UI's type scale and gridlines at low opacity rather than
-    matplotlib's default heavier ones."""
+    """App-wide matplotlib defaults: the theme's palette as the colour cycle, the UI's type
+    scale, and a light grid."""
     import matplotlib
+    t = tokens()
     matplotlib.rcParams.update({
-        "axes.prop_cycle": matplotlib.cycler(color=[RAW, FIT, GOOD, "#7A52A6", "#B8860B", WARN]),
+        "axes.prop_cycle": matplotlib.cycler(color=list(PALETTES[THEMES[_mode].palette][:6])),
         "figure.dpi": 110,
-        "savefig.dpi": 200,
+        "savefig.dpi": 300,
         "font.size": 9,
         "font.family": "sans-serif",
         "axes.titlesize": 10,
@@ -324,45 +170,180 @@ def apply_matplotlib_rcparams() -> None:
         "xtick.labelsize": 8,
         "ytick.labelsize": 8,
         "legend.fontsize": 8,
-        "grid.alpha": 0.35,
+        "legend.frameon": True,
+        "grid.alpha": 0.6,
         "grid.linewidth": 0.6,
+        "text.color": t["INK"],
+        "axes.labelcolor": t["INK"],
+        "xtick.color": t["INK"],
+        "ytick.color": t["INK"],
     })
 
 
 def apply_plot_style(ax) -> None:
-    """Scientific-instrument plot conventions: inward ticks, minor ticks,
-    a full box (all 4 spines), and a subdued grid -- not default
-    charting-library styling. Call after every ax.clear() + plot, before
-    fig/canvas draw."""
+    """Scientific-instrument plot conventions for the current theme: inward ticks on all four
+    sides, minor ticks, a full box and a subdued grid. Call after every ax.clear() + plot."""
+    t = tokens()
     fig = ax.figure
-    fig.patch.set_facecolor(PANEL)
-    ax.set_facecolor(PANEL)
+    fig.patch.set_facecolor(t["PANEL"])
+    ax.set_facecolor(t["PANEL"])
     for spine in ax.spines.values():
-        spine.set_color(BORDER)
+        spine.set_color(t["BORDER"])
         spine.set_linewidth(0.8)
-    ax.tick_params(axis="both", which="both", direction="in", color=BORDER,
-                    labelcolor=INK, top=True, right=True)
+    ax.tick_params(axis="both", which="both", direction="in", color=t["BORDER"],
+                   labelcolor=t["INK"], top=True, right=True)
     ax.minorticks_on()
-    ax.tick_params(which="minor", direction="in", length=2.5, color=BORDER, top=True, right=True)
+    ax.tick_params(which="minor", direction="in", length=2.5, color=t["BORDER"], top=True, right=True)
     ax.tick_params(which="major", length=4.5)
-    ax.grid(True, color=GRID, linewidth=0.6, alpha=0.7)
+    ax.grid(True, color=t["GRID"], linewidth=0.6, alpha=0.9)
     ax.set_axisbelow(True)
-    ax.xaxis.label.set_color(INK)
-    ax.yaxis.label.set_color(INK)
-    ax.title.set_color(INK)
-    if ax.get_legend() is not None:
-        leg = ax.get_legend()
-        leg.get_frame().set_facecolor(SURFACE)
-        leg.get_frame().set_edgecolor(BORDER)
-        for text in leg.get_texts():
-            text.set_color(INK)
+    ax.xaxis.label.set_color(t["INK"])
+    ax.yaxis.label.set_color(t["INK"])
+    ax.title.set_color(t["INK"])
+    legend = ax.get_legend()
+    if legend is not None:
+        legend.get_frame().set_facecolor(t["SURFACE"])
+        legend.get_frame().set_edgecolor(t["BORDER"])
+        for text in legend.get_texts():
+            text.set_color(t["INK"])
 
 
-def quality_line(label: str, value: float, threshold: float, higher_is_better: bool = True) -> str:
-    """Format a fit-quality metric (R², reduced chi-squared, ...) with a
-    plain-text status word so pass/fail reads without relying on color
-    alone (colorblind-safe; also survives copy-paste into a lab notebook).
+def _colour_map(old_mode: str, new_mode: str) -> dict[str, str]:
+    old, new = tokens(old_mode), tokens(new_mode)
+    mapping: dict[str, str] = {}
+    for name in _TOKEN_NAMES:
+        key = old[name].lower()
+        if key != new[name].lower():
+            mapping.setdefault(key, new[name])
+    return mapping
+
+
+def restyle_figure(fig, new_mode: str | None = None) -> bool:
+    """Recolour an already-drawn figure for `new_mode` (default: the current theme).
+
+    Any artist colour equal to a token of the other theme becomes the same token of the new
+    theme; alpha is kept. Safe to call repeatedly. Returns True when something changed.
     """
+    import matplotlib.colors as mcolors
+    from matplotlib.collections import Collection
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    from matplotlib.text import Text
+
+    new_mode = new_mode or _mode
+    old_mode = "dark" if new_mode == "light" else "light"
+    mapping = _colour_map(old_mode, new_mode)
+    changed = False
+
+    def swap(colour):
+        if colour is None or (isinstance(colour, str) and colour.lower() in ("none", "auto")):
+            return None
+        try:
+            rgba = mcolors.to_rgba(colour)
+        except (ValueError, TypeError):
+            return None
+        target = mapping.get(mcolors.to_hex(rgba, keep_alpha=False).lower())
+        if target is None:
+            return None
+        r, g, b, _a = mcolors.to_rgba(target)
+        return (r, g, b, rgba[3])
+
+    def swap_array(values):
+        out, hit = [], False
+        for value in values:
+            new = swap(value)
+            hit = hit or new is not None
+            out.append(new if new is not None else tuple(value))
+        return out if hit else None
+
+    for artist in fig.findobj():
+        if isinstance(artist, Line2D):
+            for getter, setter in (("get_color", "set_color"),
+                                   ("get_markerfacecolor", "set_markerfacecolor"),
+                                   ("get_markeredgecolor", "set_markeredgecolor")):
+                new = swap(getattr(artist, getter)())
+                if new is not None:
+                    getattr(artist, setter)(new)
+                    changed = True
+        elif isinstance(artist, Text):
+            new = swap(artist.get_color())
+            if new is not None:
+                artist.set_color(new)
+                changed = True
+        elif isinstance(artist, Patch):
+            for getter, setter in (("get_facecolor", "set_facecolor"), ("get_edgecolor", "set_edgecolor")):
+                new = swap(getattr(artist, getter)())
+                if new is not None:
+                    getattr(artist, setter)(new)
+                    changed = True
+        elif isinstance(artist, Collection):
+            for getter, setter in (("get_facecolor", "set_facecolor"), ("get_edgecolor", "set_edgecolor")):
+                values = getattr(artist, getter)()
+                if len(values):
+                    new = swap_array(values)
+                    if new is not None:
+                        getattr(artist, setter)(new)
+                        changed = True
+
+    # Tick parameters: ticks created later (after a zoom) take their colours from here.
+    for ax in fig.axes:
+        for axis in (ax.xaxis, ax.yaxis):
+            for which, kw in (("major", axis._major_tick_kw), ("minor", axis._minor_tick_kw)):
+                updates = {}
+                for key in ("color", "labelcolor", "grid_color"):
+                    if key in kw:
+                        new = swap(kw[key])
+                        if new is not None:
+                            updates[key] = new
+                if updates:
+                    axis.set_tick_params(which=which, **updates)
+                    changed = True
+    return changed
+
+
+def tint_toolbar(toolbar, for_mode: str | None = None) -> None:
+    """Recolour a matplotlib NavigationToolbar's icons for the theme (they are tinted once,
+    from the toolbar palette, when it is built — a stylesheet never reaches them)."""
+    from PySide6.QtGui import QPalette
+
+    m = for_mode or _mode
+    if getattr(toolbar, "_tinted_for", None) == m:
+        return
+    c = _labkit_colours(m)
+    palette = toolbar.palette()
+    for role, key in ((QPalette.Window, "bg"), (QPalette.Button, "bg"),
+                      (QPalette.WindowText, "fg"), (QPalette.ButtonText, "fg")):
+        palette.setColor(role, QColor(c[key]))
+    toolbar.setPalette(palette)
+    actions = getattr(toolbar, "_actions", {})
+    for text, _tip, image, callback in getattr(toolbar, "toolitems", ()):
+        if text and callback in actions and image:
+            try:
+                actions[callback].setIcon(toolbar._icon(image + ".png"))
+            except Exception:                                   # noqa: BLE001 - cosmetic
+                pass
+    toolbar._tinted_for = m
+
+
+def retheme_tree(root, for_mode: str | None = None) -> int:
+    """Restyle every matplotlib canvas and toolbar under `root`. Returns canvases redrawn."""
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
+
+    m = for_mode or _mode
+    redrawn = 0
+    for toolbar in root.findChildren(NavigationToolbar2QT):
+        tint_toolbar(toolbar, m)
+    for canvas in root.findChildren(FigureCanvasQTAgg):
+        if restyle_figure(canvas.figure, m):
+            canvas.draw_idle()
+            redrawn += 1
+    return redrawn
+
+
+# ---------------------------------------------------------------------------- results
+def quality_line(label: str, value: float, threshold: float, higher_is_better: bool = True) -> str:
+    """Format a fit-quality metric (R², reduced chi-squared, ...) with a plain-text status word
+    so pass/fail reads without relying on colour (and survives copy-paste into a notebook)."""
     ok = (value >= threshold) if higher_is_better else (value <= threshold)
     status = "[IN-SPEC]" if ok else "[CHECK]"
     return f"{status} {label} = {value:.5g} (threshold {threshold:.5g})"
@@ -378,12 +359,10 @@ def show_source(parent, title: str, formula_text: str) -> None:
 
 
 def make_source_button(parent, title: str, formula_html: str) -> QPushButton:
-    """A small 'Formula & source' link-style button that pops up the exact
-    equation and literature citation used for a result -- the scientific-
-    integrity requirement that every computed value must show its source,
-    one click away, in the interface itself (not just in docs/EQUATIONS.md).
-    """
-    btn = QPushButton("ⓘ Formula & source")
+    """A small 'Formula & source' link-style button that pops up the exact equation and
+    literature citation used for a result — every computed value shows its source, one click
+    away, in the interface itself (not only in docs/EQUATIONS.md)."""
+    btn = QPushButton("ⓘ Formula && source")
     btn.setObjectName("sourceButton")
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
     btn.clicked.connect(lambda: show_source(parent, title, formula_html))

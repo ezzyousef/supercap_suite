@@ -100,7 +100,7 @@ class DrtTab(QWidget):
             "--\" for a file with a single spectrum."
         )
         cycle_note.setWordWrap(True)
-        cycle_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        cycle_note.setObjectName("Hint")
         col_grid.addWidget(cycle_note, 6, 0, 1, 2)
         col_section.addLayout(col_grid)
         self.data_section.addWidget(col_section)
@@ -114,7 +114,7 @@ class DrtTab(QWidget):
             "an inductance value. Never modifies the loaded file/table."
         )
         induct_note.setWordWrap(True)
-        induct_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        induct_note.setObjectName("Hint")
         induct_grid.addWidget(induct_note, 0, 0, 1, 2)
         self.inductance_checkbox = QCheckBox("Remove inductive loop points (Im(Z) > 0 near the highest frequency)")
         induct_grid.addWidget(self.inductance_checkbox, 1, 0, 1, 2)
@@ -137,7 +137,7 @@ class DrtTab(QWidget):
             "source note)."
         )
         drt_note.setWordWrap(True)
-        drt_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        drt_note.setObjectName("Hint")
         drt_grid.addWidget(drt_note, 0, 0, 1, 2)
 
         self.method_combo = QComboBox()

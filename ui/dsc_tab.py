@@ -200,7 +200,7 @@ class EnthalpyTool(QWidget):
 
         seg_section = CollapsibleSection("Peak region (row range, 0-indexed)", start_expanded=True)
         seg_grid = QGridLayout()
-        auto_detect_btn = QPushButton("Auto-detect peak (position, value & enthalpy)")
+        auto_detect_btn = QPushButton("Auto-detect peak (position, value && enthalpy)")
         auto_detect_btn.setObjectName("recordButton")
         auto_detect_btn.setToolTip(
             "Finds the most prominent peak in the loaded curve automatically "
@@ -273,7 +273,7 @@ class EnthalpyTool(QWidget):
             "literature-verified deconvolution; check it for an unusual peak."
         )
         water_note.setWordWrap(True)
-        water_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        water_note.setObjectName("Hint")
         water_grid.addWidget(water_note, 0, 0, 1, 2)
         self.water_mass_spin = QDoubleSpinBox()
         self.water_mass_spin.setDecimals(6)
@@ -1092,7 +1092,7 @@ class WaterTypeTool(QWidget):
             "your own reference method if precision matters."
         )
         note.setWordWrap(True)
-        note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        note.setObjectName("Hint")
         advanced.addWidget(note)
         root.addWidget(advanced)
 

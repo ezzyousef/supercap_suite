@@ -15,7 +15,11 @@ instead of a fresh Origin window opening every time they click "Send".
 """
 from __future__ import annotations
 from dataclasses import dataclass
+import re
+
 import pandas as pd
+
+from labkit.units import split_label
 
 
 @dataclass
@@ -181,7 +185,8 @@ def send_to_origin(sheet_label: str, result: dict | None, raw_df: pd.DataFrame |
             # Origin's from_list wants a plain Python list, not a pandas
             # Series/ndarray -- and NaN/inf need to survive the round
             # trip as-is rather than raising, so no extra coercion here.
-            wks.from_list(col, series.tolist(), lname=str(col_name))
+            lname, units, comments = column_labels(str(col_name))
+            wks.from_list(col, series.tolist(), lname=lname, units=units, comments=comments)
             col_index_by_name[str(col_name)] = col
             col += 1
 
@@ -213,40 +218,77 @@ def send_to_origin(sheet_label: str, result: dict | None, raw_df: pd.DataFrame |
     return OriginSendResult(sheet_name=wks.name, graph_created=graph_created, graph_error=graph_error)
 
 
+_GRAPH_PREFIX = re.compile(r"^(.*?)graph_(x|y|fit_x|fit_y)_(.*)$")
+
+
+# Quantities whose column names do not read well when split mechanically.
+_PRETTY = {
+    "z_re_ohm": ("Z′", "Ω"),
+    "neg_z_im_ohm": ("−Z″", "Ω"),
+    "sqrt_scan_rate": ("√(scan rate)", ""),
+    "inv_sqrt_scan_rate": ("1/√(scan rate)", ""),
+    "log_scan_rate": ("log(scan rate)", ""),
+    "log_peak_current_abs": ("log|peak current|", ""),
+    "inv_capacitance_g_per_f": ("1/capacitance", "g/F"),
+    "tau_s": ("Relaxation time τ", "s"),
+    "gamma_ohm": ("γ(τ)", "Ω"),
+    "gamma_s": ("γ(τ)", "s"),
+    "capacitive_percent": ("Capacitive contribution", "%"),
+    "diffusive_percent": ("Diffusive contribution", "%"),
+}
+
+
+def column_labels(name: str) -> tuple[str, str, str]:
+    """(long name, units, comment) for a worksheet column.
+
+    "outer_graph_fit_y_capacitance_f_per_g" -> ("Capacitance", "F/g", "Capacitance (outer fit)").
+    The long name and units become Origin's axis titles; the comment is the legend entry
+    (Origin's legendupdate builds entries from Comments).
+    """
+    match = _GRAPH_PREFIX.match(name)
+    if match:
+        prefix, kind, base = match.group(1).rstrip("_").replace("_", " "), match.group(2), match.group(3)
+    else:
+        prefix, kind, base = "", "", name
+    label, units = _PRETTY.get(base) or split_label(base)
+    qualifiers = " ".join(w for w in (prefix, "fit" if kind.startswith("fit") else "") if w)
+    comment = f"{label} ({qualifiers})" if qualifiers else label
+    return label[:60], units[:30], comment[:80]
+
+
+def _series_role(column: str) -> str:
+    lowered = column.lower()
+    if "graph_fit_" in lowered or "fit" in lowered.split("_") or "model" in lowered:
+        return "fit"
+    if "baseline" in lowered:
+        return "guide"
+    return "data"
+
+
 def _plot_worksheet_data(op, wks, raw_df: pd.DataFrame, col_index_by_name: dict, sheet_label: str) -> bool:
-    """Create one or more actual Origin line/scatter graphs from the data
-    just pushed to `wks`, instead of leaving the researcher to build a
-    graph by hand from the raw worksheet every time.
+    """Create one or more styled Origin graphs from the data just pushed to `wks`,
+    instead of leaving the researcher to build a graph by hand every time.
 
     Column-picking rule, cheapest-first:
-      1. This app's own "plotted curve" naming convention (used by every
-         scan-rate-based analysis tab, e.g. Rate Study's Dunn's/
-         Trasatti's/Randles-Sevcik tools, and the EIS tab's Nyquist +
-         fit-overlay export): any column named "graph_x_..." is an X
-         axis, "graph_y_..." columns sharing the SAME prefix (e.g.
-         "outer_graph_x_.../outer_graph_y_...", or no prefix at all for a
-         single-curve tab) are its Y series against that X column. A
-         SEPARATE "graph_fit_x_..." may be given for "graph_fit_y_..."
-         columns to plot against instead -- needed whenever the fit
-         curve's own X values genuinely differ from the raw data's X
-         values point-by-point (e.g. a Nyquist plot, where the fitted
-         Z' at each frequency is close to but not identical to the
-         measured Z'; unlike Trasatti/Dunn's/Randles-Sevcik, where the
-         fit is a function of the SAME independent variable as the raw
-         data and can safely share one X column). Falls back to the
-         group's "graph_x_..." column when no "graph_fit_x_..." is given,
-         preserving that existing single-shared-x behavior exactly.
-      2. Otherwise (most tabs' plain raw-curve export, e.g. time_s/
-         heat_flow_mw, potential_v/current_a): the FIRST column is the X
-         axis, every OTHER numeric column is a Y series on one graph.
-    """
-    import re
+      1. This app's own "plotted curve" naming convention (every scan-rate-based
+         analysis, e.g. Rate Study's Dunn's/Trasatti's/Randles-Sevcik tools, and the
+         EIS tab's Nyquist + fit-overlay export): any column named "graph_x_..." is an
+         X axis, "graph_y_..." columns sharing the SAME prefix (e.g. "outer_graph_x_.../
+         outer_graph_y_...", or no prefix for a single-curve tab) are its Y series. A
+         SEPARATE "graph_fit_x_..." may be given for "graph_fit_y_..." columns to plot
+         against instead -- needed whenever the fit curve's X values differ from the raw
+         data's point by point (a Nyquist fit's Z' is close to, not equal to, the measured
+         Z'). Falls back to the group's "graph_x_..." column when there is no
+         "graph_fit_x_...". Each prefix group gets its own graph.
+      2. Otherwise (most tabs' plain raw-curve export, e.g. time_s/heat_flow_mw): the
+         FIRST numeric column is the X axis, every OTHER numeric column a Y series.
 
+    Graphs follow the lab's publication style (labkit): colour-blind-safe palette, data as
+    symbols, fits as lines in their data colour, axis titles with units, and a legend in
+    the emptiest corner.
+    """
     graph_x_cols = [c for c in raw_df.columns if "graph_x_" in str(c) or "graph_fit_x_" in str(c)]
     if graph_x_cols:
-        # Group by whatever prefix precedes "graph_(x|fit_x)_" (e.g.
-        # "outer_", "total_", or "" for the single-curve case) -- each
-        # group gets its own graph.
         groups: dict[str, dict] = {}
         for c in raw_df.columns:
             name = str(c)
@@ -265,15 +307,17 @@ def _plot_worksheet_data(op, wks, raw_df: pd.DataFrame, col_index_by_name: dict,
                 g["fit_ys"].append(name)
         created = False
         for prefix, g in groups.items():
-            series = []
+            named = []
             if g["x"] is not None:
-                series += [(col_index_by_name[g["x"]], col_index_by_name[y]) for y in g["ys"]]
+                named += [(g["x"], y, "data") for y in g["ys"]]
             fit_x = g["fit_x"] or g["x"]
             if fit_x is not None:
-                series += [(col_index_by_name[fit_x], col_index_by_name[y]) for y in g["fit_ys"]]
-            if series:
+                named += [(fit_x, y, "fit") for y in g["fit_ys"]]
+            if named:
                 title = f"{sheet_label} — {prefix.rstrip('_')}" if prefix else sheet_label
-                _create_origin_graph(op, wks, series, title[:60])
+                _create_origin_graph(op, wks, [(col_index_by_name[x], col_index_by_name[y]) for x, y, _r in named],
+                                     title[:60], raw_df=raw_df, names=[(x, y) for x, y, _r in named],
+                                     roles=[r for _x, _y, r in named])
                 created = True
         return created
 
@@ -282,19 +326,84 @@ def _plot_worksheet_data(op, wks, raw_df: pd.DataFrame, col_index_by_name: dict,
         x_col = numeric_cols[0]
         y_cols = numeric_cols[1:]
         series = [(col_index_by_name[str(x_col)], col_index_by_name[str(y)]) for y in y_cols]
-        _create_origin_graph(op, wks, series, sheet_label[:60])
+        _create_origin_graph(op, wks, series, sheet_label[:60], raw_df=raw_df,
+                             names=[(str(x_col), str(y)) for y in y_cols],
+                             roles=[_series_role(str(y)) for y in y_cols])
         return True
     return False
 
 
-def _create_origin_graph(op, wks, series: list[tuple[int, int]], title: str) -> None:
-    """`series` is a list of (x_col_index, y_col_index) pairs -- each
-    pair becomes its own plotted curve on the SAME graph layer, allowing
-    curves with genuinely different X columns (e.g. a Nyquist plot's raw
-    data and its fit overlay) to be overlaid together, not just multiple
-    Y series sharing one X."""
-    graph = op.new_graph(template="line", lname=title)
+def _base_name(column: str) -> str:
+    match = _GRAPH_PREFIX.match(column)
+    return match.group(3) if match else column
+
+
+def figure_for(raw_df: pd.DataFrame, names, roles, title: str):
+    """A labkit FigureSpec mirroring an Origin graph, so Origin gets the same styles
+    (colour, symbol, fit in its data colour) and legend corner as every other lab figure."""
+    from labkit.figure import FigureSpec
+
+    x_label, x_unit, _ = column_labels(names[0][0])
+    y_label, y_unit, _ = column_labels(names[0][1])
+    spec = FigureSpec(title, x_label, y_label, x_unit=x_unit, y_unit=y_unit)
+    for (x_name, y_name), role in zip(names, roles):
+        x = pd.to_numeric(raw_df[x_name], errors="coerce").to_numpy(dtype=float)
+        y = pd.to_numeric(raw_df[y_name], errors="coerce").to_numpy(dtype=float)
+        if role == "data":
+            # Sparse data as symbols, a dense curve (a DSC scan, a long GCD trace) as a line.
+            style = "line" if len(x) > 200 else ("scatter+line" if len(x) > 60 else "scatter")
+        else:
+            style = "line"
+        spec.add(column_labels(y_name)[2], x, y, role=role, style=style)
+    return spec
+
+
+def _create_origin_graph(op, wks, series: list[tuple[int, int]], title: str, *, raw_df=None,
+                         names=None, roles=None) -> None:
+    """`series` is a list of (x_col_index, y_col_index) pairs -- each becomes its own
+    curve on the SAME graph layer, so curves with genuinely different X columns (a
+    Nyquist plot's data and its fit overlay) can be overlaid, not only Y series sharing
+    one X. With `raw_df`, `names` and `roles` (column names and data/fit/guide) the graph
+    is styled; styling is best effort and never fails the send."""
+    graph = op.new_graph(template="scatter", lname=title)
     gl = graph[0]
-    for x_idx, y_idx in series:
-        gl.add_plot(wks, coly=y_idx, colx=x_idx)
+    spec, styles = None, None
+    if raw_df is not None and names and roles and len(names) == len(series):
+        try:
+            from labkit.figure import resolve_styles
+            spec = figure_for(raw_df, names, roles, title)
+            styles = resolve_styles(spec)
+        except Exception:                                   # noqa: BLE001 - styling is cosmetic
+            spec, styles = None, None
+    for i, (x_idx, y_idx) in enumerate(series):
+        if styles is None:
+            gl.add_plot(wks, coly=y_idx, colx=x_idx)
+            continue
+        dp = gl.add_plot(wks, coly=y_idx, colx=x_idx, type=styles[i].origin_plot_type)
+        if dp is not None:
+            _style_plot(dp, styles[i])
+    if spec is not None:
+        try:
+            gl.axis("x").title = spec.x_axis
+            gl.axis("y").title = spec.y_axis
+        except Exception:                                   # noqa: BLE001
+            pass
     gl.rescale()
+    if spec is not None:
+        try:
+            gl.lt_exec("legendupdate;")
+            if len(series) > 1:
+                from labkit.figure import free_corners
+                from labkit.origin import legend_placement_labtalk
+                graph.activate()
+                op.lt_exec(legend_placement_labtalk(free_corners(spec)[0]))
+        except Exception:                                   # noqa: BLE001
+            pass
+
+
+def _style_plot(dp, style) -> None:
+    from labkit.origin import _style_data_plot
+    try:
+        _style_data_plot(dp, style)
+    except Exception:                                       # noqa: BLE001
+        pass

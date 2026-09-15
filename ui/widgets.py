@@ -176,9 +176,14 @@ class ToastNotification(QWidget):
 
 
 def show_toast(parent, text: str, kind: str = "success") -> None:
-    """Fire-and-forget toast -- the ToastNotification instance manages its
-    own lifetime (auto-closes and self-deletes), so callers don't need to
-    hold a reference."""
+    """Fire-and-forget toast. Inside the main window this is the shell's own toast (stacked,
+    themed, echoed to the status bar); a tab opened on its own falls back to a
+    ToastNotification, which manages its own lifetime."""
+    window = parent.window() if parent is not None else None
+    notify = getattr(window, "notify", None)
+    if callable(notify):
+        notify(text, {"success": "success", "error": "error", "warning": "warning"}.get(kind, "info"))
+        return
     ToastNotification(parent, text, kind)
 
 
@@ -405,10 +410,11 @@ class CollapsibleSection(QWidget):
         self.toggle_btn.setChecked(start_expanded)
         self.toggle_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.toggle_btn.setArrowType(Qt.ArrowType.DownArrow if start_expanded else Qt.ArrowType.RightArrow)
-        self.toggle_btn.setStyleSheet(
-            f"QToolButton {{ border: none; font-weight: 600; color: {theme.INK_DIM}; "
-            f"padding: 4px 0; background: transparent; }}"
-        )
+        self.toggle_btn.setObjectName("SectionToggle")
+        # A long title must not set the whole settings panel's minimum width: it keeps its
+        # full width when there is room and shrinks (eliding) only when there is not.
+        self.toggle_btn.setMinimumWidth(80)
+        self.toggle_btn.setToolTip(title)
         self.toggle_btn.clicked.connect(self._on_toggled)
         header_row.addWidget(self.toggle_btn)
         header_row.addStretch()
@@ -417,10 +423,7 @@ class CollapsibleSection(QWidget):
             close_btn = QToolButton()
             close_btn.setText("✕")
             close_btn.setToolTip(f"Close '{title}' -- right-click anywhere in this panel to bring it back.")
-            close_btn.setStyleSheet(
-                f"QToolButton {{ border: none; color: {theme.INK_DIM}; padding: 2px 6px; "
-                f"background: transparent; }} QToolButton:hover {{ color: {theme.WARN}; }}"
-            )
+            close_btn.setObjectName("SectionClose")
             close_btn.clicked.connect(lambda: self.setVisible(False))
             header_row.addWidget(close_btn)
 
@@ -492,11 +495,11 @@ class ResultCard(QGroupBox):
         layout.setSpacing(6)
 
         self.headline_title = QLabel("")
-        self.headline_title.setStyleSheet(f"color: {theme.INK_DIM}; font-size: 9pt;")
+        self.headline_title.setObjectName("ResultTitle")
         layout.addWidget(self.headline_title)
 
         self.headline_value = QLabel("—")
-        self.headline_value.setStyleSheet(f"color: {theme.RAW}; font-size: 20pt; font-weight: 700;")
+        self.headline_value.setObjectName("ResultValue")
         self.headline_value.setWordWrap(True)
         layout.addWidget(self.headline_value)
 
@@ -530,9 +533,9 @@ class ResultCard(QGroupBox):
                 w.deleteLater()
         for row, (label, value) in enumerate(pairs):
             l = QLabel(label)
-            l.setStyleSheet(f"color: {theme.INK_DIM}; font-size: 8.5pt;")
+            l.setObjectName("ResultKey")
             v = QLabel(value)
-            v.setStyleSheet(f"color: {theme.INK}; font-size: 9.5pt; font-weight: 600;")
+            v.setObjectName("ResultVal")
             v.setWordWrap(True)
             self.secondary_layout.addWidget(l, row, 0)
             self.secondary_layout.addWidget(v, row, 1)
@@ -550,10 +553,7 @@ class ResultCard(QGroupBox):
         for text in warnings:
             strip = QLabel(f"⚠ {text}")
             strip.setWordWrap(True)
-            strip.setStyleSheet(
-                f"background-color: #FDF3E0; color: {theme.INK}; border-left: 3px solid {theme.WARN}; "
-                f"padding: 6px 8px; border-radius: 2px; font-size: 8.5pt;"
-            )
+            strip.setObjectName("ResultWarning")
             self.warning_layout.addWidget(strip)
         self.warning_widget.setVisible(True)
 
@@ -784,16 +784,57 @@ def make_scrollable_panel(widget: QWidget) -> QScrollArea:
     toward its minimumSizeHint to make it fit -- which can compress
     button/label text down to unreadable, cramped controls (observed in
     practice on the EIS tab once its settings panel grew past the
-    window's available height). Only vertical overflow scrolls; the
-    panel keeps its natural width (no horizontal scrollbar) so nothing
-    inside it needs to reflow.
+    window's available height). Vertical overflow scrolls; a horizontal
+    scrollbar appears only when the splitter pane is dragged narrower than
+    the panel's minimum width -- without it the right-hand edge of the
+    panel (buttons, inputs) was silently clipped instead.
     """
     scroll = QScrollArea()
     scroll.setWidget(widget)
     scroll.setWidgetResizable(True)
-    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     scroll.setFrameShape(QScrollArea.Shape.NoFrame)
     return scroll
+
+
+def relax_combo_widths(root: QWidget, min_chars: int = 12) -> None:
+    """Stop combo boxes sizing themselves to their longest item (a long column name or
+    option label otherwise sets the minimum width of the whole settings panel). The closed
+    combo elides; its drop-down list still opens wide enough to read every item."""
+    for combo in root.findChildren(QComboBox):
+        if combo.property("_relaxed"):
+            continue
+        combo.setProperty("_relaxed", True)
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumContentsLength(min_chars)
+
+        def widen(*_args, c=combo):
+            metrics = c.fontMetrics()
+            longest = max((metrics.horizontalAdvance(c.itemText(i)) for i in range(c.count())), default=0)
+            c.view().setMinimumWidth(longest + 48)
+
+        widen()
+        combo.model().rowsInserted.connect(widen)
+        combo.model().modelReset.connect(widen)
+
+
+def balance_main_splitters(root: QWidget, max_left_fraction: float = 0.46) -> None:
+    """Give each tab's settings pane (left) the width its content needs, up to a share of
+    the window, and the results pane (right) the rest — instead of fixed pixel sizes."""
+    for splitter in root.findChildren(QSplitter):
+        if (splitter.property("_balanced") or not splitter.isVisible()
+                or splitter.orientation() != Qt.Orientation.Horizontal or splitter.count() != 2):
+            continue
+        left, right = splitter.widget(0), splitter.widget(1)
+        if not (isinstance(left, QScrollArea) and isinstance(right, QScrollArea)) or left.widget() is None:
+            continue
+        total = splitter.width() - splitter.handleWidth()
+        if total < 400:
+            continue
+        need = left.widget().minimumSizeHint().width() + left.verticalScrollBar().sizeHint().width() + 4
+        width = int(max(340, min(need, total * max_left_fraction)))
+        splitter.setSizes([width, total - width])
+        splitter.setProperty("_balanced", True)       # once: never undo the user's own dragging
 
 
 def configure_collapsible_main_splitter(splitter: QSplitter) -> None:
@@ -1220,10 +1261,7 @@ class RecordLogPanel(QGroupBox):
         close_btn = QToolButton()
         close_btn.setText("✕")
         close_btn.setToolTip("Close this panel -- right-click anywhere in the results area to bring it back.")
-        close_btn.setStyleSheet(
-            f"QToolButton {{ border: none; color: {theme.INK_DIM}; padding: 2px 6px; "
-            f"background: transparent; }} QToolButton:hover {{ color: {theme.WARN}; }}"
-        )
+        close_btn.setObjectName("SectionClose")
         close_btn.clicked.connect(lambda: self.setVisible(False))
         label_row.addWidget(close_btn)
         layout.addLayout(label_row)
@@ -1250,6 +1288,10 @@ class RecordLogPanel(QGroupBox):
         self.save_log_as_btn.setToolTip("Save this comparison table as a brand-new Excel workbook.")
         self.save_log_as_btn.clicked.connect(lambda: self._export_log("new"))
         btn_row.addWidget(self.save_log_as_btn)
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+        # Editing actions on their own row, so the panel fits a narrow results pane.
+        btn_row = QHBoxLayout()
         self.remove_btn = QPushButton("Remove selected row")
         self.remove_btn.setEnabled(False)
         self.remove_btn.clicked.connect(self._remove_selected)
@@ -1274,6 +1316,7 @@ class RecordLogPanel(QGroupBox):
         )
         self.redo_btn.clicked.connect(self._redo)
         btn_row.addWidget(self.redo_btn)
+        btn_row.addStretch(1)
         layout.addLayout(btn_row)
         install_undo_redo_shortcuts(self, self._undo, self._redo)
 

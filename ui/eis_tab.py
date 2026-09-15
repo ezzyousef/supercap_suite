@@ -138,13 +138,13 @@ class EisTab(QWidget):
             "--\" for a file with a single spectrum."
         )
         cycle_note.setWordWrap(True)
-        cycle_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        cycle_note.setObjectName("Hint")
         col_grid.addWidget(cycle_note, 6, 0, 1, 2)
 
-        preview_btn = QPushButton("Load & preview spectrum")
+        preview_btn = QPushButton("Load && preview spectrum")
         preview_btn.clicked.connect(self.on_preview)
         col_grid.addWidget(preview_btn, 7, 0, 1, 2)
-        self.bode_checkbox = QCheckBox("Show as Bode plot (|Z| & phase vs. frequency) instead of Nyquist")
+        self.bode_checkbox = QCheckBox("Show as Bode plot (|Z| && phase vs. frequency) instead of Nyquist")
         self.bode_checkbox.setToolTip(
             "|Z| = sqrt(Z'^2 + Z''^2), phase = atan2(Z'', Z') -- the standard "
             "alternative EIS view (every commercial EIS tool offers both): "
@@ -171,14 +171,14 @@ class EisTab(QWidget):
             "as untouched raw data. Never modifies the loaded file/table."
         )
         induct_note.setWordWrap(True)
-        induct_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        induct_note.setObjectName("Hint")
         induct_grid.addWidget(induct_note, 0, 0, 1, 2)
         self.inductance_checkbox = QCheckBox("Remove inductive loop points (Im(Z) > 0 near the highest frequency)")
         self.inductance_checkbox.toggled.connect(self._on_inductance_changed)
         induct_grid.addWidget(self.inductance_checkbox, 1, 0, 1, 2)
         self.inductance_status_label = QLabel("")
         self.inductance_status_label.setWordWrap(True)
-        self.inductance_status_label.setStyleSheet(f"color: {theme.INK_DIM};")
+        self.inductance_status_label.setObjectName("Hint")
         induct_grid.addWidget(self.inductance_status_label, 2, 0, 1, 2)
         induct_section.addLayout(induct_grid)
         self.data_section.addWidget(induct_section)
@@ -197,7 +197,7 @@ class EisTab(QWidget):
             "loop-cropped data as everything else below."
         )
         kk_note.setWordWrap(True)
-        kk_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        kk_note.setObjectName("Hint")
         kk_grid.addWidget(kk_note, 0, 0, 1, 2)
         kk_btn = QPushButton("▶ Run Kramers-Kronig validity test")
         kk_btn.clicked.connect(self.on_kramers_kronig)
@@ -260,7 +260,7 @@ class EisTab(QWidget):
             "and will often fit toward ~0 (see the source note below)."
         )
         recommend_note.setWordWrap(True)
-        recommend_note.setStyleSheet(f"color: {theme.INK_DIM}; font-style: italic;")
+        recommend_note.setObjectName("Hint")
         fit_grid.addWidget(recommend_note, 0, 0, 1, 2)
 
         self._circuits_by_category = circuits.circuits_by_category()
@@ -343,7 +343,7 @@ class EisTab(QWidget):
         yield_to_event_loop()  # plot/table splitter is the other big chunk -- yield again before the remaining (usually lighter) widgets
 
         table_actions_row = QHBoxLayout()
-        remove_rows_btn = QPushButton("🗑 Remove selected row(s) & redraw")
+        remove_rows_btn = QPushButton("🗑 Remove selected row(s) && redraw")
         remove_rows_btn.setToolTip(
             "Excludes the row(s) currently selected in the table above "
             "(click a row, Shift/Ctrl-click for more) from this file's "
@@ -631,8 +631,7 @@ class EisTab(QWidget):
             QMessageBox.critical(self, "Calculation error", str(e))
             return
         verdict = "PASSED" if result.passed else "FAILED"
-        color = theme.GOOD if result.passed else theme.WARN
-        self.kk_status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+        theme.set_status_style(self.kk_status_label, "good" if result.passed else "bad")
         self.kk_status_label.setText(
             f"Kramers-Kronig test {verdict} -- max residual {result.max_residual_percent:.3g}% "
             f"(mean {result.mean_residual_percent:.3g}%) across {result.num_elements} fitted elements. "

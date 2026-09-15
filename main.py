@@ -2,8 +2,8 @@ import sys
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap, QColor
 from PySide6.QtWidgets import QApplication, QSplashScreen
-from ui.theme import apply_theme, AUTHOR_NAME
-from ui.resources import load_app_icon, asset_path
+from ui.theme import AUTHOR_NAME
+from ui.resources import APP_ID, APP_NAME, APP_VERSION, load_app_icon, asset_path
 
 
 def _set_windows_app_user_model_id() -> None:
@@ -20,7 +20,7 @@ def _set_windows_app_user_model_id() -> None:
     try:
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            "EML.SupercapSuite.AnalysisSuite.1"
+            APP_ID
         )
     except Exception:
         pass
@@ -81,7 +81,8 @@ def _prewarm_heavy_imports(app: QApplication) -> None:
         # more processEvents-separated chunks instead of one that's still
         # ~1-2s long on its own.
         "ui.calculator_tab", "ui.gcd_tab", "ui.cycling_stability_tab", "ui.cv_tab",
-        "ui.rate_study_tab", "ui.eis_tab", "ui.dsc_tab",
+        "ui.rate_study_tab", "ui.eis_tab", "ui.drt_tab", "ui.dsc_tab",
+        "xlsxwriter", "labkit.figure", "labkit.qt.shell",
     ]
     for module_name in modules:
         try:
@@ -92,13 +93,22 @@ def _prewarm_heavy_imports(app: QApplication) -> None:
 
 
 def main():
+    if "--version" in sys.argv:
+        print(f"{APP_NAME} {APP_VERSION}")
+        return
+    if "--selftest" in sys.argv:
+        from selftest import run_selftest
+        sys.exit(run_selftest())
+
     _set_windows_app_user_model_id()
     app = QApplication(sys.argv)
-    app.setApplicationName("Supercapacitor & DSC Analysis Suite")
+    app.setApplicationName(APP_NAME)
     app.setOrganizationName(AUTHOR_NAME)
-    app.setApplicationVersion("1.0.0")
+    app.setApplicationVersion(APP_VERSION)
     app.setWindowIcon(load_app_icon())
-    apply_theme(app)
+    # Fusion draws combo-box popups itself (the native Windows popup can close on the same
+    # click that opened it); the window applies the shared labkit stylesheet on top.
+    app.setStyle("Fusion")
 
     splash = _show_splash(app)
     _prewarm_heavy_imports(app)
