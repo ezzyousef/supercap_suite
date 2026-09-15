@@ -673,6 +673,16 @@ class CvRateTool(QWidget):
             summary += "\n\nSkipped:\n" + "\n".join(f"  - {f}" for f in failures)
         QMessageBox.information(self, "Batch import complete", summary)
 
+    def _reset_single_axes(self):
+        """Clear the plot back to one full-width axes -- needed because
+        on_trasatti() below may leave the figure split into two side-by-
+        side subplots (outer + total extrapolation); every other analysis
+        in this tool draws onto a single axes."""
+        self.plot.fig.clear()
+        ax = self.plot.fig.add_subplot(111)
+        self.plot.canvas.ax = ax
+        return ax
+
     def on_trasatti(self):
         pairs = self.cap_table.get_pairs_base(
             self.cap_table_rate_unit.currentText(), self.cap_table_cap_unit.currentText()
@@ -720,16 +730,42 @@ class CvRateTool(QWidget):
         self.result_card.set_warnings(card_warnings)
 
         inv_sqrt_v = 1.0 / np.sqrt(rates)
-        self.plot.ax.clear()
-        self.plot.ax.scatter(inv_sqrt_v, caps, color=theme.RAW, s=22, label="Q* vs v^-1/2 (data)")
-        fit_line = result.outer_fit_slope * inv_sqrt_v + result.outer_fit_intercept
-        self.plot.ax.plot(inv_sqrt_v, fit_line, "--", color=theme.FIT, linewidth=1.5,
-                           label=f"fit -> Q*_outer={result.outer_capacitance_f_per_g:.3g}")
-        self.plot.ax.set_xlabel("v^-1/2 ((V/s)^-1/2)")
-        self.plot.ax.set_ylabel(f"Capacitance ({unit})")
-        self.plot.ax.set_title("Trasatti outer-capacitance extrapolation")
-        self.plot.ax.legend(fontsize=8)
-        theme.apply_plot_style(self.plot.ax)
+        sqrt_v = np.sqrt(rates)
+        inv_q = 1.0 / caps
+        fit_outer = result.outer_fit_slope * inv_sqrt_v + result.outer_fit_intercept
+        fit_total = result.total_fit_slope * sqrt_v + result.total_fit_intercept
+
+        # Trasatti's method is defined by TWO linear extrapolations, not
+        # one -- draw BOTH as side-by-side subplots: the "outer" plot
+        # (Q* vs v^-1/2, extrapolated to v->inf) AND the "total" plot
+        # (1/Q* vs v^0.5, extrapolated to v->0). This tab used to only
+        # ever draw the first one on screen even though both were always
+        # computed and exported -- fixed so the on-screen plot matches
+        # what "export"/"Send to OriginLab" actually produce (two graphs).
+        self.plot.fig.clear()
+        ax_outer = self.plot.fig.add_subplot(1, 2, 1)
+        ax_total = self.plot.fig.add_subplot(1, 2, 2)
+        self.plot.canvas.ax = ax_outer  # keep self.plot.ax meaningful for any other code path
+
+        ax_outer.scatter(inv_sqrt_v, caps, color=theme.RAW, s=22, label="Q* vs v^-1/2 (data)")
+        ax_outer.plot(inv_sqrt_v, fit_outer, "--", color=theme.FIT, linewidth=1.5,
+                      label=f"fit -> Q*_outer={result.outer_capacitance_f_per_g:.3g}")
+        ax_outer.set_xlabel("v^-1/2 ((V/s)^-1/2)")
+        ax_outer.set_ylabel(f"Capacitance ({unit})")
+        ax_outer.set_title("Outer extrapolation (v → ∞)")
+        ax_outer.legend(fontsize=7)
+        theme.apply_plot_style(ax_outer)
+
+        ax_total.scatter(sqrt_v, inv_q, color=theme.RAW, s=22, label="1/Q* vs v^1/2 (data)")
+        ax_total.plot(sqrt_v, fit_total, "--", color=theme.FIT, linewidth=1.5,
+                      label=f"fit -> Q*_total={result.total_capacitance_f_per_g:.3g}")
+        ax_total.set_xlabel("v^1/2 ((V/s)^1/2)")
+        ax_total.set_ylabel(f"1/Capacitance (1/{unit})")
+        ax_total.set_title("Total extrapolation (v → 0)")
+        ax_total.legend(fontsize=7)
+        theme.apply_plot_style(ax_total)
+
+        self.plot.fig.suptitle("Trasatti outer/total capacitance extrapolation", fontsize=10)
         self.plot.fig.tight_layout()
         self.plot.draw()
 
@@ -740,20 +776,11 @@ class CvRateTool(QWidget):
             "Outer fraction of total (%)": result.outer_fraction_percent,
             "Inner fraction of total (%)": result.inner_fraction_percent,
         }
-        # Trasatti's method is defined by TWO linear extrapolations, not
-        # one -- the "outer" plot (Q* vs v^-1/2, extrapolated to v->inf)
-        # drawn above, AND a "total" plot (1/Q* vs v^0.5, extrapolated to
-        # v->0) that trasatti_analysis() already computes
-        # (total_fit_slope/intercept) but this tab has only ever plotted
-        # the first one on screen. Export both graphs' exact X/Y (data
-        # points AND fit line) here so "export" gives the complete
-        # Trasatti calculation, not just the raw (rate, capacitance)
-        # input pairs -- same column-count convenience the outer/total
-        # split already gets in the results text/card above.
-        sqrt_v = np.sqrt(rates)
-        inv_q = 1.0 / caps
-        fit_outer = result.outer_fit_slope * inv_sqrt_v + result.outer_fit_intercept
-        fit_total = result.total_fit_slope * sqrt_v + result.total_fit_intercept
+        # Export both graphs' exact X/Y (data points AND fit line) here
+        # so "export"/"Send to OriginLab" gives the complete Trasatti
+        # calculation (two separate graphs, via the outer_/total_ column
+        # prefix convention _plot_worksheet_data groups on), not just the
+        # raw (rate, capacitance) input pairs.
         self.last_raw_df = pd.DataFrame({
             "scan_rate_v_per_s": rates,
             "capacitance_f_per_g": caps,
@@ -798,7 +825,7 @@ class CvRateTool(QWidget):
         self.result_card.set_secondary([("Interpretation", interp)])
         self.result_card.set_warnings([])
 
-        self.plot.ax.clear()
+        self._reset_single_axes()
         self.plot.ax.scatter(result.log_scan_rates, result.log_peak_currents, color=theme.RAW, s=22, label="data")
         fit_line = result.b_value * result.log_scan_rates + result.fit_intercept
         self.plot.ax.plot(result.log_scan_rates, fit_line, "--", color=theme.FIT, linewidth=1.5,
@@ -878,7 +905,7 @@ class CvRateTool(QWidget):
         ])
         self.result_card.set_warnings([])
 
-        self.plot.ax.clear()
+        self._reset_single_axes()
         self.plot.ax.plot(result.scan_rates_v_per_s, result.capacitive_percent, "o-",
                            color=theme.RAW, linewidth=1.5, markersize=5, label="Capacitive %")
         self.plot.ax.plot(result.scan_rates_v_per_s, result.diffusive_percent, "s--",
@@ -955,7 +982,7 @@ class CvRateTool(QWidget):
 
         sqrt_v = np.sqrt(rates)
         fit_line = result["slope_a_per_sqrt_vs"] * sqrt_v + (np.mean(peaks) - result["slope_a_per_sqrt_vs"] * np.mean(sqrt_v))
-        self.plot.ax.clear()
+        self._reset_single_axes()
         self.plot.ax.scatter(sqrt_v, peaks, color=theme.RAW, s=22, label="I_p vs √v (data)")
         self.plot.ax.plot(sqrt_v, fit_line, "--", color=theme.FIT, linewidth=1.5,
                            label=f"fit -> D={result['diffusion_coefficient_cm2_per_s']:.3g} cm²/s")
