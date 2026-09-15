@@ -293,7 +293,9 @@ class AppShell(QMainWindow):
                 label.setObjectName("NavSection")
                 self._rail_layout.addWidget(label)
                 last_section = entry.section
-            btn = QPushButton(f"  {entry.glyph}   {entry.title}")
+            # "&" would otherwise become a keyboard mnemonic ("Sources & references" showed
+            # as "Sources _references").
+            btn = QPushButton(f"  {entry.glyph}   {entry.title.replace('&', '&&')}")
             btn.setObjectName("NavButton")
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
@@ -327,7 +329,7 @@ class AppShell(QMainWindow):
             self.action_redo = self.add_menu_action("&Edit", "&Redo", self.redo, QKeySequence.Redo)
         for key in self._order:
             entry = self._pages[key]
-            self.add_menu_action("&View", entry.title, lambda k=key: self.go_to(k))
+            self.add_menu_action("&View", entry.title.replace("&", "&&"), lambda k=key: self.go_to(k))
         self.add_menu_separator("&View")
         self.add_menu_action("&View", "Toggle light / dark theme", self.toggle_theme, "Ctrl+T")
         self.add_menu_action("&View", "Command palette…", self.show_palette, "Ctrl+K")

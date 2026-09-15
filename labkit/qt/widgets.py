@@ -224,21 +224,24 @@ class Toast(QFrame):
 
 
 class ToastHost(QWidget):
-    """Stacks toasts in the corner of the window and expires them."""
+    """Stacks toasts in the corner of the window and expires them.
+
+    Toasts are placed explicitly, each at the height its text needs for its width. A layout
+    sized from sizeHint ignores word-wrapped text, so a two-line toast was given one line's
+    height and the stack overlapped on a real window manager.
+    """
+
+    SPACING = 8
+    MAX_WIDTH = 460
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(8)
-        self._layout.addStretch(1)
         self._toasts: list[Toast] = []
         self._repositioning = False
 
     def show_message(self, message: str, level: str = "info", msec: int = 4200) -> None:
         toast = Toast(message, level, self)
-        self._layout.addWidget(toast, 0, Qt.AlignRight | Qt.AlignBottom)
         self._toasts.append(toast)
         toast.show()
 
@@ -257,7 +260,7 @@ class ToastHost(QWidget):
         if toast not in self._toasts:
             return
         self._toasts.remove(toast)
-        self._layout.removeWidget(toast)
+        toast.hide()
         toast.deleteLater()
         self._reposition()
 
@@ -272,12 +275,21 @@ class ToastHost(QWidget):
             return
         self._repositioning = True
         try:
-            self.adjustSize()
-            width = max(self.sizeHint().width(), 320)
-            height = max(self.sizeHint().height(), 1)
+            limit = min(self.MAX_WIDTH, max(parent.width() - 52, 200))
+            sizes = []
+            for toast in self._toasts:
+                w = min(max(toast.sizeHint().width(), 220), limit)
+                h = toast.heightForWidth(w) if toast.hasHeightForWidth() else toast.sizeHint().height()
+                sizes.append((w, max(h, toast.minimumSizeHint().height(), 1)))
+            width = max((w for w, _h in sizes), default=320)
+            height = max(sum(h for _w, h in sizes) + self.SPACING * max(len(sizes) - 1, 0), 1)
             target = (parent.width() - width - 26, parent.height() - height - 46, width, height)
             if (self.x(), self.y(), self.width(), self.height()) != target:
                 self.setGeometry(*target)
+            y = 0
+            for toast, (w, h) in zip(self._toasts, sizes):      # oldest at the top
+                toast.setGeometry(width - w, y, w, h)
+                y += h + self.SPACING
             self.raise_()
         finally:
             self._repositioning = False
