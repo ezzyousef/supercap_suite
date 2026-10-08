@@ -41,9 +41,17 @@ jobs:
             choco install innosetup -y --no-progress
           }
 
-      - name: Build (tests, exe, self-test, zip, installer)
+      - name: Tests
         shell: pwsh
-        run: ./build.ps1
+        run: |
+          python -X faulthandler -m pytest tests -q -p no:cacheprovider
+          $code = $LASTEXITCODE
+          Write-Host "pytest exit code: $code"
+          exit $code
+
+      - name: Build (exe, self-test, zip, installer)
+        shell: pwsh
+        run: ./build.ps1 -SkipTests
 
       - name: Check the outputs exist
         shell: pwsh

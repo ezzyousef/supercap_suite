@@ -49,7 +49,13 @@ class AnalysisWorker(QThread):
         # Keep a reference until the thread ends: a QThread destroyed while running
         # aborts the whole process (e.g. closing the window during an auto-fit).
         _LIVE.add(self)
-        self.finished.connect(lambda: _LIVE.discard(self))
+        # A bound slot, not a lambda: a lambda capturing self would tie the worker into
+        # a reference cycle that is only broken at interpreter shutdown, after the
+        # QApplication is gone -- destroying Qt objects then can crash on Windows.
+        self.finished.connect(self._forget)
+
+    def _forget(self):
+        _LIVE.discard(self)
 
     def run(self):
         try:
