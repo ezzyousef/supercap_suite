@@ -225,7 +225,7 @@ class DrtTab(QWidget):
         # usable size now that the right panel is wrapped in a scroll
         # area (see make_scrollable_panel(right) below) -- a too-short
         # window scrolls instead of shrinking the plot to a sliver.
-        results_splitter.setMinimumHeight(600)
+        results_splitter.setMinimumHeight(740)
         right_layout.addWidget(results_splitter, stretch=1)
         yield_to_event_loop()
 

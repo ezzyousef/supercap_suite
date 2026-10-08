@@ -71,13 +71,13 @@ Status:
 | Exporting into an existing workbook split the note and the table across two sheets | **fixed**: export notes also carry a timestamp |
 | Appending to a recorded-results sheet with a note corrupted the header | **fixed** |
 | The status bar kept another page's message | **fixed** |
-| EIS/DRT result panels needed 840/740 px of height | **fixed**: 600 px |
+| EIS/DRT result panels needed 840/740 px of height | **not changed**: lowering them to 600 px was tried and squashed the plot to a sliver at 1440×900, so the original heights were restored; the panel scrolls instead |
 | (found by the Windows build) The test run crashed at exit on Windows now and then, already before this review: tests left widgets for Python to destroy after the QApplication | **fixed**: every test now deletes its widgets while the application exists; background workers no longer sit in a reference cycle |
 
 ## Release
 
 - Version 2.1.0. The Word guide was updated: version, the changed passages, and a
-  What's-new section. Its screenshots are still those of 2.0.0.
+  What's-new section. Its screenshots were retaken from version 2.1.0 (the OriginLab figure is unchanged).
 - The Windows installer and portable zip are built by `.github/workflows/windows-build.yml`
   (tests, PyInstaller, self-test of the exe, Inno Setup) and downloadable from each run.
 

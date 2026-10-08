@@ -343,7 +343,7 @@ class EisTab(QWidget):
         # usable size now that the right panel is wrapped in a scroll
         # area (see make_scrollable_panel(right) below) -- a too-short
         # window scrolls instead of shrinking the plot to a sliver.
-        results_splitter.setMinimumHeight(600)
+        results_splitter.setMinimumHeight(840)
         right_layout.addWidget(results_splitter, stretch=1)
         yield_to_event_loop()  # plot/table splitter is the other big chunk -- yield again before the remaining (usually lighter) widgets
 
