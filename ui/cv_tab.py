@@ -15,6 +15,7 @@ from PySide6.QtCore import Qt
 from core.data_io import load_data_file, list_excel_sheets, find_column, DataLoadError
 from core import cv_analysis as cv
 from .widgets import (
+    invalidate_results, for_current_data,
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
     make_scrollable_panel, ResultCard, CollapsibleSection, NormalizationSelector, show_toast, show_empty_state,
@@ -288,6 +289,7 @@ class CvTab(QWidget):
         except DataLoadError as e:
             QMessageBox.critical(self, "Error loading file", str(e))
             return
+        invalidate_results(self)
         if isinstance(df, dict):
             df = list(df.values())[0]
         self.df = df
@@ -304,8 +306,15 @@ class CvTab(QWidget):
             self.voltage_combo.setCurrentText(v_guess)
         if i_guess:
             self.current_combo.setCurrentText(i_guess)
-            if "ma" in i_guess.lower():
+            # Always set the unit from the new file's header -- otherwise "mA" from the
+            # previous file stays selected and an amp-valued column is read 1000x too small.
+            low = i_guess.lower()
+            if "ma" in low:
                 self.current_unit_combo.setCurrentText("mA")
+            elif "µa" in low or "ua" in low or "μa" in low:
+                self.current_unit_combo.setCurrentText("µA")
+            else:
+                self.current_unit_combo.setCurrentText("A")
 
         self.cycle_col_combo.blockSignals(True)
         self.cycle_col_combo.clear()

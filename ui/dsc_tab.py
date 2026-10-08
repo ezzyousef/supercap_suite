@@ -25,6 +25,7 @@ from core.data_io import (
 )
 from core import dsc_analysis as dsc
 from .widgets import (
+    invalidate_results, for_current_data,
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
     make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
@@ -168,8 +169,17 @@ class EnthalpyTool(QWidget):
         col_grid.addWidget(self.x_combo, 0, 1)
         col_grid.addWidget(QLabel("X axis is:"), 1, 0)
         col_grid.addWidget(self.x_type_combo, 1, 1)
-        col_grid.addWidget(QLabel("Heat flow column (mW):"), 2, 0)
+        col_grid.addWidget(QLabel("Heat flow column:"), 2, 0)
         col_grid.addWidget(self.y_combo, 2, 1)
+        self.heat_unit_combo = QComboBox()
+        self.heat_unit_combo.addItems(list(dsc.HEAT_FLOW_UNITS))
+        self.heat_unit_combo.setToolTip(
+            "Unit of the heat-flow column, read from its header when it says. Everything is "
+            "converted to mW before integrating; a mass-normalised signal (W/g = mW/mg) is "
+            "multiplied by the sample mass entered under Configure.")
+        col_grid.addWidget(QLabel("Heat flow unit:"), 4, 0)
+        col_grid.addWidget(self.heat_unit_combo, 4, 1)
+        self.y_combo.currentTextChanged.connect(self._guess_heat_unit)
         self.temp_col_combo = QComboBox()
         self.temp_col_combo.setToolTip(
             "Only needed for the water-type breakdown below, and only if "
@@ -445,6 +455,7 @@ class EnthalpyTool(QWidget):
         except DataLoadError as e:
             QMessageBox.critical(self, "Error loading file", str(e))
             return
+        invalidate_results(self)
         if isinstance(df, dict):
             df = list(df.values())[0]
         self.df = df
@@ -487,6 +498,9 @@ class EnthalpyTool(QWidget):
                 self.x_type_combo.setCurrentIndex(1 if "temp" in str(numeric_cols[0]).lower() else 0)
             if self.y_combo.currentIndex() == 0 and len(numeric_cols) >= 2:
                 self.y_combo.setCurrentText(str(numeric_cols[1]))
+
+        unit_guess = dsc.guess_heat_flow_unit(self.y_combo.currentText())
+        self.heat_unit_combo.setCurrentText(unit_guess or "mW")
 
         self.table_model.set_dataframe(df.head(500))
         self.end_spin.setMaximum(max(0, len(df) - 1))
@@ -555,6 +569,17 @@ class EnthalpyTool(QWidget):
             except (ValueError, TypeError):
                 failures.append(f"{fname}: selected columns are not numeric, skipped")
                 continue
+
+            # Masses first: a mass-normalised heat flow needs the sample mass to become mW.
+            dlg = _DscBatchMassDialog(self, fname)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                failures.append(f"{fname}: mass entry cancelled, skipped")
+                continue
+            sample_mass = dlg.sample_mass_spin.value()
+            water_mass = dlg.water_mass_spin.value()
+            dry_mass = dlg.dry_mass_spin.value()
+            heat_unit = dsc.guess_heat_flow_unit(y_col) or "mW"
+            y = dsc.heat_flow_to_mw(y, heat_unit, sample_mass)
 
             valid = ~(np.isnan(x) | np.isnan(y))
             if not np.any(valid):
@@ -625,14 +650,6 @@ class EnthalpyTool(QWidget):
                     symmetry = dsc.symmetric_and_total_peak_areas(t_win, y_win, baseline, local_peak_idx, 0, len(t_win) - 1)
                 except ValueError:
                     symmetry = None
-
-            dlg = _DscBatchMassDialog(self, fname)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
-                failures.append(f"{fname}: mass entry cancelled, skipped")
-                continue
-            sample_mass = dlg.sample_mass_spin.value()
-            water_mass = dlg.water_mass_spin.value()
-            dry_mass = dlg.dry_mass_spin.value()
 
             try:
                 dh = dsc.enthalpy_j_per_g(area_j, sample_mass)
@@ -723,6 +740,11 @@ class EnthalpyTool(QWidget):
         except (ValueError, TypeError):
             QMessageBox.critical(self, "Data error", "Selected columns are not numeric.")
             return None
+        try:
+            y = dsc.heat_flow_to_mw(y, self.heat_unit_combo.currentText(), self.mass_spin.value())
+        except ValueError as e:
+            QMessageBox.critical(self, "Heat-flow unit", str(e))
+            return None
 
         x_is_temp = self.x_type_combo.currentIndex() == 1
         temp_col = self.temp_col_combo.currentText()
@@ -785,16 +807,29 @@ class EnthalpyTool(QWidget):
         temp_slice = temp[start:end + 1] if temp is not None else None
         return t[start:end + 1], y[start:end + 1], temp_slice
 
+    def _guess_heat_unit(self, column: str) -> None:
+        unit = dsc.guess_heat_flow_unit(column)
+        if unit:
+            self.heat_unit_combo.setCurrentText(unit)
+
+    def _plot_axis(self, t, temp):
+        """Plot against temperature when the file's X axis is temperature: the time axis
+        used for integration is derived from it and means little to the reader."""
+        if self.x_type_combo.currentIndex() == 1 and temp is not None and len(temp) == len(t):
+            return temp, "Temperature (°C)"
+        return t, "Time (s)"
+
     def on_preview(self):
         data = self._get_time_and_heatflow()
         if data is None:
             return
         t, y, _temp = data
         baseline = dsc.linear_baseline(t, y, 0, len(t) - 1, anchor_avg_points=self.baseline_avg_spin.value())
+        xs, xlabel = self._plot_axis(t, _temp)
         self.plot.ax.clear()
-        self.plot.ax.plot(t, y, "-", color=theme.RAW, linewidth=1.3, label="Heat flow (raw)")
-        self.plot.ax.plot(t, baseline, "--", color=theme.FIT, linewidth=1.3, label="Linear baseline")
-        self.plot.ax.set_xlabel("Time (s)")
+        self.plot.ax.plot(xs, y, "-", color=theme.RAW, linewidth=1.3, label="Heat flow (raw)")
+        self.plot.ax.plot(xs, baseline, "--", color=theme.FIT, linewidth=1.3, label="Linear baseline")
+        self.plot.ax.set_xlabel(xlabel)
         self.plot.ax.set_ylabel("Heat flow (mW)")
         self.plot.ax.legend(fontsize=8)
         theme.apply_plot_style(self.plot.ax)
@@ -1022,11 +1057,12 @@ class EnthalpyTool(QWidget):
         self.result_card.set_secondary(card_secondary)
         self.result_card.set_warnings(card_warnings)
 
+        xs, xlabel = self._plot_axis(t, temp)
         self.plot.ax.clear()
-        self.plot.ax.plot(t, y, "-", color=theme.RAW, linewidth=1.3, label="Heat flow (raw)")
-        self.plot.ax.plot(t, baseline, "--", color=theme.FIT, linewidth=1.3, label="Baseline")
-        self.plot.ax.fill_between(t, y, baseline, alpha=0.25, color=theme.FIT, label="Integrated peak")
-        self.plot.ax.set_xlabel("Time (s)")
+        self.plot.ax.plot(xs, y, "-", color=theme.RAW, linewidth=1.3, label="Heat flow (raw)")
+        self.plot.ax.plot(xs, baseline, "--", color=theme.FIT, linewidth=1.3, label="Baseline")
+        self.plot.ax.fill_between(xs, y, baseline, alpha=0.25, color=theme.FIT, label="Integrated peak")
+        self.plot.ax.set_xlabel(xlabel)
         self.plot.ax.set_ylabel("Heat flow (mW)")
         self.plot.ax.set_title(f"ΔH = {dh:.3f} J/g")
         self.plot.ax.legend(fontsize=8)

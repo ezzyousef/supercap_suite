@@ -18,6 +18,7 @@ from PySide6.QtCore import Qt
 from core.data_io import load_data_file, list_excel_sheets, find_column, DataLoadError
 from core import gcd_analysis as gcd
 from .widgets import (
+    invalidate_results, for_current_data,
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
     make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
@@ -325,6 +326,7 @@ class CyclingStabilityTab(QWidget):
         except DataLoadError as e:
             QMessageBox.critical(self, "Error loading file", str(e))
             return
+        invalidate_results(self)
         if isinstance(df, dict):
             df = list(df.values())[0]
         self.df = df

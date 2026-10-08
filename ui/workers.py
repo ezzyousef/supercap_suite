@@ -21,6 +21,17 @@ never touch a QWidget from inside it (Qt widgets are not thread-safe).
 """
 from PySide6.QtCore import QThread, Signal
 
+_LIVE: set = set()
+
+
+def wait_for_workers(timeout_ms: int = 60000) -> None:
+    """Block until every running AnalysisWorker has finished (connected to
+    QApplication.aboutToQuit). The core/ calls cannot be interrupted safely, so
+    quitting waits for them rather than tearing the threads down mid-fit."""
+    for worker in list(_LIVE):
+        if worker.isRunning():
+            worker.wait(timeout_ms)
+
 
 class AnalysisWorker(QThread):
     """Runs a zero-argument callable on a background thread and reports
@@ -35,6 +46,10 @@ class AnalysisWorker(QThread):
     def __init__(self, fn, parent=None):
         super().__init__(parent)
         self._fn = fn
+        # Keep a reference until the thread ends: a QThread destroyed while running
+        # aborts the whole process (e.g. closing the window during an auto-fit).
+        _LIVE.add(self)
+        self.finished.connect(lambda: _LIVE.discard(self))
 
     def run(self):
         try:
@@ -56,11 +71,14 @@ def set_controls_busy(buttons: list, busy: bool, busy_texts: dict | None = None)
     bookkeeping so each tab's worker wiring doesn't repeat it.
     """
     for btn in buttons:
-        if busy_texts and btn in busy_texts:
-            if busy:
+        if busy:
+            if busy_texts and btn in busy_texts:
                 if not hasattr(btn, "_orig_text"):
                     btn._orig_text = btn.text()
                 btn.setText(busy_texts[btn])
-            elif hasattr(btn, "_orig_text"):
-                btn.setText(btn._orig_text)
+        elif hasattr(btn, "_orig_text"):
+            # Restore whenever the run ends, even if the caller did not pass the same
+            # busy_texts again -- otherwise the button keeps saying "Running…".
+            btn.setText(btn._orig_text)
+            del btn._orig_text
         btn.setEnabled(not busy)

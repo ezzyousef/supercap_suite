@@ -187,10 +187,24 @@ def append_table_rows(path: str, sheet_name: str, new_rows_df: pd.DataFrame) -> 
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Workbook '{p.name}' does not exist yet.")
-    existing_df = pd.read_excel(p, sheet_name=sheet_name)
+    # export_table with a source_note writes the note in row 1, leaves row 2 blank and
+    # starts the table in row 3. Reading that with the default header=0 turned the note
+    # into the only column name and the real header into a data row.
+    raw = pd.read_excel(p, sheet_name=sheet_name, header=None)
+    note = None
+    header_row = 0
+    if (len(raw) >= 3 and raw.iloc[0].notna().sum() == 1
+            and raw.iloc[1].isna().all() and raw.iloc[2].notna().sum() >= 1):
+        note = str(raw.iloc[0].dropna().iloc[0])
+        header_row = 2
+    existing_df = pd.read_excel(p, sheet_name=sheet_name, header=header_row)
     combined = pd.concat([existing_df, new_rows_df], ignore_index=True)
     with pd.ExcelWriter(p, mode="a", engine="openpyxl", if_sheet_exists="replace") as writer:
-        combined.to_excel(writer, sheet_name=sheet_name, index=False)
+        combined.to_excel(writer, sheet_name=sheet_name, index=False, startrow=header_row)
+        if note is not None:
+            # A second to_excel call would replace the sheet again, so write the note cell
+            # straight into the sheet that was just written.
+            writer.sheets[sheet_name].cell(row=1, column=1).value = note
     _autosize_all_columns(p)
 
 

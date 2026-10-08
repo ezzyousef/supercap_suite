@@ -153,16 +153,51 @@ def list_excel_sheets(path: str) -> list[str]:
         raise DataLoadError(f"Could not open workbook '{Path(path).name}': {e}") from e
 
 
+def _sniff_csv(path: Path) -> tuple[list[str], str]:
+    """Separator candidates in order of likelihood, and the decimal mark.
+
+    A European export ("1,5;2,25") split on commas first used to come back as
+    garbage columns. A separator that appears the same number of times on most lines
+    is preferred; tab and semicolon win over comma when consistent, because then a comma
+    is far more likely to be the decimal mark."""
+    import re
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            lines = [ln.rstrip("\r\n") for _, ln in zip(range(60), fh) if ln.strip()]
+    except OSError:
+        return [",", "\t", ";"], "."
+    tail = lines[len(lines) // 3:] or lines            # skip a possible preamble/header
+    consistent = []
+    for sep in ("\t", ";", ","):
+        counts = [ln.count(sep) for ln in tail]
+        if counts and min(counts) > 0:
+            modal = max(set(counts), key=counts.count)
+            if counts.count(modal) >= 0.8 * len(counts):
+                consistent.append(sep)
+    order = consistent + [sep for sep in (",", "\t", ";") if sep not in consistent]
+    decimal = "."
+    if order[0] != ",":
+        cells = [c.strip() for ln in tail for c in ln.split(order[0])]
+        comma_dec = sum(1 for c in cells if re.fullmatch(r"[+-]?\d+,\d+([eE][+-]?\d+)?", c))
+        dot_dec = sum(1 for c in cells if re.fullmatch(r"[+-]?\d+\.\d+([eE][+-]?\d+)?", c))
+        if comma_dec > dot_dec:
+            decimal = ","
+    return order, decimal
+
+
 def _load_csv(path: Path) -> pd.DataFrame:
-    # Try comma first, then tab, since EC-Lab / lab instruments frequently
-    # export tab-delimited files with a .csv or .txt extension.
-    for sep in (",", "\t", ";"):
+    # EC-Lab / lab instruments frequently export tab-delimited files with a .csv or
+    # .txt extension, and European locales write "1,5" with ";" between fields.
+    order, decimal = _sniff_csv(path)
+    for sep in order:
         try:
-            df = pd.read_csv(path, sep=sep, engine="python")
+            df = pd.read_csv(path, sep=sep, engine="python", decimal=decimal if sep != "," else ".")
+            df = df.dropna(how="all")                  # blank lines and empty logger rows
             if df.shape[1] > 1:
                 if _needs_header_rescan(df):
                     try:
-                        raw = pd.read_csv(path, sep=sep, engine="python", header=None)
+                        raw = pd.read_csv(path, sep=sep, engine="python", header=None,
+                                          decimal=decimal if sep != "," else ".")
                         fixed = _rescan_multirow_header(raw)
                     except Exception:
                         fixed = None

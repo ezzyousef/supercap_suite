@@ -199,6 +199,33 @@ def show_toast(parent, text: str, kind: str = "success") -> None:
     ToastNotification(parent, text, kind)
 
 
+def invalidate_results(tab) -> None:
+    """Call as soon as a tab loads new data: drops the previous file's result so it can
+    no longer be exported or recorded against the new file, and bumps the tab's data
+    generation so a fit still running on the old data is discarded when it returns."""
+    tab._data_generation = getattr(tab, "_data_generation", 0) + 1
+    clear = getattr(tab, "on_clear_results", None)
+    if callable(clear):
+        clear()
+    else:
+        if hasattr(tab, "last_result"):
+            tab.last_result = None
+        if hasattr(tab, "last_raw_df"):
+            tab.last_raw_df = None
+
+
+def for_current_data(tab, slot):
+    """Wrap a worker's result slot so it only runs if the tab's data has not changed
+    since the worker started (see `invalidate_results`)."""
+    generation = getattr(tab, "_data_generation", 0)
+
+    def guarded(*args):
+        if getattr(tab, "_data_generation", 0) != generation:
+            return
+        slot(*args)
+    return guarded
+
+
 def warn_if_multiple_cycles_not_selected(parent, df, cycle_col_combo, cycle_value_combo,
                                          kind: str = "eis") -> bool:
     """Call before running any analysis that assumes its input is ONE

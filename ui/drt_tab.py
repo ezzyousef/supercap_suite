@@ -19,6 +19,7 @@ from core.data_io import load_data_file, list_excel_sheets, find_column, DataLoa
 from core import eis_analysis as eis
 from core import drt_analysis as drt
 from .widgets import (
+    invalidate_results, for_current_data,
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
     make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
@@ -278,6 +279,7 @@ class DrtTab(QWidget):
         except DataLoadError as e:
             QMessageBox.critical(self, "Error loading file", str(e))
             return
+        invalidate_results(self)
         if isinstance(df, dict):
             df = list(df.values())[0]
         self.df = df
@@ -405,7 +407,7 @@ class DrtTab(QWidget):
         compute_fn = drt.compute_dct if method == "dct" else drt.compute_drt_with_dct_recommendation
         worker = AnalysisWorker(lambda: compute_fn(freq, zre, zim, lambda_reg=lambda_reg))
         self._worker = worker
-        worker.succeeded.connect(self._on_dct_done if method == "dct" else self._on_drt_done)
+        worker.succeeded.connect(for_current_data(self, self._on_dct_done if method == "dct" else self._on_drt_done))
         worker.failed.connect(lambda msg: QMessageBox.critical(self, f"{method.upper()} analysis failed", msg))
         worker.finished.connect(self._on_worker_finished)
         worker.start()

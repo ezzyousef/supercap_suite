@@ -17,6 +17,7 @@ from core.data_io import load_data_file, list_excel_sheets, find_column, DataLoa
 from core import eis_analysis as eis
 from core import circuit_library as circuits
 from .widgets import (
+    invalidate_results, for_current_data,
     PlotWidget, PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
     make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
@@ -468,6 +469,7 @@ class EisTab(QWidget):
         except DataLoadError as e:
             QMessageBox.critical(self, "Error loading file", str(e))
             return
+        invalidate_results(self)
         if isinstance(df, dict):
             df = list(df.values())[0]
         self.df = df
@@ -961,7 +963,7 @@ class EisTab(QWidget):
 
         worker = AnalysisWorker(lambda: eis.fit_equivalent_circuit(freq, zre, zim, model=model, multistart=True))
         self._fit_worker = worker
-        worker.succeeded.connect(lambda result: self._render_fit_result(freq, zre, zim, result))
+        worker.succeeded.connect(for_current_data(self, lambda result: self._render_fit_result(freq, zre, zim, result)))
         worker.failed.connect(lambda msg: QMessageBox.critical(self, "Fit error", msg))
         worker.finished.connect(self._on_fit_worker_finished)
         worker.start()
@@ -981,7 +983,7 @@ class EisTab(QWidget):
 
         worker = AnalysisWorker(lambda: eis.auto_fit_equivalent_circuit(freq, zre, zim))
         self._fit_worker = worker
-        worker.succeeded.connect(lambda result: self._on_auto_fit_done(freq, zre, zim, result))
+        worker.succeeded.connect(for_current_data(self, lambda result: self._on_auto_fit_done(freq, zre, zim, result)))
         worker.failed.connect(lambda msg: QMessageBox.critical(self, "Auto-detect failed", msg))
         worker.finished.connect(self._on_fit_worker_finished)
         worker.start()

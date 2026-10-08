@@ -106,6 +106,8 @@ def main():
     app.setOrganizationName(AUTHOR_NAME)
     app.setApplicationVersion(APP_VERSION)
     app.setWindowIcon(load_app_icon())
+    from ui.workers import wait_for_workers
+    app.aboutToQuit.connect(wait_for_workers)
     # Fusion draws combo-box popups itself (the native Windows popup can close on the same
     # click that opened it); the window applies the shared labkit stylesheet on top.
     app.setStyle("Fusion")
