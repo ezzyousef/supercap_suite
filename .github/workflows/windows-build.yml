@@ -41,20 +41,12 @@ jobs:
             choco install innosetup -y --no-progress
           }
 
-      - name: "Diagnostics (temporary): which test file crashes at exit"
+      - name: "Diagnostics (temporary): the file that crashed at exit, on its own"
         continue-on-error: true
         shell: pwsh
         run: |
-          foreach ($f in Get-ChildItem tests -Filter "test_*.py") {
-            python -m pytest $f.FullName -q -p no:cacheprovider 2>&1 | Select-Object -Last 1
-            Write-Host "EXIT $($f.Name): $LASTEXITCODE"
-          }
-          git fetch --depth=20 origin claude/intelligent-planck-3addcx
-          git worktree add ../before 0ab7775
-          Push-Location ../before
-          python -m pytest tests -q -p no:cacheprovider 2>&1 | Select-Object -Last 1
-          Write-Host "EXIT before-review: $LASTEXITCODE"
-          Pop-Location
+          python -m pytest tests/test_closable_sections.py -q -p no:cacheprovider 2>&1 | Select-Object -Last 1
+          Write-Host "EXIT test_closable_sections.py: $LASTEXITCODE"
 
       - name: Tests
         shell: pwsh
