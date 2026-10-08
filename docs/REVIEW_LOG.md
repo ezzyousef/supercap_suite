@@ -44,7 +44,7 @@ Status:
 | C and Y0 capped at 10 F | **fixed**: up to 1e5 |
 | Interchangeable stages came back in random order | **fixed**: ordered by time constant |
 | The KK test had no series C or L, so valid supercapacitor spectra failed | **fixed**: lin-KK series C and L, plus modulus weighting |
-| KK pass/fail barely reacts to smooth drift | **open, documented**: a 30 % drift gives a residual of about 2.5 %. The docs say to read the residual plot. Automatic element-count selection (μ criterion) was tried. It stopped too early on valid data, so it was not adopted. |
+| KK pass/fail barely reacts to smooth drift (a 30 % drift leaves only about 2.5 % residual) | **fixed**: the lag-1 autocorrelation of the residuals is reported. Above 0.5 the result reads "PASSED, but with a systematic trend" and a drift warning is shown. On synthetic data this value was -0.15 to 0.11 for valid spectra and 0.66 to 0.91 with drift. Automatic element-count selection (μ criterion) was tried too, but it stopped too early on valid data, so it was not adopted. |
 | DRT λ fixed at 1e-3 | **fixed**: optional real/imaginary cross-validation picks λ. The smoothest λ within 20 % of the best score is used. |
 | Trasatti fits had no goodness of fit | **fixed**: R² is reported, with a warning below 0.95 |
 | The docs described Dunn's method as voltage-resolved, but the app runs the peak-current form | **changed wording** |
@@ -56,7 +56,7 @@ Status:
 | The heat-flow unit was assumed to be mW, so W/g data gave wrong enthalpies | **fixed**: unit selector guessed from the header (W, mW, µW, W/g, mW/mg). Normalised data is scaled by the sample mass. |
 | A temperature X axis was plotted as "Time (s)" | **fixed** |
 | The docs said ΔH_f defaults to 334 J/g, but the code uses 333.55 | **changed wording**: the docs give 333.55 and explain how it differs from the paper's 334 |
-| Overlapping melting peaks are not separated | **open**: needs peak deconvolution; not attempted this round |
+| Overlapping melting peaks are not separated | **fixed**: when the integration window holds several peaks, each is reported with its own area and ΔH. The split is a perpendicular drop at the valley between the maxima: simple and standard, but approximate when peaks overlap strongly (this is stated in the results). |
 | Naming of the freezable-bound water fraction (W_fb) compared with the paper | **open**: the paper was not available in this session to check the wording |
 
 ## Code and data handling

@@ -941,6 +941,26 @@ class EnthalpyTool(QWidget):
             ("Sample mass", f"{self.mass_spin.value():.6g} g"),
         ]
 
+        # Several overlapping transitions in the window: report each one's share
+        # (perpendicular drop at the valley between maxima).
+        try:
+            components = dsc.split_overlapping_peaks(t, y, baseline)
+        except ValueError:
+            components = []
+        if len(components) > 1:
+            mass = self.mass_spin.value()
+            lines += ["", f"{len(components)} overlapping peaks in the window "
+                          "(split at the valleys between them -- approximate when they overlap strongly):"]
+            for k, comp in enumerate(components, 1):
+                xs_k, _lab = self._plot_axis(t, temp)
+                lines.append(f"  Peak {k} at {xs_k[comp.peak_index]:.4g}: {comp.area_j:.6f} J "
+                             f"({comp.fraction:.1%}), ΔH = {comp.area_j / mass:.4f} J/g")
+                self.last_result[f"Peak {k}: area (J)"] = comp.area_j
+                self.last_result[f"Peak {k}: ΔH (J/g)"] = comp.area_j / mass
+            card_warnings.append(
+                f"The integration window holds {len(components)} overlapping peaks; ΔH above is "
+                "their sum. The per-peak split is listed in the results.")
+
         if accuracy is not None:
             lines += [
                 "",

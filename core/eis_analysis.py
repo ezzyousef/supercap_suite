@@ -364,6 +364,8 @@ class KramersKronigResult:
     num_elements: int
     series_capacitance_f: float = float("nan")   # lin-KK series C (NaN if not included)
     series_inductance_h: float = float("nan")    # lin-KK series L (NaN if not included)
+    residual_autocorrelation: float = float("nan")  # lag-1, smaller of real/imag; ~0 for noise
+    systematic_trend: bool = False               # residuals follow a smooth trend with frequency
 
 
 def kramers_kronig_test(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.ndarray,
@@ -458,6 +460,18 @@ def kramers_kronig_test(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm
     resid_im_pct = (zim_sorted - model_im) / z_mag * 100.0
     all_resid = np.concatenate([resid_re_pct, resid_im_pct])
 
+    # Random measurement noise leaves residuals that jump about from one frequency to
+    # the next (lag-1 autocorrelation near 0). Drift during the sweep leaves a smooth
+    # trend (autocorrelation near 1) that can stay under the pass threshold, so flag
+    # it separately. 0.5 separated drifting from valid synthetic spectra cleanly
+    # (0.66-0.91 vs. -0.15-0.11); it is a heuristic, not a literature value.
+    def lag1(x):
+        x = x - np.mean(x)
+        den = float(np.sum(x * x))
+        return float(np.sum(x[1:] * x[:-1]) / den) if den > 0 else 0.0
+    r1 = min(lag1(resid_re_pct), lag1(resid_im_pct))
+    trend = bool(r1 > 0.5 and np.max(np.abs(all_resid)) > 0.5)
+
     return KramersKronigResult(
         passed=bool(np.max(np.abs(all_resid)) <= threshold_percent),
         mean_residual_percent=float(np.mean(np.abs(all_resid))),
@@ -470,6 +484,8 @@ def kramers_kronig_test(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm
         num_elements=num_elements,
         series_capacitance_f=series_c,
         series_inductance_h=series_l,
+        residual_autocorrelation=r1,
+        systematic_trend=trend,
     )
 
 

@@ -641,7 +641,10 @@ class EisTab(QWidget):
             QMessageBox.critical(self, "Calculation error", str(e))
             return
         verdict = "PASSED" if result.passed else "FAILED"
-        theme.set_status_style(self.kk_status_label, "good" if result.passed else "bad")
+        if result.passed and result.systematic_trend:
+            verdict = "PASSED, but with a systematic trend"
+        theme.set_status_style(self.kk_status_label,
+                               "bad" if not result.passed else ("warn" if result.systematic_trend else "good"))
         self.kk_status_label.setText(
             f"Kramers-Kronig test {verdict} -- max residual {result.max_residual_percent:.3g}% "
             f"(mean {result.mean_residual_percent:.3g}%) across {result.num_elements} fitted elements. "
@@ -655,6 +658,8 @@ class EisTab(QWidget):
             f"Max |residual| = {result.max_residual_percent:.4g}% of |Z|",
             f"Mean |residual| = {result.mean_residual_percent:.4g}% of |Z|",
             f"Voigt elements used = {result.num_elements}",
+            f"Residual lag-1 autocorrelation = {result.residual_autocorrelation:.2f} "
+            "(near 0 = random noise; near 1 = smooth trend, e.g. drift during the sweep)",
             "",
             "Pass/fail threshold is a practical heuristic (max residual <= 5%), not a "
             "value from the source paper -- always also look at whether the residual "
@@ -666,9 +671,14 @@ class EisTab(QWidget):
             ("Mean residual", f"{result.mean_residual_percent:.3g}%"),
             ("Voigt elements used", str(result.num_elements)),
         ])
-        self.result_card.set_warnings([] if result.passed else [
-            "Spectrum failed the Kramers-Kronig validity check -- see the results panel."
-        ])
+        kk_warnings = [] if result.passed else [
+            "Spectrum failed the Kramers-Kronig validity check -- see the results panel."]
+        if result.systematic_trend:
+            kk_warnings.append(
+                "The residuals follow a smooth trend with frequency rather than scattering "
+                "randomly -- the signature of drift (or a non-steady system) during the sweep, "
+                "even though the residuals are small. Re-measure or check the cell stabilised.")
+        self.result_card.set_warnings(kk_warnings)
 
         # Plots the residual trend itself -- the text above can only report
         # a single max/mean number, but a RANDOM-looking scatter around

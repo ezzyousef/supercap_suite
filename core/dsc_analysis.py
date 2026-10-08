@@ -646,3 +646,64 @@ def heat_flow_to_mw(values, unit: str, sample_mass_g: float | None = None):
             raise ValueError("A mass-normalised heat flow needs the sample mass to convert to mW")
         return values * 1000.0 * sample_mass_g          # (W/g)·g = W = 1000 mW
     raise ValueError(f"Unknown heat-flow unit {unit!r}")
+
+
+# ---------------------------------------------------------------------------
+# Overlapping peaks
+# ---------------------------------------------------------------------------
+@dataclass
+class PeakComponent:
+    peak_index: int        # index into the supplied window
+    start_index: int
+    end_index: int
+    peak_time_s: float
+    area_j: float
+    fraction: float        # of the summed component areas
+
+
+def split_overlapping_peaks(time_s: np.ndarray, heat_flow_mw: np.ndarray,
+                            baseline_mw: np.ndarray,
+                            min_prominence_fraction: float = 0.05) -> list[PeakComponent]:
+    """Split an integration window that holds several overlapping peaks.
+
+    Maxima of |heat flow - baseline| whose prominence is at least
+    `min_prominence_fraction` of the largest excursion are taken as separate
+    transitions. The window is divided at the lowest point between neighbouring
+    maxima (the "perpendicular drop" construction) and each part is integrated
+    against the same baseline. Perpendicular drop is the simplest common way to
+    apportion overlapping peaks; it misassigns the tails when peaks overlap
+    strongly, so treat the split as approximate. A single component is returned
+    when the window holds one peak.
+    """
+    from scipy.signal import find_peaks
+
+    t = np.asarray(time_s, dtype=float)
+    y = np.asarray(heat_flow_mw, dtype=float)
+    b = np.asarray(baseline_mw, dtype=float)
+    if not (len(t) == len(y) == len(b)):
+        raise ValueError("time_s, heat_flow_mw and baseline_mw must be the same length")
+    if len(t) < 5:
+        raise ValueError("Need at least 5 points")
+    signal = y - b
+    # The transition direction is the sign of the largest excursion.
+    s = signal if abs(signal.max()) >= abs(signal.min()) else -signal
+    height = float(np.max(s))
+    if height <= 0:
+        raise ValueError("No excursion from the baseline in this window")
+    idx, _props = find_peaks(s, prominence=height * min_prominence_fraction)
+    if len(idx) == 0:
+        idx = np.array([int(np.argmax(s))])
+    cuts = [0]
+    for a, c in zip(idx[:-1], idx[1:]):
+        cuts.append(int(a + np.argmin(s[a:c + 1])))
+    cuts.append(len(t) - 1)
+    trapz_fn = getattr(np, "trapezoid", None) or np.trapz
+    comps = []
+    for k, p in enumerate(idx):
+        lo, hi = cuts[k], cuts[k + 1]
+        area = float(trapz_fn(np.abs(signal[lo:hi + 1]), t[lo:hi + 1])) / 1000.0
+        comps.append(PeakComponent(int(p), lo, hi, float(t[p]), area, 0.0))
+    total = sum(c.area_j for c in comps)
+    for c in comps:
+        c.fraction = c.area_j / total if total > 0 else float("nan")
+    return comps

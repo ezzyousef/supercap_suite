@@ -176,3 +176,27 @@ def test_second_export_into_an_existing_workbook_keeps_note_and_table_together(t
     for ws, note in zip(sheets, ("note A", "note B")):
         rows = [[c.value for c in r] for r in ws.iter_rows()]
         assert str(rows[0][0]).startswith(note) and rows[2] == ["Parameter", "Value"]
+
+
+def test_overlapping_dsc_peaks_are_split_at_the_valley():
+    from core import dsc_analysis as dsc
+    t = np.linspace(0, 600, 3001)
+    y = -(5 * np.exp(-0.5 * ((t - 250) / 20) ** 2) + 3 * np.exp(-0.5 * ((t - 330) / 20) ** 2))
+    comps = dsc.split_overlapping_peaks(t, y, np.zeros_like(t))
+    assert len(comps) == 2
+    true = np.array([5, 3]) * 20 * np.sqrt(2 * np.pi) / 1000
+    assert [c.area_j for c in comps] == pytest.approx(true, rel=0.03)
+    single = dsc.split_overlapping_peaks(t, -5 * np.exp(-0.5 * ((t - 250) / 20) ** 2), np.zeros_like(t))
+    assert len(single) == 1 and single[0].fraction == pytest.approx(1.0)
+
+
+def test_kramers_kronig_flags_smooth_drift_that_still_passes():
+    f = np.logspace(5, -2, 60)
+    w = 2 * np.pi * f
+    z = 0.5 + 1 / (1 / 2.0 + 1j * w * 1e-3) + 1 / (1j * w * 0.5)
+    zn = z * (1 + 0.002 * np.random.default_rng(0).standard_normal(f.size))
+    valid = eis.kramers_kronig_test(f, zn.real, zn.imag)
+    assert valid.passed and not valid.systematic_trend
+    zd = zn * (1 + 0.3 * np.linspace(0, 1, f.size))
+    drift = eis.kramers_kronig_test(f, zd.real, zd.imag)
+    assert drift.passed and drift.systematic_trend
