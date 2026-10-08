@@ -35,6 +35,8 @@ class TrasattiResult:
     outer_fit_intercept: float
     total_fit_slope: float
     total_fit_intercept: float
+    outer_fit_r_squared: float = float("nan")   # straightness of Q* vs v^-1/2
+    total_fit_r_squared: float = float("nan")   # straightness of 1/Q* vs v^1/2
 
 
 def trasatti_analysis(scan_rates_v_per_s: np.ndarray, capacitance_f_per_g: np.ndarray) -> TrasattiResult:
@@ -83,6 +85,11 @@ def trasatti_analysis(scan_rates_v_per_s: np.ndarray, capacitance_f_per_g: np.nd
                           "(scan-rate range, units) before trusting this result.")
     q_total = 1.0 / intercept_total
 
+    def r2(x, y, slope, intercept):
+        ss_res = float(np.sum((y - (slope * x + intercept)) ** 2))
+        ss_tot = float(np.sum((y - np.mean(y)) ** 2))
+        return 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
     q_inner = q_total - q_outer
     inner_pct = 100.0 * q_inner / q_total if q_total != 0 else float("nan")
     outer_pct = 100.0 * q_outer / q_total if q_total != 0 else float("nan")
@@ -97,4 +104,6 @@ def trasatti_analysis(scan_rates_v_per_s: np.ndarray, capacitance_f_per_g: np.nd
         outer_fit_intercept=float(intercept_outer),
         total_fit_slope=float(slope_total),
         total_fit_intercept=float(intercept_total),
+        outer_fit_r_squared=r2(inv_sqrt_v, q, slope_outer, intercept_outer),
+        total_fit_r_squared=r2(sqrt_v, inv_q, slope_total, intercept_total),
     )

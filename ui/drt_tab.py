@@ -179,6 +179,14 @@ class DrtTab(QWidget):
         )
         drt_grid.addWidget(QLabel("Regularization λ:"), 2, 0)
         drt_grid.addWidget(self.lambda_spin, 2, 1)
+        self.auto_lambda_check = QCheckBox("Choose λ from the data (re–im cross-validation)")
+        self.auto_lambda_check.setToolTip(
+            "Fits the real part alone and predicts the imaginary part, and vice versa, for "
+            "λ from 1e-6 to 1, and takes the smoothest λ that predicts within 20 % of the "
+            "best. A data-driven starting point, not a guarantee -- check that the peaks "
+            "you report survive a change of λ by a factor of a few.")
+        self.auto_lambda_check.toggled.connect(lambda on: self.lambda_spin.setEnabled(not on))
+        drt_grid.addWidget(self.auto_lambda_check, 3, 0, 1, 2)
 
         self.run_btn = QPushButton("▶ Run analysis")
         self.run_btn.clicked.connect(self.on_run)
@@ -217,7 +225,7 @@ class DrtTab(QWidget):
         # usable size now that the right panel is wrapped in a scroll
         # area (see make_scrollable_panel(right) below) -- a too-short
         # window scrolls instead of shrinking the plot to a sliver.
-        results_splitter.setMinimumHeight(740)
+        results_splitter.setMinimumHeight(600)
         right_layout.addWidget(results_splitter, stretch=1)
         yield_to_event_loop()
 
@@ -405,7 +413,12 @@ class DrtTab(QWidget):
         # docstring. "dct" has no analogous "try DRT instead" check since
         # DRT is the default/first thing a user would already have tried.
         compute_fn = drt.compute_dct if method == "dct" else drt.compute_drt_with_dct_recommendation
-        worker = AnalysisWorker(lambda: compute_fn(freq, zre, zim, lambda_reg=lambda_reg))
+        auto = self.auto_lambda_check.isChecked()
+
+        def run():
+            lam = drt.select_lambda_reim(freq, zre, zim)[0] if auto else lambda_reg
+            return compute_fn(freq, zre, zim, lambda_reg=lam)
+        worker = AnalysisWorker(run)
         self._worker = worker
         worker.succeeded.connect(for_current_data(self, self._on_dct_done if method == "dct" else self._on_drt_done))
         worker.failed.connect(lambda msg: QMessageBox.critical(self, f"{method.upper()} analysis failed", msg))

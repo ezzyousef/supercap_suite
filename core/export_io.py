@@ -101,13 +101,13 @@ def export_new_sheet(path: str, sheet_name: str, results: dict,
         writer_kwargs["if_sheet_exists"] = "new"
 
     with pd.ExcelWriter(p, mode=mode, **writer_kwargs) as writer:
-        start_row = 0
-        if source_note:
-            pd.DataFrame({source_note: []}).to_excel(
-                writer, sheet_name=sheet_name, index=False, startrow=0
-            )
-            start_row = 2
+        start_row = 2 if source_note else 0
         results_df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=start_row)
+        if source_note:
+            # Written into the same sheet afterwards: a separate to_excel call for the
+            # note made pandas (if_sheet_exists="new") put the table on a second sheet
+            # whenever the workbook already existed.
+            writer.sheets[sheet_name].cell(row=1, column=1).value = _stamped(source_note)
         if raw_name is not None:
             raw_data.to_excel(writer, sheet_name=raw_name, index=False)
 
@@ -166,13 +166,10 @@ def export_table(path: str, sheet_name: str, df: pd.DataFrame,
         writer_kwargs["if_sheet_exists"] = "new"
 
     with pd.ExcelWriter(p, mode=mode, **writer_kwargs) as writer:
-        start_row = 0
-        if source_note:
-            pd.DataFrame({source_note: []}).to_excel(
-                writer, sheet_name=sheet_name, index=False, startrow=0
-            )
-            start_row = 2
+        start_row = 2 if source_note else 0
         df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=start_row)
+        if source_note:
+            writer.sheets[sheet_name].cell(row=1, column=1).value = _stamped(source_note)
 
     _autosize_all_columns(p)
     return sheet_name
@@ -206,6 +203,12 @@ def append_table_rows(path: str, sheet_name: str, new_rows_df: pd.DataFrame) -> 
             # straight into the sheet that was just written.
             writer.sheets[sheet_name].cell(row=1, column=1).value = note
     _autosize_all_columns(p)
+
+
+def _stamped(note: str) -> str:
+    """The source note plus when it was exported, so a sheet can be dated later."""
+    from datetime import datetime
+    return f"{note} — exported {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
 
 def _excel_safe(value):

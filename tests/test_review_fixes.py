@@ -107,7 +107,7 @@ def test_appending_rows_keeps_the_header_under_a_source_note(tmp_path):
     assert list(back.columns) == ["File", "C (F/g)"]
     assert back["File"].tolist() == ["a", "b"]
     note = pd.read_excel(path, sheet_name=sheet, header=None).iloc[0, 0]
-    assert note == "GCD — test suite"
+    assert str(note).startswith("GCD — test suite")
 
 
 def test_dsc_heat_flow_units():
@@ -128,3 +128,51 @@ def test_european_semicolon_csv_reads_numbers(tmp_path):
     assert list(df.columns) == ["time/s", "Ewe/V", "<I>/mA"]
     assert df["Ewe/V"].tolist() == pytest.approx([0.1, 0.2, 0.3])
     assert len(df) == 3
+
+
+def test_coulombic_efficiency_uses_charge_when_current_is_given():
+    # charge at 2 mA for 50 s, discharge at 1 mA for 90 s: CE by charge = 90 %,
+    # whereas the time ratio would claim 180 %.
+    t1 = np.linspace(0, 50, 501)
+    t2 = 50 + np.linspace(0, 90, 901)[1:]
+    t = np.concatenate([t1, t2] * 1)
+    v = np.concatenate([0.02 * t1, 1.0 - (t2 - 50) / 90.0])
+    i = np.concatenate([np.full(t1.size, 0.002), np.full(t2.size, -0.001)])
+    t = np.concatenate([t, t[-1] + t[1:] - t[0] + 0.1])
+    v = np.concatenate([v, v[1:]])
+    i = np.concatenate([i, i[1:]])
+    res = gcd.analyze_cycling_stability(t, v, 0.001, 0.005, current_series_a=i)
+    assert res[0].coulombic_efficiency_percent == pytest.approx(90.0, rel=0.03)
+
+
+
+def test_an_ideal_rectangle_scores_one():
+    v = np.concatenate([np.linspace(0, 1, 100), np.linspace(1, 0, 100)])
+    i = np.concatenate([np.full(100, 1e-3), np.full(100, -1e-3)])
+    assert cv.assess_cv_rectangularity(v, i) == pytest.approx(1.0)
+
+
+def test_reim_lambda_selection_recovers_two_zarc_peaks():
+    from core import drt_analysis as drt
+    f = np.logspace(5, -2, 60)
+    w = 2 * np.pi * f
+    z = 2 + 50 / (1 + (1j * w * 1e-3) ** 0.8) + 20 / (1 + (1j * w * 1e-1) ** 0.9)
+    zn = z * (1 + 0.005 * np.random.default_rng(0).standard_normal(f.size))
+    lam, _c, _s = drt.select_lambda_reim(f, zn.real, zn.imag)
+    r = drt.compute_drt(f, zn.real, zn.imag, lambda_reg=lam)
+    taus = sorted(p.tau_s for p in r.peaks if p.within_measured_range)
+    assert len(taus) == 2
+    assert taus[0] == pytest.approx(1e-3, rel=0.3) and taus[1] == pytest.approx(0.1, rel=0.3)
+
+
+def test_second_export_into_an_existing_workbook_keeps_note_and_table_together(tmp_path):
+    from openpyxl import load_workbook
+    from core import export_io
+    path = str(tmp_path / "x.xlsx")
+    export_io.export_new_sheet(path, "GCD", {"C": 1.0}, None, "note A")
+    export_io.export_new_sheet(path, "GCD", {"C": 2.0}, None, "note B")
+    sheets = load_workbook(path).worksheets
+    assert len(sheets) == 2
+    for ws, note in zip(sheets, ("note A", "note B")):
+        rows = [[c.value for c in r] for r in ws.iter_rows()]
+        assert str(rows[0][0]).startswith(note) and rows[2] == ["Parameter", "Value"]

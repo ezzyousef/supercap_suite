@@ -239,6 +239,9 @@ class MainWindow(AppShell):
                 area = screen.availableGeometry()
                 self.resize(min(1720, int(area.width() * 0.94)), min(1040, int(area.height() * 0.92)))
         self.set_status("Ready", f"v{APP_VERSION}")
+        # A message belongs to the page that posted it; leaving it up after switching
+        # pages showed e.g. a GCD segment count on the EIS page.
+        self.page_changed.connect(lambda _key: self.set_status("Ready"))
 
     # ------------------------------------------------------------------ theme
     def apply_theme(self, mode: str) -> None:

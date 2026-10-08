@@ -719,8 +719,16 @@ class CvRateTool(QWidget):
             "",
             f"Outer fraction of total: {result.outer_fraction_percent:.2f} %",
             f"Inner fraction of total: {result.inner_fraction_percent:.2f} %",
+            "",
+            f"R² of Q* vs v^-1/2 (outer extrapolation): {result.outer_fit_r_squared:.4f}",
+            f"R² of 1/Q* vs v^1/2 (total extrapolation): {result.total_fit_r_squared:.4f}",
         ]
         card_warnings = []
+        for label, r2 in (("outer", result.outer_fit_r_squared), ("total", result.total_fit_r_squared)):
+            if np.isfinite(r2) and r2 < 0.95:
+                card_warnings.append(
+                    f"The {label}-capacitance line is not straight (R² = {r2:.3f}); the "
+                    f"Trasatti extrapolation assumes it is, so treat Q*_{label} with caution.")
         if result.inner_capacitance_f_per_g < 0:
             negative_note = ("Inner capacitance is negative -- the outer-capacitance extrapolation "
                               "exceeded the total-capacitance extrapolation. Check your data "
@@ -781,6 +789,8 @@ class CvRateTool(QWidget):
             f"Inner (diffusion-limited) capacitance Q*_inner ({unit})": result.inner_capacitance_f_per_g,
             "Outer fraction of total (%)": result.outer_fraction_percent,
             "Inner fraction of total (%)": result.inner_fraction_percent,
+            "R² outer fit (Q* vs v^-1/2)": result.outer_fit_r_squared,
+            "R² total fit (1/Q* vs v^1/2)": result.total_fit_r_squared,
         }
         # Export both graphs' exact X/Y (data points AND fit line) here
         # so "export"/"Send to OriginLab" gives the complete Trasatti

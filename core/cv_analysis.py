@@ -214,7 +214,9 @@ def assess_cv_rectangularity(voltage_v: np.ndarray, current_a: np.ndarray) -> fl
     mean_abs = np.mean(np.abs(current_a))
     if mean_abs == 0:
         return 0.0
-    cv_coefficient = np.std(current_a) / mean_abs  # coefficient of variation
+    # Variation of |I|, not of signed I: an ideal rectangle carries +I on one sweep and
+    # -I on the other, whose signed spread equals its mean and scored only 0.5.
+    cv_coefficient = np.std(np.abs(current_a)) / mean_abs  # coefficient of variation
     score = 1.0 / (1.0 + cv_coefficient)
     return float(np.clip(score, 0.0, 1.0))
 

@@ -602,3 +602,55 @@ def analytical_zarc_drt(tau_s: np.ndarray, rct_ohm: float, tau_zarc_s: float, ph
         raise ValueError("phi must be strictly between 0 and 1 for the ZARC DRT closed form")
     x = phi * np.log(tau / tau_zarc_s)
     return rct_ohm * np.sin(np.pi * (1.0 - phi)) / (2.0 * np.pi * (np.cosh(x) - np.cos(np.pi * (1.0 - phi))))
+
+
+def select_lambda_reim(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.ndarray,
+                       candidates: np.ndarray | None = None) -> tuple[float, np.ndarray, np.ndarray]:
+    """Choose the DRT regularization strength from the data by real/imaginary
+    cross-validation: for each candidate lambda, the DRT is fitted to the REAL part
+    alone and used to predict the imaginary part, and fitted to the IMAGINARY part
+    alone and used to predict the real part. Both parts come from the same gamma, so
+    a lambda that fits noise (too small) or smooths away real structure (too large)
+    predicts the other part badly. Returns (best lambda, candidates, scores).
+
+    This is the re-im cross-validation idea discussed in the DRT regularization
+    literature (Saccoccio et al., Electrochim. Acta 2014); it is a reasonable
+    data-driven starting point, not a guarantee -- still check that the peaks you
+    report survive a change of lambda by a factor of a few.
+    """
+    if not _HAVE_SCIPY:
+        raise ValueError("scipy is required for DRT analysis")
+    if candidates is None:
+        candidates = np.logspace(-6, 0, 13)
+    f = np.asarray(frequency_hz, dtype=float)
+    order = np.argsort(f)[::-1]                       # descending frequency = ascending tau
+    zre = np.asarray(z_re_ohm, dtype=float)[order]
+    zim = np.asarray(z_im_ohm, dtype=float)[order]
+    tau_meas = 1.0 / (2.0 * np.pi * f[order])
+    _tau, _within, a_re, a_im, d = _build_extended_grid_and_kernels(tau_meas)
+    n, m = a_re.shape
+    n_reg = d.shape[0]
+    scores = []
+    for lam in candidates:
+        # fit real part (with R_inf), predict imaginary part
+        design = np.zeros((n + n_reg, 1 + m))
+        design[:n, 0] = 1.0
+        design[:n, 1:] = a_re
+        design[n:, 1:] = np.sqrt(lam) * d
+        coeffs, _ = nnls(design, np.concatenate([zre, np.zeros(n_reg)]))
+        err_im = np.sum((a_im @ coeffs[1:] - zim) ** 2)
+        # fit imaginary part, predict real part (R_inf by least squares on the remainder)
+        design = np.zeros((n + n_reg, m))
+        design[:n] = a_im
+        design[n:] = np.sqrt(lam) * d
+        gamma, _ = nnls(design, np.concatenate([zim, np.zeros(n_reg)]))
+        rest = zre - a_re @ gamma
+        err_re = np.sum((rest - max(float(np.mean(rest)), 0.0)) ** 2)
+        scores.append(err_re + err_im)
+    scores = np.asarray(scores)
+    # The score is usually flat at small lambda (any lambda that does not over-smooth
+    # predicts equally well) and the plain minimum then lands on the smallest candidate,
+    # which rings. Take the LARGEST lambda whose score is within 20 % of the minimum --
+    # the smoothest solution the data cannot distinguish from the best one.
+    ok = np.flatnonzero(scores <= 1.2 * scores.min())
+    return float(candidates[int(ok.max())]), np.asarray(candidates), scores

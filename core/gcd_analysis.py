@@ -680,7 +680,9 @@ def segments_from_cycle_column(t_s: np.ndarray, v_v: np.ndarray,
 
 def analyze_cycling_stability(t_s: np.ndarray, v_v: np.ndarray, current_a: float,
                                mass_g: float, r2_threshold: float = 0.98,
-                               cycle_numbers: np.ndarray | None = None) -> list[CycleResult]:
+                               cycle_numbers: np.ndarray | None = None,
+                               current_series_a: np.ndarray | None = None,
+                               baseline_cycles: int = 1) -> list[CycleResult]:
     """Auto-segment ONE long, continuous multi-cycle GCD trace (a file with
     no separate cycle-number column, just alternating charge/discharge
     half-cycles back to back) into individual cycles, via the same shape-
@@ -709,6 +711,14 @@ def analyze_cycling_stability(t_s: np.ndarray, v_v: np.ndarray, current_a: float
     Only charge-then-discharge pairs are counted as a "cycle" (a leading
     discharge with no preceding charge, or a trailing charge with no
     following discharge, is dropped rather than guessed at).
+
+    If `current_series_a` (the measured current, A, same length as t_s) is given, CE is
+    computed in its general form, CE = 100 * Q_discharge / Q_charge with each Q the
+    integral of |I| over its leg, so unequal charge and discharge currents are handled.
+
+    `baseline_cycles`: retention is relative to the mean capacitance of the first this
+    many analysable cycles. The first cycle is often unrepresentative (wetting and
+    activation), so averaging a few, or starting later, gives a fairer baseline.
 
     If `cycle_numbers` is supplied (an array the same length as t_s/v_v,
     e.g. an EC-Lab "cycle number" column), segmentation uses
@@ -754,8 +764,17 @@ def analyze_cycling_stability(t_s: np.ndarray, v_v: np.ndarray, current_a: float
             cap, method = float("nan"), "could not be analyzed"
         caps.append(cap)
 
-        ce = (100.0 * discharge_seg.duration_s / charge_seg.duration_s
-              if charge_seg.duration_s > 0 else float("nan"))
+        if current_series_a is not None:
+            trapz_fn = getattr(np, "trapezoid", None) or np.trapz
+            i_abs = np.abs(np.asarray(current_series_a, dtype=float))
+            q_c = float(trapz_fn(i_abs[charge_seg.start:charge_seg.end + 1],
+                                 t_s[charge_seg.start:charge_seg.end + 1]))
+            q_d = float(trapz_fn(i_abs[discharge_seg.start:discharge_seg.end + 1],
+                                 t_s[discharge_seg.start:discharge_seg.end + 1]))
+            ce = 100.0 * q_d / q_c if q_c > 0 else float("nan")
+        else:
+            ce = (100.0 * discharge_seg.duration_s / charge_seg.duration_s
+                  if charge_seg.duration_s > 0 else float("nan"))
 
         results.append(CycleResult(
             cycle_number=len(results) + 1,
@@ -769,7 +788,7 @@ def analyze_cycling_stability(t_s: np.ndarray, v_v: np.ndarray, current_a: float
     caps_arr = np.array(caps, dtype=float)
     valid = ~np.isnan(caps_arr)
     if np.any(valid):
-        first_valid = caps_arr[valid][0]
+        first_valid = float(np.mean(caps_arr[valid][:max(1, int(baseline_cycles))]))
         retention = np.where(valid, 100.0 * caps_arr / first_valid, np.nan)
         for r, ret in zip(results, retention):
             r.retention_percent = float(ret)

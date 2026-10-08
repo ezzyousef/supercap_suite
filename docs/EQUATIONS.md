@@ -207,6 +207,13 @@ potential point across a supplied scan-rate series (2+ scan rates, 3+
 recommended), then integrates |i_cap| and |i_diff| over the potential
 window to report a capacitive/diffusive charge percentage split.
 
+**What the app's Rate Study tab actually runs**: the simpler peak-current
+form, `core/dunn_method.peak_current_capacitive_diffusive_split`, which
+fits k1 and k2 to the PEAK current at each scan rate only. The
+voltage-resolved `capacitive_diffusive_split` above is available in the
+core library (and tested) but has no button in the app yet, so the
+percentages shown in the app describe the peak current, not the whole CV.
+
 **Important caveat**: a 2023 peer-reviewed critique (Pervez & Stallard,
 *"Capacitive and Diffusive Contributions in Supercapacitors and Batteries:
 A Critique of b-Value and the v-v^1/2 Model,"* Small, 2023, found via
@@ -691,8 +698,12 @@ analysis", eqns 1-6, present in this project's source PDFs verbatim
 the value used in that specific paper's equation set; other sources cite
 values in the ~333.5-334 J/g range for the heat of fusion of bulk water --
 verify which figure is appropriate for your reference method if precision
-matters. The heat-of-fusion value is exposed as an adjustable parameter in
-the app (default 334 J/g) rather than hard-coded, for exactly this reason.
+matters. The heat-of-fusion value is an adjustable parameter in the app
+rather than hard-coded, for exactly this reason. Its default is 333.55 J/g,
+the "Pure water Enthalpy" value in the reference spreadsheet the app was
+checked against -- not the paper's rounded 334 J/g. The two differ by about
+0.13 %, which shifts W_f (and everything derived from it) by the same
+fraction; enter 334 to reproduce the paper's numbers exactly.
 
 ## 9. DSC enthalpy from raw heat-flow data
 

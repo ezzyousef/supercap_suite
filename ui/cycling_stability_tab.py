@@ -156,6 +156,14 @@ class CyclingStabilityTab(QWidget):
         param_grid.addWidget(self.mass_spin, 1, 1)
         param_grid.addWidget(QLabel("Linearity R² threshold (capacitance formula):"), 2, 0)
         param_grid.addWidget(self.r2_spin, 2, 1)
+        self.baseline_spin = QSpinBox()
+        self.baseline_spin.setRange(1, 100)
+        self.baseline_spin.setValue(1)
+        self.baseline_spin.setToolTip(
+            "Retention is relative to the mean capacitance of this many first cycles. "
+            "The first cycle is often unrepresentative (electrode wetting/activation).")
+        param_grid.addWidget(QLabel("Retention baseline: mean of first N cycles:"), 3, 0)
+        param_grid.addWidget(self.baseline_spin, 3, 1)
         param_section.addLayout(param_grid)
         self.configure_section.addWidget(param_section)
 
@@ -360,6 +368,20 @@ class CyclingStabilityTab(QWidget):
         # so Configure gets the attention.
         self.data_section.set_expanded(False)
 
+    def _current_series(self):
+        """The measured current in A if the file has a recognisable current column, so
+        coulombic efficiency can use charge (Q) rather than the time ratio."""
+        if self.df is None:
+            return None
+        for key, factor in (("i_ma", 1e-3), ("i_a", 1.0)):
+            col = find_column(self.df, key)
+            if col:
+                try:
+                    return self.df[col].astype(float).to_numpy() * factor
+                except (ValueError, TypeError):
+                    return None
+        return None
+
     def on_analyze(self):
         if self.df is None:
             QMessageBox.warning(self, "No data", "Load a file first.")
@@ -390,7 +412,9 @@ class CyclingStabilityTab(QWidget):
 
         try:
             cycles = gcd.analyze_cycling_stability(t, v, current_a, mass_g, r2_threshold=r2_thr,
-                                                    cycle_numbers=cycle_numbers)
+                                                    cycle_numbers=cycle_numbers,
+                                                    current_series_a=self._current_series(),
+                                                    baseline_cycles=self.baseline_spin.value())
         except ValueError as e:
             QMessageBox.critical(
                 self, "Cycling stability analysis failed",
@@ -432,7 +456,11 @@ class CyclingStabilityTab(QWidget):
             f"First-cycle capacitance = {first_cap:.4f} F/g",
             f"Last-cycle capacitance  = {last_cap:.4f} F/g",
             f"Capacitance retention after {len(cycles)} cycles = {last_ret:.2f} %",
-            f"Mean coulombic efficiency = {mean_ce:.2f} %",
+            f"Mean coulombic efficiency = {mean_ce:.2f} %  ("
+            + ("Q_discharge / Q_charge from the current column" if self._current_series() is not None
+               else "t_discharge / t_charge -- valid only for equal charge/discharge currents")
+            + ")",
+            f"Retention baseline: mean of the first {self.baseline_spin.value()} analysable cycle(s)",
         ]
         card_warnings = []
         anomalous = df[(df["Coulombic efficiency (%)"] > 105) | (df["Coulombic efficiency (%)"] < 50)]
