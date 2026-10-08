@@ -196,8 +196,9 @@ Load Z real / Z imaginary / frequency columns, preview the Nyquist plot,
 compute low-frequency capacitance and ESR, compute ionic conductivity
 (enter electrolyte thickness and electrode area), or fit a Randles-type
 equivalent circuit (with optional Warburg element) to get Rs, Rct, CPE
-(Q, n), and (if applicable) the Warburg coefficient, with fit-quality
-(reduced chi-squared) and an overlay plot.
+(Q, n), and (if applicable) the Warburg coefficient, with fit quality
+(RMS residual as a % of |Z|, AICc) and an overlay plot. Auto-fit ranks
+circuits by AICc, so a more complex circuit has to earn its extra parameters.
 
 ## Using the DSC tab
 
@@ -212,23 +213,26 @@ equivalent circuit (with optional Warburg element) to get Rs, Rct, CPE
 
 ## Known limitations
 
+See `docs/REVIEW_LOG.md` for the independent review of this version: what was
+found, what was fixed, and what is still open.
+
+
 - `.mpr` (EC-Lab binary) files are read via the third-party `galvani`
   parser, not an officially published spec (BioLogic has never released
   one) — if a `.mpr` file fails to load or looks wrong, re-export as
   `.mpt` or Excel from EC-Lab instead.
 - Curved/sigmoidal DSC baselines are not implemented, only linear
   baselines between user-chosen peak start/end points.
-- The GCD/CV row-range segment selection is manual; there is no automatic
-  cycle-splitting from a `cycle number` column yet — if your file has one,
-  filter/sort it in Excel first, or note the row range for the cycle you
-  want.
-- ESR is computed from a simple high-frequency-intercept estimate, not a
-  fitted steady-state-resistance extrapolation (though the equivalent-
-  circuit fit in the EIS tab gives a more rigorous Rs if you use it).
-- Equivalent circuit fitting uses a single nonlinear-least-squares run
-  from heuristic initial guesses (no multi-start global optimization) —
-  can converge to a local minimum on noisy/sparse spectra; check the
-  overlay plot.
+- CV, EIS and DRT can filter by a `cycle number` column, and CV warns when
+  the selected rows contain more than one cycle (their charge would add
+  up). The GCD discharge segment is picked from the auto-detected segments
+  or a manual row range.
+- ESR is computed from a simple high-frequency-intercept estimate (EIS) or
+  from the IR step (GCD, ΔV_IR/2I after a current reversal or ΔV_IR/I from
+  rest), not a fitted steady-state-resistance extrapolation.
+- Equivalent circuit fitting starts from heuristic initial guesses with a
+  few restarts, not a global optimizer — it can still converge to a local
+  minimum on noisy/sparse spectra; check the overlay plot and the residual.
 - The b-value and Dunn's-method capacitive/diffusive split have a
   documented literature critique (Pervez & Stallard, *Small*, 2023) —
   treat results as indicative, not definitive (see `docs/EQUATIONS.md`).

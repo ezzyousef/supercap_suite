@@ -285,6 +285,27 @@ circuit dataset with a known true Rs.
 
 ## 6a. Equivalent circuit fitting
 
+**Changes after the review (see `docs/REVIEW_LOG.md`)** -- these supersede
+the details further down where they differ:
+- Residuals are weighted by 1/|Z| ("modulus weighting") by default, so each
+  frequency counts by its relative error; `weighting="unit"` restores the
+  old unweighted fit. A short unweighted pre-fit provides a second starting
+  point, and parameters are scaled by their starting values, so the same
+  spectrum in kΩ and in Ω gives the same fit.
+- Each fit reports the RMS residual as a percentage of |Z| (unit-free), AICc
+  and BIC. A residual above 5 % adds a "does not describe the spectrum"
+  warning.
+- Auto-detect ranks candidates by AICc (which penalises extra parameters)
+  instead of reduced chi-squared, and among the models within 2 AICc units
+  of the best picks the simplest one with no parameter pinned at a bound.
+- Interchangeable stages (Rct1||Q1 and Rct2||Q2; the R2-C2 and R3-C3
+  branches) are reported in order of time constant, fastest first.
+- The classic Randles cell Rs + Cdl||(Rct + W) is in the library
+  (`randles_classic_*`). The older `randles1_*_W*` circuits put the Warburg
+  in series with the capacitor instead; both are kept.
+- C and CPE Y0 may go up to 1e5, so whole commercial cells (hundreds of
+  farads) are not pinned at the old 10 F ceiling.
+
 `core/circuit_library.py` implements a generic circuit-TREE engine (every
 circuit is a nested `("elem", kind, prefix)` / `("series", [...])` /
 `("parallel", [...])` expression) with ~50 preset circuits across 4
@@ -613,6 +634,18 @@ for Immittance Data," *J. Electrochem. Soc.* 142(6), 1885-1894 (1995) --
 the standard "linear KK test" implemented in this exact form in commercial
 tools (NOVA/Metrohm Autolab, ZView/RelaxIS) and open-source packages
 (`pyimpspec`, `impedance.py`).
+
+**Changes after the review (see `docs/REVIEW_LOG.md`)**: the measurement
+model now includes a series capacitor and a series inductor in front of the
+Voigt chain (the lin-KK formulation of Schönleber et al., 2014), and the
+least-squares solve is weighted by 1/|Z| (Boukamp's modulus weighting).
+Without the series capacitor, a supercapacitor's low-frequency capacitive
+line -- which grows without limit as f -> 0 -- cannot be represented by any
+finite set of RC elements, so a perfectly valid spectrum could fail. Both
+terms are linear, so the fit is still one least-squares solve. A smooth
+drift (e.g. |Z| growing 30 % over the sweep) raises the residual only to a
+few per cent, below the 5 % threshold -- look at the residual PLOT for a
+trend, not only at pass/fail.
 
 `core/eis_analysis.kramers_kronig_test()` implements Boukamp's original
 fixed-element-count version, not the later automatic mu-criterion element-

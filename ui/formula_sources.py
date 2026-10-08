@@ -16,7 +16,13 @@ Source: standard EDLC capacitance expression, Zhang et al.,
 <code>C_s = (2 &times; I &times; &int;V dt) / (m &times; &Delta;V&sup2;)</code><br>
 Source: hydrogel-electrolyte supercapacitor paper (citing Mathis et al.),
 stated as required "because it accurately reflects the complex charge
-storage mechanisms ... thereby minimizing miscalculations."<br><br>
+storage mechanisms ... thereby minimizing miscalculations."<br>
+V in the integral is measured from the end-of-discharge voltage
+(V &minus; V_min), so for a linear discharge the integral form gives exactly
+the same value as the normal form, whatever the voltage window.<br><br>
+<b>IR drop</b>: by default the ohmic step at the start of the discharge
+is detected and excluded from &Delta;V and &Delta;t (it is not capacitive
+charge); the excluded drop is shown in the results.<br><br>
 <b>Which one was used</b>: decided by fitting V=a&middot;t+b to the
 discharge segment and checking R&sup2; against your threshold (default
 0.98) -- shown in the results above. The 0.98 cutoff is a practical
@@ -24,15 +30,21 @@ heuristic, not a literature constant.
 """
 
 GCD_ESR = """
-<code>ESR = IR_drop / I</code><br>
-A simple two-point IR-drop estimate, not a fitted steady-state
-extrapolation. Some labs instead use IR_drop / (2I) for a full-cycle
-convention -- state which convention you used when reporting ESR.
+<code>ESR = IR_drop / (2I)</code> when the discharge starts straight after
+charging (the current jumps from +I to &minus;I, a change of 2I)<br>
+<code>ESR = IR_drop / I</code> when the discharge starts from rest<br>
+Choose with the "Discharge starts straight after charging" option. The
+IR drop is the step over the first few samples whose slope is far above
+the rest of the discharge -- an estimate, not a fitted steady-state
+extrapolation. State which convention you used when reporting ESR.
 """
 
 GCD_ENERGY_POWER = """
 <code>E (Wh/kg) = C_s &times; &Delta;V&sup2; / 7.2</code><br>
 <code>P (W/kg) = E &times; 3600 / &Delta;t</code><br>
+Not reported for a three-electrode measurement: a single working
+electrode against a reference is not a device, so it has no device
+energy or power.<br>
 Derived from E (J/g) = 0.5 &times; C_s &times; &Delta;V&sup2;. Cross-checked
 against two independent source papers reporting numerically equivalent
 forms, and the underlying derivation in Zhang et al., <i>Adv. Energy
