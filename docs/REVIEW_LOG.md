@@ -73,7 +73,14 @@ Status:
 | The status bar kept another page's message | **fixed** |
 | EIS/DRT result panels needed 840/740 px of height | **fixed**: 600 px |
 
-## Not done
+## Release
 
-- `Supercap_Suite_User_Guide.docx` was not regenerated.
-- No Windows build was made.
+- Version 2.1.0. The Word guide was updated: version, the changed passages, and a
+  What's-new section. Its screenshots are still those of 2.0.0.
+- The Windows installer and portable zip are built by `.github/workflows/windows-build.yml`
+  (tests, PyInstaller, self-test of the exe, Inno Setup) and downloadable from each run.
+
+## Still open
+
+- The naming of the freezable-bound water fraction (W_fb) has not been checked against
+  the source paper, because the paper was not available.
