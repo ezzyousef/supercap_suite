@@ -163,6 +163,8 @@ topology for this: Rs-(Rct||C or Q)-Wo/Ws[-tail C or Q], with the bounded
 Warburg and an optional bare low-frequency tail capacitance appended
 DOWNSTREAM of the semicircle stage rather than nested inside it.
 """
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 import numpy as np
 
