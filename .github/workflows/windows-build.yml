@@ -41,13 +41,6 @@ jobs:
             choco install innosetup -y --no-progress
           }
 
-      - name: "Diagnostics (temporary): the file that crashed at exit, on its own"
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          python -m pytest tests/test_closable_sections.py -q -p no:cacheprovider 2>&1 | Select-Object -Last 1
-          Write-Host "EXIT test_closable_sections.py: $LASTEXITCODE"
-
       - name: Tests
         shell: pwsh
         run: |

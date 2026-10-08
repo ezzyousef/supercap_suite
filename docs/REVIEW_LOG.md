@@ -72,6 +72,7 @@ Status:
 | Appending to a recorded-results sheet with a note corrupted the header | **fixed** |
 | The status bar kept another page's message | **fixed** |
 | EIS/DRT result panels needed 840/740 px of height | **fixed**: 600 px |
+| (found by the Windows build) The test run crashed at exit on Windows, already before this review: `tests/test_closable_sections.py` left parentless widgets for Python to destroy after the QApplication | **fixed**: those tests delete their widgets; background workers no longer sit in a reference cycle |
 
 ## Release
 
