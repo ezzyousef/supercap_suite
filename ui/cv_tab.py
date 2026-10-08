@@ -18,7 +18,7 @@ from .widgets import (
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
     make_scrollable_panel, ResultCard, CollapsibleSection, NormalizationSelector, show_toast, show_empty_state,
-    attach_section_restore_menu, yield_to_event_loop,
+    attach_section_restore_menu, yield_to_event_loop, warn_if_multiple_cycles_not_selected,
 )
 from .unit_widgets import CompoundRateSpinBox
 from . import theme, formula_sources
@@ -521,10 +521,25 @@ class CvTab(QWidget):
         self.export_btn.setEnabled(False)
 
     def on_analyze(self):
+        if not warn_if_multiple_cycles_not_selected(self, self.df, self.cycle_col_combo,
+                                                    self.cycle_value_combo, kind="cv"):
+            return
         cyc = self._get_cycle()
         if cyc is None:
             return
         v, i = cyc
+        n_cycles = cv.count_cycles(v)
+        if n_cycles >= 1.75:
+            answer = QMessageBox.warning(
+                self, "More than one cycle selected",
+                f"The selected rows look like about {n_cycles:.0f} CV cycles. Integrating them "
+                f"together adds up their charge, so the capacitance would be about "
+                f"{n_cycles:.0f}× too large.\n\nNarrow the start/end rows (or pick a cycle) "
+                f"to one closed cycle. Proceed anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         scan_rate = self.scan_rate_spin.value_base()
 
         try:

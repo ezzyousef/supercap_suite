@@ -999,17 +999,20 @@ class EisTab(QWidget):
         TOP_N = 15
         ranked = sorted(
             (a for a in attempts if a[1] is not None),
-            key=lambda item: item[1].reduced_chi_squared,
+            key=lambda item: item[1].aicc,
         )
         ranking_lines = [
             f"Tried {len(attempts)} circuits ({n_ok} fit successfully"
             + (f", {n_failed} could not be fit" if n_failed else "") + ").",
-            f"Top {min(TOP_N, len(ranked))} by reduced χ² (lower = better fit):", "",
+            f"Top {min(TOP_N, len(ranked))} by AICc (lower = better; penalises extra parameters).",
+            "Within 2 AICc units of the best, the data cannot tell models apart, and the",
+            "simplest one with no parameter at a bound is selected.", "",
         ]
+        best_aicc = ranked[0][1].aicc if ranked else 0.0
         for m, r, err in ranked[:TOP_N]:
             name = eis.CIRCUIT_DISPLAY_NAMES.get(m, m)
-            marker = "  <-- selected (best fit)" if m == best.model else ""
-            ranking_lines.append(f"  reduced χ²={r.reduced_chi_squared:10.5g}  "
+            marker = "  <-- selected" if m == best.model else ""
+            ranking_lines.append(f"  ΔAICc={r.aicc - best_aicc:8.2f}  residual {r.rel_rms_percent:6.2f} %  "
                                   f"({len(r.params)} params)  {name}{marker}")
         ranking_lines.append("")
         ranking_lines.append(
@@ -1034,7 +1037,9 @@ class EisTab(QWidget):
 
     def _render_fit_result(self, freq, zre, zim, result, extra_header_lines=None):
         lines = list(extra_header_lines) if extra_header_lines else []
-        lines += [f"Model: {result.display_name}", f"Reduced χ² = {result.reduced_chi_squared:.6g}", ""]
+        lines += [f"Model: {result.display_name}",
+                  f"RMS residual = {result.rel_rms_percent:.3g} % of |Z|   (weighting: {result.weighting})",
+                  f"AICc = {result.aicc:.6g}   reduced χ² = {result.reduced_chi_squared:.6g}", ""]
         for name, val in result.params.items():
             err = result.param_errors.get(name, float("nan"))
             err_str = f" ± {err:.4g}" if not np.isnan(err) else " (± unavailable)"
@@ -1050,21 +1055,20 @@ class EisTab(QWidget):
                       "overlay plot, not just χ², before trusting the fitted values.")
         self.results_text.setPlainText("\n".join(lines))
 
-        chi_ok_card = result.reduced_chi_squared < 5.0
+        # A fit is only "good" if it tracks the data closely AND nothing was flagged: a
+        # parameter pinned at a bound or a wrong-topology misfit can hide behind a small χ².
+        fit_ok = result.rel_rms_percent < 5.0 and not result.warnings
         self.result_card.set_headline(
-            "Fit quality" if not chi_ok_card else "Model",
+            "Model" if fit_ok else "Model — check warnings",
             result.display_name,
         )
         param_pairs = [(name, f"{val:.6g}") for name, val in result.params.items()]
         MAX_SECONDARY_PARAMS = 6
-        secondary = [("Reduced χ²", f"{result.reduced_chi_squared:.6g}")] + param_pairs[:MAX_SECONDARY_PARAMS]
+        secondary = [("RMS residual", f"{result.rel_rms_percent:.3g} % of |Z|")] + param_pairs[:MAX_SECONDARY_PARAMS]
         if len(param_pairs) > MAX_SECONDARY_PARAMS:
             secondary.append(("", f"+ {len(param_pairs) - MAX_SECONDARY_PARAMS} more parameter(s) below"))
         self.result_card.set_secondary(secondary)
-        card_warnings = list(result.warnings)
-        if not chi_ok_card:
-            card_warnings.append("Reduced χ² is large -- check convergence before trusting this fit.")
-        self.result_card.set_warnings(card_warnings)
+        self.result_card.set_warnings(list(result.warnings))
 
         self._reset_plot_axes()
         self.plot.ax.plot(zre, -zim, "o", color=theme.RAW, markersize=4, label="Data (raw)")
@@ -1072,8 +1076,12 @@ class EisTab(QWidget):
                            label=f"{result.display_name} fit")
         self.plot.ax.set_xlabel("Z' (Ω)")
         self.plot.ax.set_ylabel("-Z'' (Ω)")
-        chi_ok = result.reduced_chi_squared < 5.0
-        status = "converged, reduced χ² in range" if chi_ok else "check convergence — reduced χ² is large"
+        if fit_ok:
+            status = f"residual {result.rel_rms_percent:.2g} % of |Z|"
+        elif result.warnings:
+            status = f"{len(result.warnings)} warning(s) — see results"
+        else:
+            status = f"poor fit — residual {result.rel_rms_percent:.2g} % of |Z|"
         self.plot.ax.set_title(f"Equivalent circuit fit — {status}")
         self.plot.ax.set_aspect("equal", adjustable="datalim")
         self.plot.ax.legend(fontsize=8)
@@ -1081,7 +1089,10 @@ class EisTab(QWidget):
         self.plot.fig.tight_layout()
         self.plot.draw()
 
-        self.last_result = {"Model": result.display_name, "Reduced χ²": result.reduced_chi_squared}
+        self.last_result = {"Model": result.display_name, "Reduced χ²": result.reduced_chi_squared,
+                            "Weighting": result.weighting,
+                            "RMS residual (% of |Z|)": result.rel_rms_percent,
+                            "AICc": result.aicc, "Warnings": len(result.warnings)}
         for name, val in result.params.items():
             err = result.param_errors.get(name, float("nan"))
             self.last_result[f"{name} (fitted)"] = val
@@ -1211,7 +1222,8 @@ class EisTab(QWidget):
                 except Exception as e:  # noqa: BLE001 -- report per-file, don't abort the whole batch
                     errs.append(f"{fname}: {e}")
                     continue
-                row = {"File": fname, "Model": r.display_name, "Reduced χ²": r.reduced_chi_squared}
+                row = {"File": fname, "Model": r.display_name, "Reduced χ²": r.reduced_chi_squared,
+                       "RMS residual (% of |Z|)": r.rel_rms_percent, "AICc": r.aicc}
                 for name, val in r.params.items():
                     row[f"{name} (fitted)"] = val
                 if r.warnings:

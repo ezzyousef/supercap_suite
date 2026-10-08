@@ -231,7 +231,12 @@ def test_two_stage_plus_warburg_model_recovers_true_parameters():
     result = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag,
                                          model="supercap_twostage_QQ_Wo", multistart=True)
     assert result.reduced_chi_squared < 1e-6
-    for name, true_val in true_params.items():
+    # The two stages are interchangeable (same impedance either way round); the fit
+    # reports them fastest-first, so compare against the truth in that same order.
+    order = spec.param_order
+    perm = cl.stage_permutation(spec, [true_params[n] for n in order])
+    canonical = dict(zip(order, [true_params[order[i]] for i in perm]))
+    for name, true_val in canonical.items():
         assert result.params[name] == pytest.approx(true_val, rel=0.03)
 
 
@@ -401,8 +406,12 @@ def test_semiinfinite_warburg_is_flagged_when_fit_against_a_capacitive_tail():
     z_true = cl.evaluate_circuit(true_spec.tree, omega, true_params)
 
     _register_test_only_circuit("test_only_rs_w", _bare_rs_element("W"))
-    result = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag, model="test_only_rs_w")
+    result = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag, model="test_only_rs_w",
+                                        weighting="unit")
     assert any("lower search bound" in w for w in result.warnings)
+    # Default (modulus-weighted) fit of the same wrong model must be flagged too.
+    weighted = eis.fit_equivalent_circuit(freq, z_true.real, z_true.imag, model="test_only_rs_w")
+    assert any("lower search bound" in w or "does not describe" in w for w in weighted.warnings)
 
 
 def test_all_circuits_have_unique_names_and_nonempty_param_lists():
@@ -715,13 +724,21 @@ def test_missing_warburg_produces_flagged_rct_overestimation():
     z_re_n = z.real * (1 + noise * rng.standard_normal(len(z)))
     z_im_n = z.imag * (1 + noise * rng.standard_normal(len(z)))
 
-    bad = eis.fit_equivalent_circuit(freq, z_re_n, z_im_n, model="randles1_Q_none", multistart=True)
+    # Unweighted least squares reproduces the original report: Rct blows up many-fold.
+    bad = eis.fit_equivalent_circuit(freq, z_re_n, z_im_n, model="randles1_Q_none",
+                                     multistart=True, weighting="unit")
     assert bad.params["Rct"] > 10 * true_params["Rct"]  # confirms the failure actually reproduces
     assert any("real-axis span" in w for w in bad.warnings)
 
+    # With the default modulus weighting the overestimate is smaller but still wrong,
+    # and it is flagged by the systematic-misfit warning instead.
+    bad_w = eis.fit_equivalent_circuit(freq, z_re_n, z_im_n, model="randles1_Q_none", multistart=True)
+    assert bad_w.params["Rct"] > 2 * true_params["Rct"]
+    assert any("does not describe the spectrum" in w for w in bad_w.warnings)
+
     good = eis.fit_equivalent_circuit(freq, z_re_n, z_im_n, model="supercap_Q_Wo", multistart=True)
     assert good.params["Rct"] == pytest.approx(true_params["Rct"], rel=0.05)
-    assert not any("real-axis span" in w for w in good.warnings)
+    assert not any("real-axis span" in w or "does not describe" in w for w in good.warnings)
 
 
 def test_resistance_overestimation_warning_does_not_misfire_on_legitimate_large_rct():

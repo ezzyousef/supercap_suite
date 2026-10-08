@@ -354,3 +354,37 @@ def randles_sevcik_diffusion_coefficient(
         "diffusion_coefficient_cm2_per_s": float(diffusion_coeff),
         "r_squared": float(r2),
     }
+
+
+def count_cycles(voltage_v: np.ndarray, min_fraction: float = 0.2) -> float:
+    """Approximate number of full CV cycles in a voltage trace.
+
+    Counts sweep-direction reversals whose sweep covers at least `min_fraction` of the
+    full window (so noise and small wiggles do not count), and returns sweeps / 2.
+    A single closed cycle gives 1.0; two stacked cycles give about 2.
+    """
+    v = np.asarray(voltage_v, dtype=float)
+    v = v[np.isfinite(v)]
+    if v.size < 3:
+        return 0.0
+    window = float(np.max(v) - np.min(v))
+    if window <= 0:
+        return 0.0
+    sweeps = 0
+    anchor = v[0]
+    direction = 0
+    extreme = v[0]
+    for x in v[1:]:
+        if direction >= 0 and x > extreme:
+            extreme = x
+            direction = 1
+        elif direction <= 0 and x < extreme:
+            extreme = x
+            direction = -1
+        elif abs(x - extreme) >= min_fraction * window:
+            if abs(extreme - anchor) >= min_fraction * window:
+                sweeps += 1
+            anchor, direction, extreme = extreme, -direction, x
+    if abs(extreme - anchor) >= min_fraction * window:
+        sweeps += 1
+    return sweeps / 2.0

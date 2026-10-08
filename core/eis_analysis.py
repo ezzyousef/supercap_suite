@@ -362,11 +362,15 @@ class KramersKronigResult:
     model_z_re_ohm: np.ndarray
     model_z_im_ohm: np.ndarray
     num_elements: int
+    series_capacitance_f: float = float("nan")   # lin-KK series C (NaN if not included)
+    series_inductance_h: float = float("nan")    # lin-KK series L (NaN if not included)
 
 
 def kramers_kronig_test(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.ndarray,
                          num_elements: int | None = None,
-                         threshold_percent: float = 5.0) -> "KramersKronigResult":
+                         threshold_percent: float = 5.0,
+                         add_capacitance: bool = True,
+                         add_inductance: bool = True) -> "KramersKronigResult":
     """Linear Kramers-Kronig validity test (Boukamp 1995 measurement-model
     approach) -- see the module comment above for the method and its
     caveats. Fits a Voigt chain with `num_elements` RC elements, time
@@ -382,6 +386,15 @@ def kramers_kronig_test(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm
     systematic trend with frequency rather than looking like noise) as a
     sign the measurement itself should be re-checked before trusting any
     circuit fit against it.
+
+    `add_capacitance` / `add_inductance` put a series capacitor and inductor in front
+    of the Voigt chain (the lin-KK formulation of Schönleber et al., 2014). Without the
+    capacitor, a supercapacitor's low-frequency capacitive line -- which grows without
+    limit as f -> 0 -- cannot be represented by any finite set of RC elements, and a
+    perfectly valid spectrum fails the test. Without the inductor, cable/cell inductance
+    at high frequency does the same. Both terms are linear, so the fit stays a single
+    least-squares solve. The regression is weighted by 1/|Z| (Boukamp's modulus
+    weighting) so that small-|Z| high-frequency points count as much as large ones.
 
     Raises ValueError if the three arrays aren't equal-length or there are
     fewer than 5 points (too few to say anything meaningful).
@@ -400,29 +413,47 @@ def kramers_kronig_test(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm
     zim_sorted = zim[order]
     omega = 2.0 * np.pi * f_sorted
 
-    if num_elements is None:
-        num_elements = max(3, len(f) - 2)
-    tau = np.logspace(np.log10(1.0 / omega[-1]), np.log10(1.0 / omega[0]), num_elements)
+    def solve(m):
+        tau = np.logspace(np.log10(1.0 / omega[-1]), np.log10(1.0 / omega[0]), m)
+        w_tau = omega[:, None] * tau[None, :]        # (N, M)
+        denom = 1.0 + w_tau ** 2
+        a_re = 1.0 / denom                            # real-part contribution of each Voigt element
+        a_im = -w_tau / denom                         # imaginary-part contribution of each Voigt element
+        n = len(f_sorted)
+        extra = int(add_capacitance) + int(add_inductance)
+        design = np.zeros((2 * n, 1 + m + extra))
+        design[:n, 0] = 1.0                           # R_inf only contributes to the real part
+        design[:n, 1:1 + m] = a_re
+        design[n:, 1:1 + m] = a_im
+        col = 1 + m
+        if add_capacitance:
+            design[n:, col] = -1.0 / omega            # Im of 1/(jωC) = -(1/C)/ω, linear in 1/C
+            col += 1
+        if add_inductance:
+            design[n:, col] = omega                   # Im of jωL = ωL
+        coeffs, *_ = np.linalg.lstsq(design * weights[:, None], target * weights, rcond=None)
+        return design, coeffs
 
-    w_tau = omega[:, None] * tau[None, :]        # (N, M)
-    denom = 1.0 + w_tau ** 2
-    a_re = 1.0 / denom                            # real-part contribution of each Voigt element
-    a_im = -w_tau / denom                         # imaginary-part contribution of each Voigt element
-
-    n = len(f_sorted)
-    design = np.zeros((2 * n, 1 + num_elements))
-    design[:n, 0] = 1.0                           # R_inf only contributes to the real part
-    design[:n, 1:] = a_re
-    design[n:, 1:] = a_im
     target = np.concatenate([zre_sorted, zim_sorted])
-
-    coeffs, *_ = np.linalg.lstsq(design, target, rcond=None)
-    r_inf, r_k = coeffs[0], coeffs[1:]
-    model_re = r_inf + a_re @ r_k
-    model_im = a_im @ r_k
-
     z_mag = np.sqrt(zre_sorted ** 2 + zim_sorted ** 2)
     z_mag = np.where(z_mag == 0, np.finfo(float).eps, z_mag)
+    weights = np.concatenate([1.0 / z_mag, 1.0 / z_mag])
+
+    if num_elements is None:
+        num_elements = max(3, len(f) - 2)
+    design, coeffs = solve(num_elements)
+    model = design @ coeffs
+    n = len(f_sorted)
+    model_re = model[:n]
+    model_im = model[n:]
+    series_c = float("nan")
+    series_l = float("nan")
+    col = 1 + num_elements
+    if add_capacitance:
+        series_c = float(1.0 / coeffs[col]) if coeffs[col] > 0 else float("inf")
+        col += 1
+    if add_inductance:
+        series_l = float(coeffs[col])
     resid_re_pct = (zre_sorted - model_re) / z_mag * 100.0
     resid_im_pct = (zim_sorted - model_im) / z_mag * 100.0
     all_resid = np.concatenate([resid_re_pct, resid_im_pct])
@@ -437,6 +468,8 @@ def kramers_kronig_test(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm
         model_z_re_ohm=model_re,
         model_z_im_ohm=model_im,
         num_elements=num_elements,
+        series_capacitance_f=series_c,
+        series_inductance_h=series_l,
     )
 
 
@@ -470,6 +503,11 @@ class EquivalentCircuitFitResult:
     z_fit_re: np.ndarray
     z_fit_im: np.ndarray
     warnings: list = None   # human-readable per-parameter warnings, e.g. a parameter pinned at its search bound
+    weighting: str = "modulus"
+    rel_rms_percent: float = float("nan")   # RMS of residual / |Z_data|, in % -- unit-free fit quality
+    aicc: float = float("nan")              # corrected Akaike criterion: lower = better, penalises parameters
+    bic: float = float("nan")
+    n_params: int = 0
 
     def __post_init__(self):
         if self.warnings is None:
@@ -483,7 +521,8 @@ class EquivalentCircuitFitResult:
 def fit_equivalent_circuit(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.ndarray,
                             model: str = "randles1_Q_none",
                             max_nfev: int | None = None,
-                            multistart: bool = False) -> EquivalentCircuitFitResult:
+                            multistart: bool = False,
+                            weighting: str = "modulus") -> EquivalentCircuitFitResult:
     """Fit a Nyquist spectrum to one circuit from the core.circuit_library
     preset library via complex nonlinear least squares (scipy.optimize.
     least_squares on the STACKED real+imaginary residuals simultaneously --
@@ -510,6 +549,13 @@ def fit_equivalent_circuit(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_
     costs several extra fits -- too slow to also apply to auto-fit's ~110
     -circuit screening pass, which instead approximates multi-start by
     trying many circuit TOPOLOGIES.
+
+    `weighting`: "modulus" (default) divides each residual by |Z| of the data point, so
+    every frequency counts by its RELATIVE error. "unit" is plain unweighted least
+    squares, where the large-|Z| low-frequency points dominate and the high-frequency
+    semicircle barely affects the fit. With modulus weighting, chi-squared is
+    dimensionless (about the squared relative error), so it can be compared between
+    spectra measured in mΩ and in kΩ.
 
     Requires scipy. Initial parameter guesses are constructed heuristically
     from the data (see circuit_library.initial_guess_and_bounds) -- for
@@ -544,10 +590,17 @@ def fit_equivalent_circuit(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_
             f"least {(len(param_names) + 1) // 2} frequency points, got {len(f)}."
         )
 
+    if weighting == "modulus":
+        w = 1.0 / np.maximum(np.hypot(zr, zi), 1e-300)
+    elif weighting == "unit":
+        w = np.ones_like(zr)
+    else:
+        raise ValueError("weighting must be 'modulus' or 'unit'")
+
     def residuals(x):
         params = dict(zip(param_names, x))
         z_model = _cl.evaluate_circuit(spec.tree, omega, params)
-        return np.concatenate([(z_model.real - zr), (z_model.imag - zi)])
+        return np.concatenate([(z_model.real - zr) * w, (z_model.imag - zi) * w])
 
     candidate_x0s = [x0]
     if multistart:
@@ -559,12 +612,40 @@ def fit_equivalent_circuit(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_
             ]
             candidate_x0s.append(candidate)
 
+    def unweighted(x):
+        params = dict(zip(param_names, x))
+        z_model = _cl.evaluate_circuit(spec.tree, omega, params)
+        return np.concatenate([(z_model.real - zr), (z_model.imag - zi)])
+
+    # Parameters span many decades (capacitances ~1e-8 F next to resistances ~1e4 Ω), so
+    # the optimizer works in units of each parameter's starting value; with the default
+    # unit scaling the same spectrum in kΩ instead of Ω converged to a visibly worse fit.
+    def x_scale_for(x):
+        return np.maximum(np.abs(np.asarray(x, dtype=float)), 1e-12)
+
     best_result = None
     for candidate in candidate_x0s:
-        r = least_squares(residuals, candidate, bounds=(bounds_lo, bounds_hi), max_nfev=max_nfev)
-        if best_result is None or float(np.sum(r.fun ** 2)) < float(np.sum(best_result.fun ** 2)):
-            best_result = r
+        starts = [candidate]
+        if weighting != "unit":
+            # The weighted cost surface has more local minima far from the heuristic
+            # guess; an unweighted pre-fit lands near the right basin first. Both starts
+            # are polished on the weighted cost and the better one is kept.
+            pre = least_squares(unweighted, candidate, bounds=(bounds_lo, bounds_hi),
+                                max_nfev=max_nfev, x_scale=x_scale_for(candidate))
+            starts.append(list(pre.x))
+        for start in starts:
+            r = least_squares(residuals, start, bounds=(bounds_lo, bounds_hi), max_nfev=max_nfev,
+                              x_scale=x_scale_for(start))
+            if best_result is None or float(np.sum(r.fun ** 2)) < float(np.sum(best_result.fun ** 2)):
+                best_result = r
     result = best_result
+    # Interchangeable stages come back in either order; fix their labels (fastest first).
+    perm = _cl.stage_permutation(spec, result.x)
+    if perm != list(range(len(perm))):
+        result.x = result.x[perm]
+        result.jac = result.jac[:, perm]
+        if getattr(result, "active_mask", None) is not None:
+            result.active_mask = result.active_mask[perm]
 
     params = dict(zip(param_names, result.x))
 
@@ -590,6 +671,14 @@ def fit_equivalent_circuit(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_
     chi_sq = float(np.sum(result.fun ** 2))
     dof = max(len(result.fun) - len(x0), 1)
     reduced_chi_sq = chi_sq / dof
+    n_obs, k = len(result.fun), len(x0)
+    rss = max(chi_sq, 1e-300)
+    aic = n_obs * np.log(rss / n_obs) + 2 * k
+    aicc = aic + (2 * k * (k + 1) / (n_obs - k - 1) if n_obs - k - 1 > 0 else np.inf)
+    bic = n_obs * np.log(rss / n_obs) + k * np.log(n_obs)
+    z_fit_tmp = _cl.evaluate_circuit(spec.tree, omega, dict(zip(param_names, result.x)))
+    rel = np.abs(z_fit_tmp - (zr + 1j * zi)) / np.maximum(np.hypot(zr, zi), 1e-300)
+    rel_rms = float(100.0 * np.sqrt(np.mean(rel ** 2)))
 
     z_fit = _cl.evaluate_circuit(spec.tree, omega, params)
 
@@ -680,10 +769,25 @@ def fit_equivalent_circuit(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_
                     f"extend the measurement to lower frequency."
                 )
 
+    # Systematic-misfit diagnostic: with relative residuals a correct model sits near
+    # the measurement noise (typically well under 2 %). A wrong topology -- most often
+    # one missing a diffusion element -- leaves residuals of 10 % or more, and its
+    # resistances are then not physical values even when no bound is hit.
+    MISFIT_PERCENT = 5.0
+    if rel_rms > MISFIT_PERCENT:
+        warnings_list.append(
+            f"The fit misses the data by {rel_rms:.1f} % of |Z| on average (RMS) -- this circuit "
+            f"does not describe the spectrum, so its fitted values (resistances especially) "
+            f"are not reliable. Try a circuit with a Warburg/diffusion element or compare "
+            f"against auto-fit."
+        )
+
     return EquivalentCircuitFitResult(
         model=model, params=params, param_errors=param_errors,
         chi_squared=chi_sq, reduced_chi_squared=reduced_chi_sq,
         z_fit_re=z_fit.real, z_fit_im=z_fit.imag, warnings=warnings_list,
+        weighting=weighting, rel_rms_percent=rel_rms, aicc=float(aicc), bic=float(bic),
+        n_params=k,
     )
 
 
@@ -702,7 +806,9 @@ def auto_fit_equivalent_circuit(
     instead of retrying one topology from many random starting points, it
     tries many DIFFERENT plausible circuit topologies (which is usually the
     more relevant ambiguity for real electrode/electrolyte systems) and
-    reports which one the data best supports. It is still a single
+    reports which one the data best supports. Candidates are ranked by AICc (the
+    small-sample corrected Akaike information criterion), which rewards fit quality and
+    penalises extra parameters, so a more complex circuit has to earn its place. It is still a single
     heuristic-initial-guess nonlinear least squares run per topology, so a
     "best" result here is best among the models tried, not a guarantee of
     the true global optimum -- always check the overlay plot, not just the
@@ -755,7 +861,9 @@ def auto_fit_equivalent_circuit(
     # report where a QQ-only two-stage circuit kept winning auto-detect
     # over its CQ sibling (added specifically to avoid the QQ variant's
     # pinned-bound warning) even after CQ was registered.
-    successful.sort(key=lambda mr: mr[1].reduced_chi_squared)
+    # Rank by AICc, not chi-squared: chi-squared can only fall as parameters are added,
+    # so ranking by it systematically picks the most complex circuit in the library.
+    successful.sort(key=lambda mr: mr[1].aicc)
     shortlist = successful[:min(8, len(successful))]
     refit = {}
     for m, r in shortlist:
@@ -764,11 +872,13 @@ def auto_fit_equivalent_circuit(
         except (ValueError, RuntimeError):
             refit[m] = r  # keep the screening result if the refit itself fails
 
-    best_chi2 = min(r.reduced_chi_squared for r in refit.values())
-    tolerance = max(best_chi2 * 0.05, 1e-9)
-    competitive = [r for r in refit.values() if r.reduced_chi_squared <= best_chi2 + tolerance]
+    # Models within 2 AICc units of the best are statistically indistinguishable
+    # (Burnham & Anderson's rule of thumb); among those prefer one with no parameter
+    # pinned at a bound, then the fewest parameters, then the lowest AICc.
+    best_aicc = min(r.aicc for r in refit.values())
+    competitive = [r for r in refit.values() if r.aicc <= best_aicc + 2.0]
     unpinned = [r for r in competitive if not any("pinned at" in w for w in r.warnings)]
-    best_screen = min(unpinned or competitive, key=lambda r: r.reduced_chi_squared)
+    best_screen = min(unpinned or competitive, key=lambda r: (r.n_params, r.aicc))
     attempts = [(m, refit.get(m, r), err) for m, r, err in attempts]
     # Final polish: one more independent multistart re-fit of the winner
     # -- cheap (one circuit), and multistart's randomized restarts mean

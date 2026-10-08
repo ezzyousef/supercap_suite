@@ -242,7 +242,11 @@ def total_capacitance_gcd_integral(t_s: np.ndarray, v_v: np.ndarray, current_a: 
         raise ValueError("voltage_window_v must be positive")
 
     trapz_fn = getattr(np, "trapezoid", None) or np.trapz
-    integral_v_dt = trapz_fn(v_v, t_s)  # units: V*s
+    # Integrate V above the end-of-discharge voltage, not absolute V: for a linear
+    # discharge this reduces exactly to I*dt/dV, whereas absolute V adds a spurious
+    # 2*I*V_min*dt/dV**2 whenever the window does not end at 0 V (or goes negative,
+    # as a three-electrode window vs. a reference often does).
+    integral_v_dt = trapz_fn(v_v - np.min(v_v), t_s)  # units: V*s
 
     return (2.0 * current_a * integral_v_dt) / (dv ** 2)
 
@@ -289,18 +293,57 @@ def volumetric_capacitance_gcd_integral(t_s: np.ndarray, v_v: np.ndarray, curren
     return c_total / volume_cm3
 
 
+def ir_drop_end_index(t_s: np.ndarray, v_v: np.ndarray, factor: float = 5.0,
+                      max_fraction: float = 0.1) -> int:
+    """Index of the first point after the IR step at the start of a discharge.
+
+    The step is the run of leading points whose |dV/dt| exceeds `factor` times the
+    typical slope of the rest of the discharge (median over its middle half), limited to
+    the first `max_fraction` of the points. Returns 0 when there is no such step.
+    """
+    t_s = np.asarray(t_s, dtype=float)
+    v_v = np.asarray(v_v, dtype=float)
+    n = len(v_v)
+    if n < 8:
+        return 0
+    dt = np.diff(t_s)
+    dt[dt <= 0] = np.nan
+    slope = np.abs(np.diff(v_v)) / dt
+    mid = slope[n // 4: 3 * n // 4]
+    typical = np.nanmedian(mid) if np.isfinite(mid).any() else np.nan
+    if not np.isfinite(typical) or typical <= 0:
+        return 0
+    k = 0
+    limit = max(1, int(max_fraction * n))
+    while k < limit and np.isfinite(slope[k]) and slope[k] > factor * typical:
+        k += 1
+    return k
+
+
+def _discharge_window(t_s, v_v, exclude_ir_drop: bool):
+    """(t, v, ir_drop_v) for the part of the discharge used for capacitance."""
+    k = ir_drop_end_index(t_s, v_v) if exclude_ir_drop else 0
+    ir = float(v_v[0] - v_v[k]) if k > 0 else 0.0
+    return t_s[k:], v_v[k:], ir
+
+
 def capacitance_gcd_auto(t_s: np.ndarray, v_v: np.ndarray, current_a: float,
-                          mass_g: float, r2_threshold: float = 0.98):
+                          mass_g: float, r2_threshold: float = 0.98,
+                          exclude_ir_drop: bool = True):
     """Pick normal vs integral formula automatically based on discharge
     curve linearity, and return both the value and which method was used
     plus the R^2 that drove the decision, so the choice is always visible
     to the caller rather than hidden.
 
+    The IR step at the start of the discharge is excluded from ΔV and Δt by default
+    (the usual practice: the ohmic drop is not capacitive charge).
+
     Returns a dict: {capacitance_f_per_g, method, r_squared, voltage_window_v,
-    discharge_time_s}
+    discharge_time_s, ir_drop_excluded_v}
     """
     t_s = np.asarray(t_s, dtype=float)
     v_v = np.asarray(v_v, dtype=float)
+    t_s, v_v, ir = _discharge_window(t_s, v_v, exclude_ir_drop)
     lin = classify_discharge_linearity(t_s, v_v, r2_threshold=r2_threshold)
     dv = float(np.max(v_v) - np.min(v_v))
     dt = float(t_s[-1] - t_s[0])
@@ -318,11 +361,12 @@ def capacitance_gcd_auto(t_s: np.ndarray, v_v: np.ndarray, current_a: float,
         "r_squared": lin.r_squared,
         "voltage_window_v": dv,
         "discharge_time_s": dt,
+        "ir_drop_excluded_v": ir,
     }
 
 
 def total_capacitance_gcd_auto(t_s: np.ndarray, v_v: np.ndarray, current_a: float,
-                                r2_threshold: float = 0.98):
+                                r2_threshold: float = 0.98, exclude_ir_drop: bool = True):
     """TOTAL (non-normalized, Farads) counterpart of `capacitance_gcd_auto`
     -- same automatic normal-vs-integral method selection, without
     requiring a mass. Divide `capacitance_f` by mass (g), electrode area
@@ -330,10 +374,11 @@ def total_capacitance_gcd_auto(t_s: np.ndarray, v_v: np.ndarray, current_a: floa
     capacitance.
 
     Returns a dict: {capacitance_f, method, r_squared, voltage_window_v,
-    discharge_time_s}
+    discharge_time_s, ir_drop_excluded_v}
     """
     t_s = np.asarray(t_s, dtype=float)
     v_v = np.asarray(v_v, dtype=float)
+    t_s, v_v, ir = _discharge_window(t_s, v_v, exclude_ir_drop)
     lin = classify_discharge_linearity(t_s, v_v, r2_threshold=r2_threshold)
     dv = float(np.max(v_v) - np.min(v_v))
     dt = float(t_s[-1] - t_s[0])
@@ -351,6 +396,7 @@ def total_capacitance_gcd_auto(t_s: np.ndarray, v_v: np.ndarray, current_a: floa
         "r_squared": lin.r_squared,
         "voltage_window_v": dv,
         "discharge_time_s": dt,
+        "ir_drop_excluded_v": ir,
     }
 
 
@@ -373,20 +419,23 @@ def estimate_ir_drop(t_s: np.ndarray, v_v: np.ndarray) -> float:
     v_v = np.asarray(v_v, dtype=float)
     if len(v_v) < 2:
         raise ValueError("Need at least 2 points")
-    return float(v_v[0] - v_v[1]) if v_v[0] > v_v[1] else float(v_v[1] - v_v[0])
+    # When the step spans several samples (fast logging), take all of it.
+    k = max(1, ir_drop_end_index(t_s, v_v))
+    return float(abs(v_v[0] - v_v[k]))
 
 
-def esr_from_ir_drop(ir_drop_v: float, current_a: float) -> float:
-    """ESR (ohm) = IR-drop (V) / I (A).
+def esr_from_ir_drop(ir_drop_v: float, current_a: float, current_reverses: bool = False) -> float:
+    """ESR (ohm) from the IR step.
 
-    Note: some labs report ESR using IR-drop / (2*I) for a full charge-
-    discharge cycle convention. This function uses the single-step
-    IR-drop/I convention; state clearly in any report which convention was
-    used, since the two differ by a factor of 2.
+    The step equals the change in current times the resistance. When the discharge
+    starts straight after charging, the current jumps from +I to -I, a change of 2I, so
+    ESR = IR-drop / (2I) (`current_reverses=True`). When the discharge starts from rest
+    (open circuit or a hold with no current) the change is I and ESR = IR-drop / I.
+    State which applies in any report: the two differ by a factor of 2.
     """
     if current_a <= 0:
         raise ValueError("current_a must be positive")
-    return ir_drop_v / current_a
+    return ir_drop_v / (2.0 * current_a if current_reverses else current_a)
 
 
 # ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@ import pandas as pd
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel,
     QComboBox, QDoubleSpinBox, QSpinBox, QFileDialog, QMessageBox, QGroupBox,
-    QRadioButton, QButtonGroup, QTextEdit, QSplitter, QInputDialog
+    QRadioButton, QButtonGroup, QTextEdit, QSplitter, QInputDialog, QCheckBox
 )
 from PySide6.QtCore import Qt
 
@@ -209,6 +209,18 @@ class GcdTab(QWidget):
         self.r2_spin.setValue(0.98)
         method_grid.addWidget(QLabel("Linearity R² threshold:"), 1, 0)
         method_grid.addWidget(self.r2_spin, 1, 1)
+        self.exclude_ir_check = QCheckBox("Exclude the IR drop from ΔV and Δt")
+        self.exclude_ir_check.setChecked(True)
+        self.exclude_ir_check.setToolTip(
+            "The ohmic step at the start of the discharge is not capacitive charge; the usual "
+            "practice is to measure ΔV from the point just after it.")
+        method_grid.addWidget(self.exclude_ir_check, 2, 0, 1, 2)
+        self.reversal_check = QCheckBox("Discharge starts straight after charging (ESR = ΔV_IR / 2I)")
+        self.reversal_check.setChecked(True)
+        self.reversal_check.setToolTip(
+            "The current jumps from +I to −I, a change of 2I, so the IR step is 2·I·ESR. "
+            "Untick if the discharge starts from rest (no current before it): ESR = ΔV_IR / I.")
+        method_grid.addWidget(self.reversal_check, 3, 0, 1, 2)
         method_section.addLayout(method_grid)
         left_layout.addWidget(method_section)
 
@@ -549,7 +561,9 @@ class GcdTab(QWidget):
                 current_a = self.current_spin.value()
 
             try:
-                result = gcd.total_capacitance_gcd_auto(t_seg, v_seg, current_a, r2_threshold=r2_thr)
+                result = gcd.total_capacitance_gcd_auto(
+                    t_seg, v_seg, current_a, r2_threshold=r2_thr,
+                    exclude_ir_drop=self.exclude_ir_check.isChecked())
             except ValueError as e:
                 failures.append(f"{fname}: {e}")
                 continue
@@ -571,15 +585,9 @@ class GcdTab(QWidget):
                 continue
 
             ir_drop = gcd.estimate_ir_drop(t_seg, v_seg)
-            esr = gcd.esr_from_ir_drop(ir_drop, current_a) if current_a > 0 else float("nan")
-            if basis == "gravimetric":
-                e_density = gcd.energy_density_wh_per_kg(c, result["voltage_window_v"])
-                e_unit, p_unit = "Wh/kg", "W/kg"
-            else:
-                e_density = gcd.energy_density_wh(c, result["voltage_window_v"])
-                e_unit = "Wh/cm²" if basis == "areal" else "Wh/cm³"
-                p_unit = "W/cm²" if basis == "areal" else "W/cm³"
-            p_density = gcd.power_density_w_per_kg(e_density, result["discharge_time_s"])
+            esr = (gcd.esr_from_ir_drop(ir_drop, current_a, self.reversal_check.isChecked())
+                   if current_a > 0 else float("nan"))
+            e_density, p_density, e_unit, p_unit = _energy_power(c, result, basis, cfg_idx)
 
             row = {
                 "File": fname,
@@ -591,7 +599,7 @@ class GcdTab(QWidget):
                 normalizer_label: normalizer_value,
                 f"Capacitance C ({unit})": c,
                 "Estimated IR drop (V)": ir_drop,
-                "Estimated ESR (Ω)": esr,
+                f"Estimated ESR (Ω), {self._esr_convention()}": esr,
                 f"Energy density ({e_unit})": e_density,
                 f"Power density ({p_unit})": p_density,
             }
@@ -610,6 +618,9 @@ class GcdTab(QWidget):
         if failures:
             summary += "\n\nSkipped:\n" + "\n".join(f"  - {f}" for f in failures)
         QMessageBox.information(self, "Batch import complete", summary)
+
+    def _esr_convention(self) -> str:
+        return "ΔV_IR / 2I" if self.reversal_check.isChecked() else "ΔV_IR / I"
 
     def on_clear_results(self):
         # self.table shows the loaded FILE's raw data (unrelated to the
@@ -653,12 +664,17 @@ class GcdTab(QWidget):
         method_choice = self.method_combo.currentIndex()
 
         try:
+            ir_excluded = 0.0
             if method_choice == 0:
-                result = gcd.total_capacitance_gcd_auto(t, v, current_a, r2_threshold=r2_thr)
+                result = gcd.total_capacitance_gcd_auto(
+                    t, v, current_a, r2_threshold=r2_thr,
+                    exclude_ir_drop=self.exclude_ir_check.isChecked())
+                ir_excluded = result.get("ir_drop_excluded_v", 0.0)
             elif method_choice == 1:
-                dv = float(np.max(v) - np.min(v))
-                dt = float(t[-1] - t[0])
-                lin = gcd.classify_discharge_linearity(t, v, r2_threshold=r2_thr)
+                tw, vw, ir_excluded = gcd._discharge_window(t, v, self.exclude_ir_check.isChecked())
+                dv = float(np.max(vw) - np.min(vw))
+                dt = float(tw[-1] - tw[0])
+                lin = gcd.classify_discharge_linearity(tw, vw, r2_threshold=r2_thr)
                 result = {
                     "capacitance_f": gcd.total_capacitance_gcd_normal(current_a, dt, dv),
                     "method": "normal (forced by user)",
@@ -667,11 +683,12 @@ class GcdTab(QWidget):
                     "discharge_time_s": dt,
                 }
             else:
-                dv = float(np.max(v) - np.min(v))
-                dt = float(t[-1] - t[0])
-                lin = gcd.classify_discharge_linearity(t, v, r2_threshold=r2_thr)
+                tw, vw, ir_excluded = gcd._discharge_window(t, v, self.exclude_ir_check.isChecked())
+                dv = float(np.max(vw) - np.min(vw))
+                dt = float(tw[-1] - tw[0])
+                lin = gcd.classify_discharge_linearity(tw, vw, r2_threshold=r2_thr)
                 result = {
-                    "capacitance_f": gcd.total_capacitance_gcd_integral(t, v, current_a, voltage_window_v=dv),
+                    "capacitance_f": gcd.total_capacitance_gcd_integral(tw, vw, current_a, voltage_window_v=dv),
                     "method": "integral (forced by user)",
                     "r_squared": lin.r_squared,
                     "voltage_window_v": dv,
@@ -686,27 +703,22 @@ class GcdTab(QWidget):
         basis = self.normalizer.basis()
 
         ir_drop = gcd.estimate_ir_drop(t, v)
-        esr = gcd.esr_from_ir_drop(ir_drop, current_a) if current_a > 0 else float("nan")
-        if basis == "gravimetric":
-            e_density = gcd.energy_density_wh_per_kg(c, result["voltage_window_v"])
-            e_unit, p_unit = "Wh/kg", "W/kg"
-        else:
-            e_density = gcd.energy_density_wh(c, result["voltage_window_v"])
-            e_unit = "Wh/cm²" if basis == "areal" else "Wh/cm³"
-            p_unit = "W/cm²" if basis == "areal" else "W/cm³"
-        p_density = gcd.power_density_w_per_kg(e_density, result["discharge_time_s"])
+        esr = (gcd.esr_from_ir_drop(ir_drop, current_a, self.reversal_check.isChecked())
+               if current_a > 0 else float("nan"))
+        cfg_idx = self.config_combo.currentIndex()
+        e_density, p_density, e_unit, p_unit = _energy_power(c, result, basis, cfg_idx)
 
         lines = [
             f"Method used: {result['method']}  (R² of linear fit = {result['r_squared']:.5f}, "
             f"threshold = {r2_thr:.4f})",
-            f"Voltage window ΔV = {result['voltage_window_v']:.4f} V",
+            f"Voltage window ΔV = {result['voltage_window_v']:.4f} V"
+            + (f"  (IR drop of {ir_excluded:.4f} V excluded)" if ir_excluded else ""),
             f"Discharge time Δt = {result['discharge_time_s']:.4f} s",
             f"Current used = {current_a:.6g} A",
             "",
             f"Capacitance C = {c:.4f} {unit}",
         ]
 
-        cfg_idx = self.config_combo.currentIndex()
         if cfg_idx == 1:  # symmetric 2-electrode
             c_elec = gcd.symmetric_cell_to_electrode_capacitance(c)
             lines.append(f"  -> Estimated single-electrode C (symmetric ×4 convention) = {c_elec:.4f} {unit}")
@@ -717,11 +729,15 @@ class GcdTab(QWidget):
         lines += [
             "",
             f"Estimated IR drop = {ir_drop:.5f} V",
-            f"Estimated ESR (IR-drop / I) = {esr:.4f} Ω",
+            f"Estimated ESR ({self._esr_convention()}) = {esr:.4f} Ω",
             "",
-            f"Energy density E = {e_density:.4g} {e_unit}",
-            f"Power density P = {p_density:.4g} {p_unit}",
         ]
+        if cfg_idx == 0:
+            lines.append("Energy and power density: not given for a three-electrode measurement — "
+                         "a single electrode is not a device. Measure a full two-electrode cell.")
+        else:
+            lines += [f"Energy density E = {e_density:.4g} {e_unit}",
+                      f"Power density P = {p_density:.4g} {p_unit}"]
 
         card_warnings = []
         if result["r_squared"] < r2_thr < result["r_squared"] + 0.05:
@@ -739,8 +755,8 @@ class GcdTab(QWidget):
             ("Method", result["method"]),
             ("R² of linear fit", f"{result['r_squared']:.5f}"),
             ("ESR", f"{esr:.4f} Ω"),
-            ("Energy density", f"{e_density:.4g} {e_unit}"),
-            ("Power density", f"{p_density:.4g} {p_unit}"),
+            ("Energy density", "n/a (3-electrode)" if cfg_idx == 0 else f"{e_density:.4g} {e_unit}"),
+            ("Power density", "n/a (3-electrode)" if cfg_idx == 0 else f"{p_density:.4g} {p_unit}"),
         ])
         self.result_card.set_warnings(card_warnings)
 
@@ -761,9 +777,28 @@ class GcdTab(QWidget):
             self.last_result[f"Estimated symmetric 2e cell C, ÷4 ({unit})"] = c_cell_est
         self.last_result.update({
             "Estimated IR drop (V)": ir_drop,
-            "Estimated ESR (Ω)": esr,
+            f"Estimated ESR (Ω), {self._esr_convention()}": esr,
+            "IR drop excluded from ΔV (V)": ir_excluded,
             f"Energy density E ({e_unit})": e_density,
             f"Power density P ({p_unit})": p_density,
         })
         self.last_raw_df = pd.DataFrame({"time_s": t, "voltage_v": v})
         self.export_btn.setEnabled(True)
+
+
+def _energy_power(c, result, basis, cfg_idx):
+    """(energy, power, energy unit, power unit). NaN for a three-electrode result: the
+    energy of a device depends on both electrodes and the cell voltage, which a single
+    working electrode measured against a reference does not give."""
+    if basis == "gravimetric":
+        e_unit, p_unit = "Wh/kg", "W/kg"
+    else:
+        e_unit = "Wh/cm²" if basis == "areal" else "Wh/cm³"
+        p_unit = "W/cm²" if basis == "areal" else "W/cm³"
+    if cfg_idx == 0:
+        return float("nan"), float("nan"), e_unit, p_unit
+    if basis == "gravimetric":
+        e = gcd.energy_density_wh_per_kg(c, result["voltage_window_v"])
+    else:
+        e = gcd.energy_density_wh(c, result["voltage_window_v"])
+    return e, gcd.power_density_w_per_kg(e, result["discharge_time_s"]), e_unit, p_unit

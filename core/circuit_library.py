@@ -405,9 +405,11 @@ def collect_params(tree) -> list[tuple[str, str]]:
 # the right order of magnitude, and the fit-quality/convergence reporting
 # already tells the user when that wasn't good enough.
 _GUESS_DEFAULTS = {
-    "C": (1e-4, 1e-12, 10.0),
+    # Upper bounds allow whole commercial cells (hundreds to thousands of farads), not
+    # just lab electrodes; a 10 F ceiling pinned the capacitance of any real device.
+    "C": (1e-4, 1e-12, 1e5),
     "L": (1e-6, 0.0, 10.0),
-    "Y0": (1e-4, 1e-12, 10.0),
+    "Y0": (1e-4, 1e-12, 1e5),
     "n": (0.85, 0.3, 1.0),
     "B": (1.0, 1e-6, 1e6),
     # "tau" is handled by its own data-scaled branch in
@@ -593,10 +595,19 @@ def _maybe_L(tree, with_l: bool, l_prefix: str = "L"):
 
 def _randles_branch(prefix: str, cap_kind: str, warburg_kind: str | None) -> tuple:
     """Rct-parallel-branch of a Randles-type stage: (Rct) || (cap [+ warburg]).
-    cap_kind in {"C","Q"}; warburg_kind in {None,"W","Wo","Ws"}."""
+    cap_kind in {"C","Q"}; warburg_kind in {None,"W","Wo","Ws"}.
+
+    With a Warburg element this puts diffusion in series with the CAPACITOR, a common
+    supercapacitor variant. It is NOT the classic Randles cell, where diffusion is in
+    series with the charge-transfer resistance -- see `_classic_randles_branch`."""
     cap = _e(cap_kind, f"{prefix}_cap")
     branch = cap if warburg_kind is None else _series(cap, _e(warburg_kind, f"{prefix}_zw"))
     return _parallel(_e("R", prefix), branch)
+
+
+def _classic_randles_branch(cap_kind: str, warburg_kind: str) -> tuple:
+    """Classic Randles stage: Cdl || (Rct + Zw) -- diffusion in series with charge transfer."""
+    return _parallel(_e(cap_kind, "Cdl"), _series(_e("R", "Rct"), _e(warburg_kind, "Zw")))
 
 
 CIRCUITS: dict[str, CircuitSpec] = {}
@@ -629,6 +640,15 @@ def _build_library() -> None:
                 tree = _maybe_L(_series(_e("R", "Rs"), branch), with_l)
                 wb_disp = "" if wb is None else f"-{wb}"
                 disp = f"{'L-' if with_l else ''}Rs(Rct({cap}{wb_disp}))"
+                _register(CircuitSpec(name, disp, "One time constant (Randles-type)", tree))
+    # The classic Randles cell, Rs + Cdl || (Rct + W). Without a Warburg it is identical to
+    # randles1_<cap>_none, so only the Warburg variants are added.
+    for cap in cap_opts:
+        for wb in ("W", "Wo", "Ws"):
+            for with_l in (False, True):
+                name = f"randles_classic_{cap}_{wb}" + ("_L" if with_l else "")
+                tree = _maybe_L(_series(_e("R", "Rs"), _classic_randles_branch(cap, wb)), with_l)
+                disp = f"{'L-' if with_l else ''}Rs({cap}dl(Rct-{wb})) classic Randles"
                 _register(CircuitSpec(name, disp, "One time constant (Randles-type)", tree))
 
     # --- E. Transmission line (de Levie, porous electrode) -----------------
@@ -928,3 +948,66 @@ def circuits_by_category() -> dict[str, list[CircuitSpec]]:
     for spec in CIRCUITS.values():
         out.setdefault(spec.category, []).append(spec)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Interchangeable stages
+# ---------------------------------------------------------------------------
+_STAGE_RE = None
+
+
+def stage_permutation(spec: "CircuitSpec", values) -> list[int]:
+    """Index permutation that puts interchangeable stages in order of time constant.
+
+    Two stages built from the same elements (Rct1||Q1 and Rct2||Q2, or the R2-C2 and
+    R3-C3 branches) give the same impedance whichever way round their values are, so a
+    fit can return them in either order. Sorting by time constant (fastest -- the
+    highest-frequency arc -- first) makes the labels reproducible. Stages built from
+    different elements (a C stage next to a Q stage) are not interchangeable and are
+    left alone. Returns the identity when nothing needs reordering.
+    """
+    import re
+    global _STAGE_RE
+    if _STAGE_RE is None:
+        _STAGE_RE = re.compile(r"^(Rct|R|C)(\d)(_.*)?$")
+    names = list(spec.param_order)
+    index = {n: i for i, n in enumerate(names)}
+    groups: dict[str, dict[tuple, str]] = {}
+    for n in names:
+        m = _STAGE_RE.match(n)
+        if m:
+            groups.setdefault(m.group(2), {})[(m.group(1), m.group(3) or "")] = n
+    # Only stages that contain a resistor and share exactly the same element layout.
+    by_layout: dict[frozenset, list[str]] = {}
+    for idx, members in groups.items():
+        if not any(k[0] in ("R", "Rct") and k[1] == "" for k in members):
+            continue
+        by_layout.setdefault(frozenset(members), []).append(idx)
+    perm = list(range(len(names)))
+
+    def tau(members):
+        r = next(float(values[index[n]]) for k, n in members.items() if k[1] == "" and k[0] in ("R", "Rct"))
+        if ("C", "") in members:
+            return r * float(values[index[members[("C", "")]]])
+        for k, n in members.items():
+            if k[1] == "_cap":
+                return r * float(values[index[n]])
+        y0 = next((n for k, n in members.items() if k[1] == "_cap_Y0"), None)
+        nn = next((n for k, n in members.items() if k[1] == "_cap_n"), None)
+        if y0 and nn:
+            n_val = max(float(values[index[nn]]), 1e-6)
+            return (r * float(values[index[y0]])) ** (1.0 / n_val)
+        return float("nan")
+
+    for layout, idxs in by_layout.items():
+        if len(idxs) < 2:
+            continue
+        slots = sorted(idxs, key=int)
+        taus = {i: tau(groups[i]) for i in idxs}
+        if not all(np.isfinite(t) for t in taus.values()):
+            continue
+        ordered = sorted(idxs, key=lambda i: taus[i])
+        for slot, src in zip(slots, ordered):
+            for key in layout:
+                perm[index[groups[slot][key]]] = index[groups[src][key]]
+    return perm

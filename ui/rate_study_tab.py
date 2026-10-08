@@ -1134,7 +1134,10 @@ class GcdRateTool(QWidget):
             "Standard supercapacitor comparison plot (e.g. EC-Lab's Ragone-"
             "plot tool) -- same underlying E/P values as the rate-"
             "capability table, just re-axed to log(P) vs. log(E) instead "
-            "of capacitance vs. current density."
+            "of capacitance vs. current density.\n"
+            "Only meaningful for a full two-electrode cell: a three-electrode\n"
+            "(single working electrode) measurement is not a device and has no\n"
+            "device energy or power."
         )
         self.ragone_checkbox.toggled.connect(lambda _checked: self._redraw_rate_plot())
         left_layout.addWidget(self.ragone_checkbox)
@@ -1399,7 +1402,7 @@ class GcdRateTool(QWidget):
             self.plot.ax.set_yscale("log")
             self.plot.ax.set_xlabel("Energy density (Wh/kg)")
             self.plot.ax.set_ylabel("Power density (W/kg)")
-            self.plot.ax.set_title("Ragone plot")
+            self.plot.ax.set_title("Ragone plot (valid for two-electrode cell data only)")
         else:
             self.plot.ax.plot(df["current_density_a_per_g"], df["capacitance_f_per_g"], "o-",
                                color=theme.RAW, linewidth=1.3, markersize=4)

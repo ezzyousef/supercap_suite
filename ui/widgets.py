@@ -199,7 +199,8 @@ def show_toast(parent, text: str, kind: str = "success") -> None:
     ToastNotification(parent, text, kind)
 
 
-def warn_if_multiple_cycles_not_selected(parent, df, cycle_col_combo, cycle_value_combo) -> bool:
+def warn_if_multiple_cycles_not_selected(parent, df, cycle_col_combo, cycle_value_combo,
+                                         kind: str = "eis") -> bool:
     """Call before running any analysis that assumes its input is ONE
     single, causal EIS sweep (Kramers-Kronig test, DRT/DCT, equivalent-
     circuit fitting) on a tab that offers the EIS/DRT tabs' "cycle-number
@@ -220,7 +221,7 @@ def warn_if_multiple_cycles_not_selected(parent, df, cycle_col_combo, cycle_valu
     this is worth catching before the user chases the wrong problem.
     """
     col = cycle_col_combo.currentText()
-    if not col or col == "-- none / single spectrum --":
+    if not col or col.startswith("-- none"):
         return True
     if cycle_value_combo.currentIndex() > 0:
         return True  # a specific cycle is already selected
@@ -232,6 +233,19 @@ def warn_if_multiple_cycles_not_selected(parent, df, cycle_col_combo, cycle_valu
         return True
     if n_distinct <= 1:
         return True
+    if kind == "cv":
+        confirm = QMessageBox.warning(
+            parent, "Multiple cycles detected",
+            f"This file has {n_distinct} distinct values in the '{col}' column, and "
+            f"no single cycle is selected -- ALL {n_distinct} cycles would be integrated "
+            f"together. The charge of every cycle adds up, so the capacitance would come "
+            f"out roughly {n_distinct} times too large.\n\n"
+            f"Recommended: pick a specific cycle first (often the last, stabilised one)."
+            f"\n\nProceed anyway with all rows combined?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return confirm == QMessageBox.StandardButton.Yes
     confirm = QMessageBox.warning(
         parent, "Multiple cycles detected",
         f"This file has {n_distinct} distinct values in the '{col}' column, and "
