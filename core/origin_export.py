@@ -66,10 +66,13 @@ def is_available() -> bool:
     verify it's actually installed (that only happens on the first real
     send, since launching Origin is slow and shouldn't happen just to
     decide whether to show a button)."""
+    # find_spec locates the package without importing it. Importing originpro loads its
+    # native OriginExt module, which on a machine without Origin aborted the process at
+    # interpreter shutdown (seen on Windows CI) -- too high a price for showing a button.
+    import importlib.util
     try:
-        import originpro  # noqa: F401
-        return True
-    except ImportError:
+        return importlib.util.find_spec("originpro") is not None
+    except (ImportError, ValueError):
         return False
 
 
