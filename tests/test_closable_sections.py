@@ -5,7 +5,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QCoreApplication, QEvent, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QToolButton, QWidget
 
 from ui.widgets import (
@@ -18,20 +18,6 @@ from ui.widgets import (
 def _qapp():
     app = QApplication.instance() or QApplication([])
     yield app
-
-
-@pytest.fixture(autouse=True)
-def _delete_widgets_after_each_test(_qapp):
-    # These tests build parentless sections, menus and parent widgets and drop them.
-    # Left to Python's shutdown, they were destroyed after the QApplication on Windows
-    # and the process failed fast at exit (0xC0000409) although every test had passed.
-    # Deleting them here, while the application still exists, keeps teardown in order.
-    yield
-    for widget in QApplication.topLevelWidgets():
-        widget.close()
-        widget.deleteLater()
-    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-    _qapp.processEvents()
 
 
 def _find_close_button(section: CollapsibleSection) -> QToolButton:
