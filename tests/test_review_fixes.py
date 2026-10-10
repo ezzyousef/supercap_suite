@@ -200,3 +200,17 @@ def test_kramers_kronig_flags_smooth_drift_that_still_passes():
     zd = zn * (1 + 0.3 * np.linspace(0, 1, f.size))
     drift = eis.kramers_kronig_test(f, zd.real, zd.imag)
     assert drift.passed and drift.systematic_trend
+
+
+def test_mw_per_gram_is_not_read_as_w_per_gram():
+    from core import dsc_analysis as dsc
+    assert dsc.guess_heat_flow_unit("Heat flow (mW/g)") == "mW/g (normalised)"
+    assert dsc.heat_flow_to_mw([1.0], "mW/g (normalised)", 0.01)[0] == pytest.approx(0.01)
+
+
+def test_ir_step_logged_at_the_same_timestamp_is_excluded():
+    t = np.array([0, 0, 1, 2, 3, 4, 5, 6, 7, 8.0])
+    v = np.array([1, .8, .7, .6, .5, .4, .3, .2, .1, 0])
+    r = gcd.capacitance_gcd_auto(t, v, 1.0, 1.0)
+    assert r["capacitance_f_per_g"] == pytest.approx(10.0)
+    assert r["ir_drop_excluded_v"] == pytest.approx(0.2)

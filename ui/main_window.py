@@ -13,6 +13,7 @@ neither of two ambiguous shortcuts.
 """
 from __future__ import annotations
 
+import shiboken6
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
@@ -153,6 +154,9 @@ class ToolPage(QWidget):
         self._resize_timer.start()
 
     def _fit_panes(self) -> None:
+        # Queued by a timer: the window (or the tool in it) may have been deleted since.
+        if not shiboken6.isValid(self) or not shiboken6.isValid(self.tool):
+            return
         if balance_main_splitters(self):
             QTimer.singleShot(80, self._fit_panes)          # a splitter has no real width yet
         relax_combo_widths(self.tool)

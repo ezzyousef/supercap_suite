@@ -185,7 +185,9 @@ class DrtTab(QWidget):
             "λ from 1e-6 to 1, and takes the smoothest λ that predicts within 20 % of the "
             "best. A data-driven starting point, not a guarantee -- check that the peaks "
             "you report survive a change of λ by a factor of a few.")
-        self.auto_lambda_check.toggled.connect(lambda on: self.lambda_spin.setEnabled(not on))
+        self.auto_lambda_check.toggled.connect(lambda _on: self._sync_auto_lambda())
+        # The re-im cross-validation fits the DRT (impedance) model; it does not apply to DCT.
+        self.method_combo.currentIndexChanged.connect(lambda _i: self._sync_auto_lambda())
         drt_grid.addWidget(self.auto_lambda_check, 3, 0, 1, 2)
 
         self.run_btn = QPushButton("▶ Run analysis")
@@ -395,6 +397,11 @@ class DrtTab(QWidget):
             freq, zre, zim = eis.crop_inductive_loop_points(freq, zre, zim)
         return freq, zre, zim
 
+    def _sync_auto_lambda(self):
+        is_dct = self.method_combo.currentData() == "dct"
+        self.auto_lambda_check.setEnabled(not is_dct)
+        self.lambda_spin.setEnabled(is_dct or not self.auto_lambda_check.isChecked())
+
     def on_run(self):
         data = self._get_eis_arrays()
         if data is None:
@@ -413,7 +420,7 @@ class DrtTab(QWidget):
         # docstring. "dct" has no analogous "try DRT instead" check since
         # DRT is the default/first thing a user would already have tried.
         compute_fn = drt.compute_dct if method == "dct" else drt.compute_drt_with_dct_recommendation
-        auto = self.auto_lambda_check.isChecked()
+        auto = self.auto_lambda_check.isChecked() and method != "dct"
 
         def run():
             lam = drt.select_lambda_reim(freq, zre, zim)[0] if auto else lambda_reg

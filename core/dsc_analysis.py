@@ -612,7 +612,7 @@ def crystallinity_percent(enthalpy_sample_j_per_g: float, enthalpy_100pct_crysta
 # ---------------------------------------------------------------------------
 # Every calculation here works in mW (mJ/s). Instruments export W, mW, µW, or a
 # mass-normalised signal (W/g, which is the same number as mW/mg).
-HEAT_FLOW_UNITS = ("mW", "W", "µW", "W/g (normalised)", "mW/mg (normalised)")
+HEAT_FLOW_UNITS = ("mW", "W", "µW", "W/g (normalised)", "mW/mg (normalised)", "mW/g (normalised)")
 
 
 def guess_heat_flow_unit(header: str) -> str | None:
@@ -621,6 +621,8 @@ def guess_heat_flow_unit(header: str) -> str | None:
     h = str(header or "").lower().replace(" ", "")
     if re.search(r"mw/mg", h):
         return "mW/mg (normalised)"
+    if re.search(r"mw/g", h):                     # before w/g, which it ends with
+        return "mW/g (normalised)"
     if re.search(r"w/g", h):
         return "W/g (normalised)"
     if re.search(r"(µ|u|μ)w\b|\((µ|u|μ)w\)|/(µ|u|μ)w", h):
@@ -645,6 +647,10 @@ def heat_flow_to_mw(values, unit: str, sample_mass_g: float | None = None):
         if not sample_mass_g or sample_mass_g <= 0:
             raise ValueError("A mass-normalised heat flow needs the sample mass to convert to mW")
         return values * 1000.0 * sample_mass_g          # (W/g)·g = W = 1000 mW
+    if unit == "mW/g (normalised)":
+        if not sample_mass_g or sample_mass_g <= 0:
+            raise ValueError("A mass-normalised heat flow needs the sample mass to convert to mW")
+        return values * sample_mass_g                   # (mW/g)·g = mW
     raise ValueError(f"Unknown heat-flow unit {unit!r}")
 
 

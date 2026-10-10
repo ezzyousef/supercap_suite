@@ -307,15 +307,20 @@ def ir_drop_end_index(t_s: np.ndarray, v_v: np.ndarray, factor: float = 5.0,
     if n < 8:
         return 0
     dt = np.diff(t_s)
-    dt[dt <= 0] = np.nan
-    slope = np.abs(np.diff(v_v)) / dt
+    dv = np.abs(np.diff(v_v))
+    same_time = dt <= 0
+    dt[same_time] = np.nan
+    slope = dv / dt
+    # Instruments often log the IR step at the same timestamp as the last charge point.
+    slope[same_time & (dv > 0)] = np.inf
     mid = slope[n // 4: 3 * n // 4]
-    typical = np.nanmedian(mid) if np.isfinite(mid).any() else np.nan
+    mid = mid[np.isfinite(mid)]
+    typical = np.median(mid) if mid.size else np.nan
     if not np.isfinite(typical) or typical <= 0:
         return 0
     k = 0
     limit = max(1, int(max_fraction * n))
-    while k < limit and np.isfinite(slope[k]) and slope[k] > factor * typical:
+    while k < limit and not np.isnan(slope[k]) and slope[k] > factor * typical:
         k += 1
     return k
 

@@ -24,13 +24,18 @@ from PySide6.QtCore import QThread, Signal
 _LIVE: set = set()
 
 
-def wait_for_workers(timeout_ms: int = 60000) -> None:
+def wait_for_workers(timeout_ms: int | None = None) -> None:
     """Block until every running AnalysisWorker has finished (connected to
     QApplication.aboutToQuit). The core/ calls cannot be interrupted safely, so
-    quitting waits for them rather than tearing the threads down mid-fit."""
+    quitting waits for them rather than tearing the threads down mid-fit. With no
+    timeout it waits as long as they take: a QThread destroyed while still running
+    aborts the whole process."""
     for worker in list(_LIVE):
         if worker.isRunning():
-            worker.wait(timeout_ms)
+            if timeout_ms is None:
+                worker.wait()
+            else:
+                worker.wait(timeout_ms)
 
 
 class AnalysisWorker(QThread):
