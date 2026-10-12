@@ -155,55 +155,54 @@ def set_status_style(label, kind: str) -> None:
 
 # ---------------------------------------------------------------------------- plots
 def apply_matplotlib_rcparams() -> None:
-    """App-wide matplotlib defaults: the theme's palette as the colour cycle, the UI's type
-    scale, and a light grid."""
+    """App-wide matplotlib defaults: the lab's house style (Figure Studio's, from labkit) --
+    DejaVu Sans with bold axis titles, an open frame, outward ticks, a horizontal grid and a
+    frameless legend, in the "Review" palette."""
     import matplotlib
+    from labkit.style import matplotlib_rc
     t = tokens()
-    matplotlib.rcParams.update({
-        "axes.prop_cycle": matplotlib.cycler(color=list(PALETTES[THEMES[_mode].palette][:6])),
-        "figure.dpi": 110,
-        "savefig.dpi": 300,
-        "font.size": 9,
-        "font.family": "sans-serif",
-        "axes.titlesize": 10,
-        "axes.labelsize": 9,
-        "xtick.labelsize": 8,
-        "ytick.labelsize": 8,
-        "legend.fontsize": 8,
-        "legend.frameon": True,
-        "grid.alpha": 0.6,
-        "grid.linewidth": 0.6,
-        "text.color": t["INK"],
-        "axes.labelcolor": t["INK"],
-        "xtick.color": t["INK"],
-        "ytick.color": t["INK"],
-    })
+    rc = {k: v for k, v in matplotlib_rc(_mode, "screen").items()
+          if not k.startswith(("figure.", "savefig.facecolor", "axes.facecolor"))}
+    rc.update({"figure.dpi": 110, "savefig.dpi": 300,
+               "text.color": t["INK"], "axes.labelcolor": t["INK"],
+               "xtick.color": t["INK"], "ytick.color": t["INK"]})
+    matplotlib.rcParams.update(rc)
 
 
 def apply_plot_style(ax) -> None:
-    """Scientific-instrument plot conventions for the current theme: inward ticks on all four
-    sides, minor ticks, a full box and a subdued grid. Call after every ax.clear() + plot."""
+    """The lab's house style (Figure Studio's) for the current theme: an open frame (left and
+    bottom only), outward ticks, bold axis titles and tick labels, a horizontal grid and a
+    frameless legend. Call after every ax.clear() + plot."""
+    from labkit.style import matplotlib_rc
     t = tokens()
+    rc = matplotlib_rc(_mode, "screen")
     fig = ax.figure
     fig.patch.set_facecolor(t["PANEL"])
     ax.set_facecolor(t["PANEL"])
-    for spine in ax.spines.values():
-        spine.set_color(t["BORDER"])
-        spine.set_linewidth(0.8)
-    ax.tick_params(axis="both", which="both", direction="in", color=t["BORDER"],
-                   labelcolor=t["INK"], top=True, right=True)
-    ax.minorticks_on()
-    ax.tick_params(which="minor", direction="in", length=2.5, color=t["BORDER"], top=True, right=True)
-    ax.tick_params(which="major", length=4.5)
-    ax.grid(True, color=t["GRID"], linewidth=0.6, alpha=0.9)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_visible(True)
+        ax.spines[side].set_color(t["INK"])
+        ax.spines[side].set_linewidth(rc["axes.linewidth"])
+    ax.minorticks_off()
+    ax.tick_params(axis="both", which="major", direction="out", color=t["INK"], labelcolor=t["INK"],
+                   top=False, right=False, length=rc["xtick.major.size"], width=rc["xtick.major.width"],
+                   labelsize=rc["xtick.labelsize"])
+    ax.xaxis.grid(False)
+    ax.yaxis.grid(True, color=t["GRID"], linewidth=rc["grid.linewidth"])
     ax.set_axisbelow(True)
-    ax.xaxis.label.set_color(t["INK"])
-    ax.yaxis.label.set_color(t["INK"])
+    for label in (ax.xaxis.label, ax.yaxis.label):
+        label.set_color(t["INK"])
+        label.set_fontweight("bold")
+        label.set_fontsize(rc["axes.labelsize"])
     ax.title.set_color(t["INK"])
+    ax.title.set_fontweight("bold")
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+        label.set_fontweight("bold")
     legend = ax.get_legend()
     if legend is not None:
-        legend.get_frame().set_facecolor(t["SURFACE"])
-        legend.get_frame().set_edgecolor(t["BORDER"])
+        legend.set_frame_on(False)
         for text in legend.get_texts():
             text.set_color(t["INK"])
 

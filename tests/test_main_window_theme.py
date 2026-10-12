@@ -45,7 +45,9 @@ def test_theme_colours_follow_the_mode():
     theme.set_mode("light")
     light_ink, light_raw = theme.INK, theme.RAW
     theme.set_mode("dark")
-    assert theme.INK != light_ink and theme.RAW != light_raw
+    # Text and surfaces follow the mode; the data colours are the house "Review" palette in
+    # both, as in Figure Studio, so a series keeps its colour when the theme changes.
+    assert theme.INK != light_ink and theme.RAW == light_raw
     theme.set_mode("light")
     assert theme.INK == light_ink
 
