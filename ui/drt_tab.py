@@ -19,13 +19,14 @@ from core.data_io import load_data_file, list_excel_sheets, find_column, DataLoa
 from core import eis_analysis as eis
 from core import drt_analysis as drt
 from .widgets import (
+    make_cancel_button, attach_cancel,
     invalidate_results, for_current_data,
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
     make_scrollable_panel, ResultCard, CollapsibleSection, show_toast, show_empty_state,
     attach_section_restore_menu, yield_to_event_loop, warn_if_multiple_cycles_not_selected,
 )
-from .workers import AnalysisWorker, set_controls_busy
+from .workers import AnalysisWorker, check_cancel, set_controls_busy
 from . import theme, formula_sources
 
 
@@ -193,6 +194,8 @@ class DrtTab(QWidget):
         self.run_btn = QPushButton("▶ Run analysis")
         self.run_btn.clicked.connect(self.on_run)
         drt_grid.addWidget(self.run_btn, 3, 0, 1, 2)
+        self.cancel_btn = make_cancel_button("■ Cancel")
+        drt_grid.addWidget(self.cancel_btn, 5, 0, 1, 2)
         drt_grid.addWidget(theme.make_source_button(self, "DRT deconvolution", formula_sources.DRT_ANALYSIS), 4, 0, 1, 2)
         drt_grid.addWidget(theme.make_source_button(self, "DCT deconvolution", formula_sources.DCT_ANALYSIS), 5, 0, 1, 2)
         drt_section.addLayout(drt_grid)
@@ -423,10 +426,14 @@ class DrtTab(QWidget):
         auto = self.auto_lambda_check.isChecked() and method != "dct"
 
         def run():
-            lam = drt.select_lambda_reim(freq, zre, zim)[0] if auto else lambda_reg
+            lam = (drt.select_lambda_reim(freq, zre, zim,
+                                          progress_callback=lambda k, n, what: worker.report(k, n, what))[0]
+                   if auto else lambda_reg)
+            check_cancel()
             return compute_fn(freq, zre, zim, lambda_reg=lam)
         worker = AnalysisWorker(run)
         self._worker = worker
+        attach_cancel(self.cancel_btn, worker, self.status_label, f"{method.upper()} analysis")
         worker.succeeded.connect(for_current_data(self, self._on_dct_done if method == "dct" else self._on_drt_done))
         worker.failed.connect(lambda msg: QMessageBox.critical(self, f"{method.upper()} analysis failed", msg))
         worker.finished.connect(self._on_worker_finished)

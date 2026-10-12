@@ -18,6 +18,7 @@ from PySide6.QtCore import Qt
 from core.data_io import load_data_file, list_excel_sheets, find_column, DataLoadError
 from core import gcd_analysis as gcd
 from .widgets import (
+    make_cancel_button, attach_cancel,
     invalidate_results, for_current_data,
     PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
@@ -175,6 +176,8 @@ class CyclingStabilityTab(QWidget):
         analyze_btn.setDefault(True)
         self.analyze_btn = analyze_btn
         left_layout.addWidget(analyze_btn)
+        self.cancel_btn = make_cancel_button("■ Cancel")
+        left_layout.addWidget(self.cancel_btn)
         left_layout.addWidget(theme.make_source_button(
             self, "Cycling stability (retention & coulombic efficiency)",
             formula_sources.CYCLING_STABILITY,
@@ -443,6 +446,7 @@ class CyclingStabilityTab(QWidget):
             self, lambda cycles: self._show_cycles(cycles, cycle_col, cycle_numbers, current_a, mass_g)))
         worker.failed.connect(failed)
         worker.finished.connect(self._on_worker_finished)
+        attach_cancel(self.cancel_btn, worker, self.status_label, "cycling analysis")
         worker.start()
 
     def _busy_controls(self):

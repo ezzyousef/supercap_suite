@@ -38,6 +38,18 @@ def wait_for_workers(timeout_ms: int | None = None) -> None:
                 worker.wait(timeout_ms)
 
 
+class Cancelled(BaseException):
+    """Raised inside a worker's job when the user pressed Cancel. A BaseException, so the
+    job's own `except Exception` (e.g. "skip a file that fails") does not swallow it."""
+
+
+def check_cancel() -> None:
+    """Call between steps of a long job: stops it there if Cancel was pressed."""
+    from PySide6.QtCore import QThread
+    if QThread.currentThread().isInterruptionRequested():
+        raise Cancelled()
+
+
 class AnalysisWorker(QThread):
     """Runs a zero-argument callable on a background thread and reports
     its result (`succeeded`) or exception message (`failed`) back to the
@@ -47,6 +59,8 @@ class AnalysisWorker(QThread):
 
     succeeded = Signal(object)
     failed = Signal(str)
+    cancelled = Signal()
+    progress = Signal(int, int, str)        # done, total, what -- emitted from the job
 
     def __init__(self, fn, parent=None):
         super().__init__(parent)
@@ -62,16 +76,32 @@ class AnalysisWorker(QThread):
     def _forget(self):
         _LIVE.discard(self)
 
+    def cancel(self) -> None:
+        """Ask the job to stop at its next check_cancel(); a job without checks finishes
+        and its result is discarded."""
+        self.requestInterruption()
+
+    def report(self, done: int, total: int, what: str = "") -> None:
+        """Progress from inside the job (thread-safe: the signal is queued to the GUI)."""
+        self.progress.emit(int(done), int(total), str(what))
+        check_cancel()
+
     def run(self):
         try:
             result = self._fn()
+        except Cancelled:
+            self.cancelled.emit()
+            return
         except Exception as e:  # noqa: BLE001 -- deliberately broad: any
             # exception from the wrapped core/ call must be reported back
             # to the main thread as a message, never crash the worker
             # thread silently.
             self.failed.emit(str(e))
         else:
-            self.succeeded.emit(result)
+            if self.isInterruptionRequested():
+                self.cancelled.emit()           # cancelled while a step could not be interrupted
+            else:
+                self.succeeded.emit(result)
 
 
 def set_controls_busy(buttons: list, busy: bool, busy_texts: dict | None = None) -> None:

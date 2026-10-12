@@ -17,6 +17,7 @@ from core.data_io import load_data_file, list_excel_sheets, find_column, DataLoa
 from core import eis_analysis as eis
 from core import circuit_library as circuits
 from .widgets import (
+    make_cancel_button, attach_cancel,
     invalidate_results, for_current_data,
     PlotWidget, PlotPanel, DataFrameModel, make_table_view, make_export_button, RecordLogPanel,
     make_resizable_results_panel, configure_collapsible_main_splitter, make_maximize_results_button,
@@ -304,6 +305,8 @@ class EisTab(QWidget):
         )
         self.clear_btn.clicked.connect(self.on_clear_results)
         fit_grid.addWidget(self.clear_btn, 5, 0, 1, 2)
+        self.cancel_fit_btn = make_cancel_button("■ Cancel fit")
+        fit_grid.addWidget(self.cancel_fit_btn, 6, 0, 1, 2)
         fit_grid.addWidget(theme.make_source_button(self, "Equivalent circuit fit", formula_sources.EIS_CIRCUIT_FIT), 6, 0, 1, 2)
         fit_section.addLayout(fit_grid)
         self.configure_section.addWidget(fit_section)
@@ -975,6 +978,7 @@ class EisTab(QWidget):
 
         worker = AnalysisWorker(lambda: eis.fit_equivalent_circuit(freq, zre, zim, model=model, multistart=True))
         self._fit_worker = worker
+        attach_cancel(self.cancel_fit_btn, worker, self.status_label, "fit")
         worker.succeeded.connect(for_current_data(self, lambda result: self._render_fit_result(freq, zre, zim, result)))
         worker.failed.connect(lambda msg: QMessageBox.critical(self, "Fit error", msg))
         worker.finished.connect(self._on_fit_worker_finished)
@@ -993,8 +997,12 @@ class EisTab(QWidget):
                            busy_texts={self.auto_btn: f"Running auto-fit across {n_total} circuits…"})
         self.status_label.setText(f"Running auto-fit across {n_total} circuits… (window stays responsive)")
 
-        worker = AnalysisWorker(lambda: eis.auto_fit_equivalent_circuit(freq, zre, zim))
+        worker = AnalysisWorker(lambda: eis.auto_fit_equivalent_circuit(
+            freq, zre, zim, progress_callback=lambda done, total, m: worker.report(done, total, m)))
         self._fit_worker = worker
+        attach_cancel(self.cancel_fit_btn, worker, self.status_label, "auto-fit")
+        worker.progress.connect(lambda done, total, m: self.status_label.setText(
+            f"Auto-fit: {done}/{total} circuits ({eis.CIRCUIT_DISPLAY_NAMES.get(m, m)})…"))
         worker.succeeded.connect(for_current_data(self, lambda result: self._on_auto_fit_done(freq, zre, zim, result)))
         worker.failed.connect(lambda msg: QMessageBox.critical(self, "Auto-detect failed", msg))
         worker.finished.connect(self._on_fit_worker_finished)
@@ -1230,7 +1238,8 @@ class EisTab(QWidget):
 
         def _run_batch():
             rows, errs = [], []
-            for fname, freq, zre, zim in prepared:
+            for k, (fname, freq, zre, zim) in enumerate(prepared):
+                worker.report(k, len(prepared), fname)         # stops here if Cancel was pressed
                 try:
                     r = eis.fit_equivalent_circuit(freq, zre, zim, model=model, multistart=True)
                 except Exception as e:  # noqa: BLE001 -- report per-file, don't abort the whole batch
@@ -1247,6 +1256,9 @@ class EisTab(QWidget):
 
         worker = AnalysisWorker(_run_batch)
         self._fit_worker = worker
+        attach_cancel(self.cancel_fit_btn, worker, self.status_label, "batch fit")
+        worker.progress.connect(lambda done, total, f: self.status_label.setText(
+            f"Batch fit: {done}/{total} files done (now {f})…"))
         worker.succeeded.connect(lambda result: self._on_batch_fit_done(result, failures))
         worker.failed.connect(lambda msg: QMessageBox.critical(self, "Batch fit error", msg))
         worker.finished.connect(self._on_fit_worker_finished)

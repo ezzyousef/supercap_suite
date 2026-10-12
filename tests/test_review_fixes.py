@@ -214,3 +214,41 @@ def test_ir_step_logged_at_the_same_timestamp_is_excluded():
     r = gcd.capacitance_gcd_auto(t, v, 1.0, 1.0)
     assert r["capacitance_f_per_g"] == pytest.approx(10.0)
     assert r["ir_drop_excluded_v"] == pytest.approx(0.2)
+
+
+def test_worker_cancel_stops_a_stepped_job_and_discards_a_plain_one():
+    import time
+    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtWidgets import QApplication
+    from ui.workers import AnalysisWorker
+
+    _app = QApplication.instance() or QApplication([])  # noqa: F841 - queued signals need an app
+
+    steps, events = [], []
+
+    def stepped():
+        for k in range(200):
+            worker.report(k, 200, "step")
+            steps.append(k)
+            time.sleep(0.01)
+        return "finished"
+
+    worker = AnalysisWorker(stepped)
+    worker.cancelled.connect(lambda: events.append("cancelled"))
+    worker.succeeded.connect(lambda r: events.append(r))
+    worker.start()
+    time.sleep(0.15)
+    worker.cancel()
+    worker.wait(5000)
+    QCoreApplication.processEvents()
+    assert events == ["cancelled"] and len(steps) < 200
+
+    plain = AnalysisWorker(lambda: (time.sleep(0.2), "done")[1])
+    got = []
+    plain.cancelled.connect(lambda: got.append("cancelled"))
+    plain.succeeded.connect(lambda r: got.append(r))
+    plain.start()
+    plain.cancel()
+    plain.wait(5000)
+    QCoreApplication.processEvents()
+    assert got == ["cancelled"]

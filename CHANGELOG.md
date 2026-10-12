@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.2.1
+
+- **Cancel long fits:** a Cancel button appears while EIS auto-fit, batch fit, single fits, DRT/DCT and cycling stability run. Auto-fit stops after the current circuit, batch fit after the current file, and λ selection after the current candidate; the others discard their result.
+- **Progress:** auto-fit shows "Auto-fit: 37/91 circuits (…)", batch fit shows the files done.
+
 ## 2.2.0
 
 - **Figures in the lab's house style (Figure Studio's):** the "Review" palette and Figure Studio's Light/Dark colours, DejaVu Sans with bold axis titles and tick labels, an open frame, outward ticks, a horizontal grid only and a frameless legend — on screen and in every PNG/SVG/PDF export.

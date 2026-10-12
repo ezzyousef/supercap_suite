@@ -221,6 +221,42 @@ def _caption(text, widget, accessible_name):
     return label
 
 
+def make_cancel_button(text: str = "Cancel"):
+    """A Cancel button shown only while a background job runs (see attach_cancel)."""
+    button = QPushButton(text)
+    button.setObjectName("Danger")
+    button.setToolTip("Stop this job. Long fits stop after the current step; others discard their result.")
+    button.setVisible(False)
+    return button
+
+
+def attach_cancel(button, worker, status_label=None, what: str = "job") -> None:
+    """Show `button` while `worker` runs and let it cancel the job."""
+    def cancel():
+        button.setEnabled(False)
+        if status_label is not None:
+            status_label.setText(f"Cancelling the {what}…")
+        worker.cancel()
+
+    def done():
+        button.setVisible(False)
+        button.setEnabled(True)
+        try:
+            button.clicked.disconnect(cancel)
+        except (RuntimeError, TypeError):
+            pass
+
+    def cancelled():
+        if status_label is not None:
+            status_label.setText(f"The {what} was cancelled.")
+
+    button.setVisible(True)
+    button.setEnabled(True)
+    button.clicked.connect(cancel)
+    worker.finished.connect(done)
+    worker.cancelled.connect(cancelled)
+
+
 def for_current_data(tab, slot):
     """Wrap a worker's result slot so it only runs if the tab's data has not changed
     since the worker started (see `invalidate_results`)."""

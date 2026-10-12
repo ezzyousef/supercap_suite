@@ -605,7 +605,8 @@ def analytical_zarc_drt(tau_s: np.ndarray, rct_ohm: float, tau_zarc_s: float, ph
 
 
 def select_lambda_reim(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm: np.ndarray,
-                       candidates: np.ndarray | None = None) -> tuple[float, np.ndarray, np.ndarray]:
+                       candidates: np.ndarray | None = None,
+                       progress_callback=None) -> tuple[float, np.ndarray, np.ndarray]:
     """Choose the DRT regularization strength from the data by real/imaginary
     cross-validation: for each candidate lambda, the DRT is fitted to the REAL part
     alone and used to predict the imaginary part, and fitted to the IMAGINARY part
@@ -631,7 +632,9 @@ def select_lambda_reim(frequency_hz: np.ndarray, z_re_ohm: np.ndarray, z_im_ohm:
     n, m = a_re.shape
     n_reg = d.shape[0]
     scores = []
-    for lam in candidates:
+    for k, lam in enumerate(candidates):
+        if progress_callback is not None:
+            progress_callback(k, len(candidates), f"lambda {lam:.0e}")
         # fit real part (with R_inf), predict imaginary part
         design = np.zeros((n + n_reg, 1 + m))
         design[:n, 0] = 1.0
