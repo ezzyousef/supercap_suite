@@ -362,7 +362,7 @@ class EisTab(QWidget):
         self.undo_remove_rows_btn.setEnabled(False)
         self.undo_remove_rows_btn.setToolTip(
             "Restores the data table to how it was just before the last "
-            "row removal. Shortcut: Ctrl+X (while the data table has focus)."
+            "row removal. Shortcut: Ctrl+Z (while the data table has focus)."
         )
         self.undo_remove_rows_btn.clicked.connect(self.on_undo_remove_rows)
         table_actions_row.addWidget(self.undo_remove_rows_btn)
@@ -696,7 +696,7 @@ class EisTab(QWidget):
         self.plot.ax.set_xlabel("Frequency (Hz)")
         self.plot.ax.set_ylabel("Residual (% of |Z|)")
         self.plot.ax.set_title(f"Kramers-Kronig residuals — {verdict}")
-        self.plot.ax.legend(fontsize=8)
+        self.plot.ax.legend()
         theme.apply_plot_style(self.plot.ax)
         self.plot.fig.tight_layout()
         self.plot.draw()
@@ -817,8 +817,8 @@ class EisTab(QWidget):
             self.plot.ax.tick_params(axis="y", labelcolor=theme.RAW)
             self._bode_twin_ax = self.plot.ax.twinx()
             self._bode_twin_ax.plot(f_sorted, phase_deg, "s--", color=theme.FIT, markersize=3, linewidth=1, label="Phase")
-            self._bode_twin_ax.set_ylabel("Phase (degrees)", color=theme.FIT)
-            self._bode_twin_ax.tick_params(axis="y", labelcolor=theme.FIT)
+            # Readable ink, not the light trace colour; "(dashed)" ties the axis to its curve.
+            self._bode_twin_ax.set_ylabel("Phase (degrees, dashed)")
             self.plot.ax.set_title("Bode plot")
         else:
             self.plot.ax.plot(zre, -zim, "o-", color=theme.RAW, markersize=3, linewidth=1)
@@ -827,6 +827,8 @@ class EisTab(QWidget):
             self.plot.ax.set_title("Nyquist plot")
             self.plot.ax.set_aspect("equal", adjustable="datalim")
         theme.apply_plot_style(self.plot.ax)
+        if self._bode_twin_ax is not None and self._bode_twin_ax in self.plot.fig.axes:
+            theme.style_twin_axis(self._bode_twin_ax)
         self.plot.fig.tight_layout()
         self.plot.draw()
         # Column mapping/inductance-removal setup is done with once the
@@ -1096,7 +1098,7 @@ class EisTab(QWidget):
             status = f"poor fit — residual {result.rel_rms_percent:.2g} % of |Z|"
         self.plot.ax.set_title(f"Equivalent circuit fit — {status}")
         self.plot.ax.set_aspect("equal", adjustable="datalim")
-        self.plot.ax.legend(fontsize=8)
+        self.plot.ax.legend()
         theme.apply_plot_style(self.plot.ax)
         self.plot.fig.tight_layout()
         self.plot.draw()

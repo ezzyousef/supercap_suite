@@ -2,7 +2,7 @@
 (row/segment-removing, log-clearing) action in the app: RecordLogPanel's
 "Remove selected row"/"Clear log" (shared by every tab's comparison log),
 the EIS tab's "Remove selected row(s)", and the GCD rate-study tool's
-"Remove selected segment" -- plus the Ctrl+X (undo) / Ctrl+Y (redo)
+"Remove selected segment" -- plus the Ctrl+Z (undo) / Ctrl+Y (redo)
 keyboard shortcuts installed alongside each (ui.widgets.install_undo_redo_shortcuts)."""
 import pytest
 
@@ -121,9 +121,9 @@ def test_record_log_panel_new_removal_invalidates_pending_redo():
     assert not panel.redo_btn.isEnabled()
 
 
-def test_record_log_panel_has_ctrl_x_undo_and_ctrl_y_redo_shortcuts():
+def test_record_log_panel_has_ctrl_z_undo_and_ctrl_y_redo_shortcuts():
     panel = RecordLogPanel("Test")
-    assert _find_shortcut(panel, "Ctrl+X") is not None
+    assert _find_shortcut(panel, "Ctrl+Z") is not None
     assert _find_shortcut(panel, "Ctrl+Y") is not None
 
 
@@ -138,7 +138,7 @@ def test_record_log_panel_shortcuts_trigger_undo_and_redo():
     panel._remove_selected()
     assert len(panel._rows) == 1
 
-    _find_shortcut(panel, "Ctrl+X").activated.emit()
+    _find_shortcut(panel, "Ctrl+Z").activated.emit()
     assert len(panel._rows) == 2
 
     _find_shortcut(panel, "Ctrl+Y").activated.emit()
@@ -212,7 +212,7 @@ def test_eis_tab_has_shortcuts_scoped_to_the_data_table_and_they_work():
         combo.setCurrentText(col)
     tab.zim_sign_combo.setCurrentIndex(1)
 
-    undo_sc = _find_shortcut(tab.table, "Ctrl+X")
+    undo_sc = _find_shortcut(tab.table, "Ctrl+Z")
     redo_sc = _find_shortcut(tab.table, "Ctrl+Y")
     assert undo_sc is not None
     assert redo_sc is not None
@@ -306,11 +306,11 @@ def test_gcd_rate_tool_has_shortcuts_scoped_to_the_segment_list_and_they_work():
         tool.seg_list.addItem(f"seg{i}")
 
     # Scoped to the segment list's own containing group box, NOT the whole
-    # tool -- GcdRateTool also embeds a RecordLogPanel with its OWN Ctrl+X/
+    # tool -- GcdRateTool also embeds a RecordLogPanel with its OWN Ctrl+Z/
     # Ctrl+Y shortcuts, so searching the whole widget would be ambiguous
     # about which of the two same-keyed shortcuts got found.
     segment_list_box = tool.seg_list.parentWidget()
-    undo_sc = _find_shortcut(segment_list_box, "Ctrl+X")
+    undo_sc = _find_shortcut(segment_list_box, "Ctrl+Z")
     redo_sc = _find_shortcut(segment_list_box, "Ctrl+Y")
     assert undo_sc is not None
     assert redo_sc is not None

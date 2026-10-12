@@ -51,7 +51,7 @@ class PlotWidget(FigureCanvas):
         if title:
             self.ax.set_title(title)
         if label:
-            self.ax.legend(fontsize=8)
+            self.ax.legend()
         theme.apply_plot_style(self.ax)
         self.fig.tight_layout()
         self.draw()
@@ -71,7 +71,7 @@ class PlotWidget(FigureCanvas):
             self.ax.set_ylabel(ylabel)
         if title:
             self.ax.set_title(title)
-        self.ax.legend(fontsize=8)
+        self.ax.legend()
         theme.apply_plot_style(self.ax)
         self.fig.tight_layout()
         self.draw()
@@ -141,10 +141,8 @@ def show_empty_state(plot_widget, message: str = "Load a file or enter values, t
              color=theme.INK_DIM, style="italic", wrap=True, transform=ax.transAxes)
     ax.set_xticks([])
     ax.set_yticks([])
-    for spine in ax.spines.values():
-        spine.set_color(theme.BORDER)
-    plot_widget.fig.patch.set_facecolor(theme.PANEL)
-    ax.set_facecolor(theme.PANEL)
+    theme.apply_plot_style(ax)
+    ax.yaxis.grid(False)
     plot_widget.draw()
 
 
@@ -212,6 +210,15 @@ def invalidate_results(tab) -> None:
             tab.last_result = None
         if hasattr(tab, "last_raw_df"):
             tab.last_raw_df = None
+
+
+def _caption(text, widget, accessible_name):
+    """A label tied to its input: Alt+mnemonic focuses the input, and screen readers announce
+    the input by this name (WCAG 1.3.1 / 4.1.2)."""
+    label = QLabel(text)
+    label.setBuddy(widget)
+    widget.setAccessibleName(accessible_name)
+    return label
 
 
 def for_current_data(tab, slot):
@@ -343,7 +350,7 @@ class NormalizationSelector(QWidget):
         self.basis_combo = QComboBox()
         self.basis_combo.addItems(list(self.LABELS))
         self.basis_combo.currentIndexChanged.connect(self._update_enabled)
-        grid.addWidget(QLabel("Normalize by:"), 0, 0)
+        grid.addWidget(_caption("&Normalize by:", self.basis_combo, "Normalize by"), 0, 0)
         grid.addWidget(self.basis_combo, 0, 1)
 
         self.mass_spin = QDoubleSpinBox()
@@ -351,7 +358,7 @@ class NormalizationSelector(QWidget):
         self.mass_spin.setRange(0.000001, 1000)
         self.mass_spin.setValue(default_mass_g)
         self.mass_spin.setSuffix(" g")
-        grid.addWidget(QLabel("Active mass:"), 1, 0)
+        grid.addWidget(_caption("Active &mass:", self.mass_spin, "Active mass, grams"), 1, 0)
         grid.addWidget(self.mass_spin, 1, 1)
 
         self.area_spin = QDoubleSpinBox()
@@ -359,7 +366,7 @@ class NormalizationSelector(QWidget):
         self.area_spin.setRange(0.000001, 10000)
         self.area_spin.setValue(default_area_cm2)
         self.area_spin.setSuffix(" cm²")
-        grid.addWidget(QLabel("Electrode area:"), 2, 0)
+        grid.addWidget(_caption("Electrode &area:", self.area_spin, "Electrode area, square centimetres"), 2, 0)
         grid.addWidget(self.area_spin, 2, 1)
 
         self.volume_spin = QDoubleSpinBox()
@@ -367,7 +374,8 @@ class NormalizationSelector(QWidget):
         self.volume_spin.setRange(0.00000001, 10000)
         self.volume_spin.setValue(default_volume_cm3)
         self.volume_spin.setSuffix(" cm³")
-        grid.addWidget(QLabel("Electrode volume:"), 3, 0)
+        grid.addWidget(_caption("Electrode &volume:", self.volume_spin, "Electrode volume, cubic centimetres"),
+                       3, 0)
         grid.addWidget(self.volume_spin, 3, 1)
 
         self._update_enabled()
@@ -682,7 +690,7 @@ def remove_selected_table_rows(table: QTableView, df: pd.DataFrame) -> pd.DataFr
 
 
 def install_undo_redo_shortcuts(scope_widget: QWidget, undo_callback, redo_callback) -> tuple:
-    """Binds Ctrl+X (undo) / Ctrl+Y (redo) as keyboard shortcuts scoped to
+    """Binds Ctrl+Z (undo) / Ctrl+Y (redo) as keyboard shortcuts scoped to
     `scope_widget` -- active only while focus is somewhere inside that
     widget or one of its children (Qt.WidgetWithChildrenShortcut).
 
@@ -697,7 +705,7 @@ def install_undo_redo_shortcuts(scope_widget: QWidget, undo_callback, redo_callb
     table itself, or the RecordLogPanel itself) keeps the two focus
     regions disjoint so only one shortcut is ever active at a time.
     """
-    undo_shortcut = QShortcut(QKeySequence("Ctrl+X"), scope_widget)
+    undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), scope_widget)
     undo_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
     undo_shortcut.activated.connect(undo_callback)
     redo_shortcut = QShortcut(QKeySequence("Ctrl+Y"), scope_widget)
@@ -1379,7 +1387,7 @@ class RecordLogPanel(QGroupBox):
         self.undo_btn.setEnabled(False)
         self.undo_btn.setToolTip(
             "Restores the log to how it was just before the last row "
-            "removal or Clear log. Shortcut: Ctrl+X (while this panel has focus)."
+            "removal or Clear log. Shortcut: Ctrl+Z (while this panel has focus)."
         )
         self.undo_btn.clicked.connect(self._undo)
         btn_row.addWidget(self.undo_btn)

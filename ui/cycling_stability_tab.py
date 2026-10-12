@@ -25,6 +25,7 @@ from .widgets import (
     attach_section_restore_menu, yield_to_event_loop,
 )
 from . import theme, formula_sources
+from .workers import AnalysisWorker, set_controls_busy
 
 
 class CyclingStabilityTab(QWidget):
@@ -55,6 +56,7 @@ class CyclingStabilityTab(QWidget):
         self.sheet_combo.currentIndexChanged.connect(self.on_sheet_changed)
         self.status_label = QLabel("No file loaded")
         file_row.addWidget(open_btn)
+        self._open_btn = open_btn
         file_row.addWidget(QLabel("Sheet:"))
         file_row.addWidget(self.sheet_combo)
         file_row.addWidget(self.status_label)
@@ -79,6 +81,7 @@ class CyclingStabilityTab(QWidget):
         )
         batch_btn.clicked.connect(self.on_import_multi_files)
         batch_row.addWidget(batch_btn)
+        self._batch_btn = batch_btn
         batch_row.addStretch()
         root.addLayout(batch_row)
 
@@ -170,6 +173,7 @@ class CyclingStabilityTab(QWidget):
         analyze_btn = QPushButton("▶ Analyze cycling stability")
         analyze_btn.clicked.connect(self.on_analyze)
         analyze_btn.setDefault(True)
+        self.analyze_btn = analyze_btn
         left_layout.addWidget(analyze_btn)
         left_layout.addWidget(theme.make_source_button(
             self, "Cycling stability (retention & coulombic efficiency)",
@@ -222,6 +226,7 @@ class CyclingStabilityTab(QWidget):
         reset_downsample_btn = QPushButton("Reset (show all cycles)")
         reset_downsample_btn.clicked.connect(self._reset_downsampling)
         downsample_btn_row.addWidget(apply_downsample_btn)
+        self._downsample_btns = [apply_downsample_btn, reset_downsample_btn]
         downsample_btn_row.addWidget(reset_downsample_btn)
         downsample_section.addLayout(downsample_btn_row)
 
@@ -410,21 +415,47 @@ class CyclingStabilityTab(QWidget):
         mass_g = self.mass_spin.value()
         r2_thr = self.r2_spin.value()
 
-        try:
-            cycles = gcd.analyze_cycling_stability(t, v, current_a, mass_g, r2_threshold=r2_thr,
-                                                    cycle_numbers=cycle_numbers,
-                                                    current_series_a=self._current_series(),
-                                                    baseline_cycles=self.baseline_spin.value())
-        except ValueError as e:
+        current_series = self._current_series()
+        baseline = self.baseline_spin.value()
+
+        def run():
+            # Off the GUI thread: thousands of cycles must not freeze the window.
+            return gcd.analyze_cycling_stability(t, v, current_a, mass_g, r2_threshold=r2_thr,
+                                                 cycle_numbers=cycle_numbers,
+                                                 current_series_a=current_series,
+                                                 baseline_cycles=baseline)
+
+        def failed(message):
             QMessageBox.critical(
                 self, "Cycling stability analysis failed",
-                f"{e}\n\nThis usually means the auto-detector couldn't find "
+                f"{message}\n\nThis usually means the auto-detector couldn't find "
                 "alternating charge/discharge segments in the selected "
                 "columns -- check the time/voltage column choice, or "
                 "preview the raw curve in the GCD tab first."
             )
-            return
 
+        # Everything that would read or change the data waits until the run is done.
+        set_controls_busy(self._busy_controls(), True, busy_texts={self.analyze_btn: "Analyzing cycles…"})
+        self.status_label.setText("Analyzing cycles… (the window stays responsive)")
+        worker = AnalysisWorker(run)
+        self._worker = worker
+        worker.succeeded.connect(for_current_data(
+            self, lambda cycles: self._show_cycles(cycles, cycle_col, cycle_numbers, current_a, mass_g)))
+        worker.failed.connect(failed)
+        worker.finished.connect(self._on_worker_finished)
+        worker.start()
+
+    def _busy_controls(self):
+        # Export is left out: it is enabled only once there are results to export.
+        return [self.analyze_btn, self._open_btn, self._batch_btn, *self._downsample_btns]
+
+    def _on_worker_finished(self):
+        self._worker = None
+        set_controls_busy(self._busy_controls(), False)
+        self.status_label.setText(f"Loaded {len(self.df)} rows, {len(self.df.columns)} columns"
+                                  if self.df is not None else "No file loaded")
+
+    def _show_cycles(self, cycles, cycle_col, cycle_numbers, current_a, mass_g):
         df = pd.DataFrame([{
             "Cycle": c.cycle_number,
             "Charge time (s)": c.charge_time_s,
@@ -606,7 +637,7 @@ class CyclingStabilityTab(QWidget):
         self.plot.ax.set_xlabel("Cycle number")
         self.plot.ax.set_ylabel("%")
         self.plot.ax.set_title("Cycling stability")
-        self.plot.ax.legend(fontsize=8)
+        self.plot.ax.legend()
         theme.apply_plot_style(self.plot.ax)
         self.plot.fig.tight_layout()
         self.plot.draw()

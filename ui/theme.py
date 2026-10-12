@@ -59,7 +59,7 @@ def tokens(for_mode: str | None = None) -> dict[str, str]:
     c = _labkit_colours(m)
     palette = PALETTES[THEMES[m].palette]
     return {
-        "INK": c["fg"], "INK_DIM": c["muted"], "PANEL": c["surface"], "SURFACE": c["surface"],
+        "INK": c["fg"], "INK_DIM": c["muted"], "PANEL": THEMES[m].background, "SURFACE": c["surface"],
         "SURFACE_RAISED": c["raised"], "BORDER": c["border_strong"], "GRID": c["grid"],
         "RAW": palette[0], "FIT": palette[1], "GOOD": c["good"], "WARN": c["bad"],
         "ON_ACCENT": "#FFFFFF",
@@ -108,17 +108,17 @@ QToolButton#exportButton, QPushButton#exportButton {{
 QToolButton#exportButton:hover, QPushButton#exportButton:hover {{ border-color: {c['fg']}; background: {c['accent']}; }}
 QToolButton#exportButton:disabled, QPushButton#exportButton:disabled {{ background: {c['sunken']}; color: {c['disabled']}; border-color: {c['border']}; }}
 QToolButton#exportButton::menu-indicator {{ image: none; width: 0; }}
-QPushButton#recordButton {{ color: {c['accent']}; border: 1px solid {c['accent']}; background: transparent; }}
+QPushButton#recordButton {{ color: {c['accent_text']}; border: 1px solid {c['accent']}; background: transparent; }}
 QPushButton#recordButton:hover {{ background: {c['hover']}; }}
 QPushButton#sourceButton, QGroupBox QPushButton#sourceButton {{
-    background: transparent; border: none; color: {c['accent']};
+    background: transparent; border: none; color: {c['accent_text']};
     text-decoration: underline; font-weight: normal; padding: 2px 4px;
 }}
 QPushButton#sourceButton:hover {{ color: {c['fg']}; background: transparent; }}
 QLabel#Hint {{ font-style: italic; }}
 QGroupBox#resultCard {{ border: 1px solid {c['border']}; border-left: 4px solid {c['accent']}; }}
 #ResultTitle {{ color: {c['muted']}; font-size: 12px; font-weight: 600; }}
-#ResultValue {{ color: {c['accent']}; font-size: 26px; font-weight: 700; }}
+#ResultValue {{ color: {c['accent_text']}; font-size: 26px; font-weight: 700; }}
 #ResultKey {{ color: {c['muted']}; font-size: 11.5px; }}
 #ResultVal {{ color: {c['fg']}; font-size: 12.5px; font-weight: 600; }}
 #ResultWarning {{
@@ -132,6 +132,9 @@ QToolButton#SectionToggle:hover {{ color: {c['fg']}; background: transparent; }}
 QToolButton#SectionClose {{ border: none; color: {c['muted']}; padding: 2px 6px; background: transparent; }}
 QToolButton#SectionClose:hover {{ color: {c['bad']}; background: transparent; }}
 QLabel#GuideText {{ font-size: 13px; }}
+QToolButton#exportButton:focus, QPushButton#exportButton:focus {{ border: 2px solid {c['fg']}; padding: 6px 15px; }}
+QPushButton#recordButton:focus, QPushButton#sourceButton:focus,
+QToolButton#SectionToggle:focus, QToolButton#SectionClose:focus {{ border: 2px solid {c['accent']}; border-radius: 6px; }}
 QAbstractScrollArea::corner {{ background: transparent; border: none; }}
 """
 
@@ -177,6 +180,7 @@ def apply_plot_style(ax) -> None:
     t = tokens()
     rc = matplotlib_rc(_mode, "screen")
     fig = ax.figure
+    fig._lab_theme_mode = _mode
     fig.patch.set_facecolor(t["PANEL"])
     ax.set_facecolor(t["PANEL"])
     for side in ("top", "right"):
@@ -207,6 +211,29 @@ def apply_plot_style(ax) -> None:
             text.set_color(t["INK"])
 
 
+def style_twin_axis(ax) -> None:
+    """House style for a right-hand twin axis (e.g. Bode phase): its own frame on the right,
+    outward ticks, bold readable labels, and no second grid over the first."""
+    from labkit.style import matplotlib_rc
+    t = tokens()
+    rc = matplotlib_rc(_mode, "screen")
+    for side in ("top", "left", "bottom"):
+        ax.spines[side].set_visible(False)
+    ax.spines["right"].set_visible(True)
+    ax.spines["right"].set_color(t["INK"])
+    ax.spines["right"].set_linewidth(rc["axes.linewidth"])
+    ax.grid(False)
+    ax.minorticks_off()
+    ax.tick_params(axis="y", which="major", direction="out", color=t["INK"], labelcolor=t["INK"],
+                   length=rc["ytick.major.size"], width=rc["ytick.major.width"],
+                   labelsize=rc["ytick.labelsize"])
+    ax.yaxis.label.set_color(t["INK"])
+    ax.yaxis.label.set_fontweight("bold")
+    ax.yaxis.label.set_fontsize(rc["axes.labelsize"])
+    for label in ax.get_yticklabels():
+        label.set_fontweight("bold")
+
+
 def _colour_map(old_mode: str, new_mode: str) -> dict[str, str]:
     old, new = tokens(old_mode), tokens(new_mode)
     mapping: dict[str, str] = {}
@@ -230,6 +257,10 @@ def restyle_figure(fig, new_mode: str | None = None) -> bool:
     from matplotlib.text import Text
 
     new_mode = new_mode or _mode
+    # The house palettes reuse colours across themes (light ink == dark paper), so a second
+    # pass in the same mode would recolour the paper as if it were ink: remember the mode.
+    if getattr(fig, "_lab_theme_mode", None) == new_mode:
+        return False
     old_mode = "dark" if new_mode == "light" else "light"
     mapping = _colour_map(old_mode, new_mode)
     changed = False
@@ -297,6 +328,7 @@ def restyle_figure(fig, new_mode: str | None = None) -> bool:
                 if updates:
                     axis.set_tick_params(which=which, **updates)
                     changed = True
+    fig._lab_theme_mode = new_mode
     return changed
 
 

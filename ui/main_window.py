@@ -7,7 +7,7 @@ makes Windows ghost the window). The shell adds the light/dark theme, the Ctrl+K
 palette, toasts, a status bar and the About page.
 
 Undo/redo stays where it was: each tab's data table and "Recorded results" log keep their
-own stacks on Ctrl+X / Ctrl+Y, scoped to that widget. The shell is therefore given no
+own stacks on Ctrl+Z / Ctrl+Y, scoped to that widget. The shell is therefore given no
 History of its own — a window-wide Ctrl+Y would make those shortcuts ambiguous, and Qt fires
 neither of two ambiguous shortcuts.
 """
@@ -91,7 +91,7 @@ workbook, or straight into OriginLab as a worksheet plus a styled graph — ever
 the same Origin project; save or close it from the same menu or the File menu.
 <b>+ Record this result</b> collects results from several runs into one table you can export
 together.</p>
-<p><b>Undo / redo</b>: Ctrl+X and Ctrl+Y inside a data table or the recorded-results log.
+<p><b>Undo / redo</b>: Ctrl+Z and Ctrl+Y inside a data table or the recorded-results log.
 <b>Theme</b>: Ctrl+T. <b>Command palette</b>: Ctrl+K.</p>
 <h3>The tools</h3>
 <ul>

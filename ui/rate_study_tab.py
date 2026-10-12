@@ -767,7 +767,7 @@ class CvRateTool(QWidget):
         ax_outer.set_xlabel("v^-1/2 ((V/s)^-1/2)")
         ax_outer.set_ylabel(f"Capacitance ({unit})")
         ax_outer.set_title("Outer extrapolation (v → ∞)")
-        ax_outer.legend(fontsize=7)
+        ax_outer.legend()
         theme.apply_plot_style(ax_outer)
 
         ax_total.scatter(sqrt_v, inv_q, color=theme.RAW, s=22, label="1/Q* vs v^1/2 (data)")
@@ -776,10 +776,10 @@ class CvRateTool(QWidget):
         ax_total.set_xlabel("v^1/2 ((V/s)^1/2)")
         ax_total.set_ylabel(f"1/Capacitance (1/{unit})")
         ax_total.set_title("Total extrapolation (v → 0)")
-        ax_total.legend(fontsize=7)
+        ax_total.legend()
         theme.apply_plot_style(ax_total)
 
-        self.plot.fig.suptitle("Trasatti outer/total capacitance extrapolation", fontsize=10)
+        self.plot.fig.suptitle("Trasatti outer/total capacitance extrapolation", fontweight="bold")
         self.plot.fig.tight_layout()
         self.plot.draw()
 
@@ -849,7 +849,7 @@ class CvRateTool(QWidget):
         self.plot.ax.set_xlabel("log(scan rate)")
         self.plot.ax.set_ylabel("log(|peak current|)")
         self.plot.ax.set_title("b-value analysis")
-        self.plot.ax.legend(fontsize=8)
+        self.plot.ax.legend()
         theme.apply_plot_style(self.plot.ax)
         self.plot.fig.tight_layout()
         self.plot.draw()
@@ -929,7 +929,7 @@ class CvRateTool(QWidget):
         self.plot.ax.set_xlabel("Scan rate")
         self.plot.ax.set_ylabel("% of model current")
         self.plot.ax.set_title("Dunn's method — capacitive/diffusive split vs. scan rate")
-        self.plot.ax.legend(fontsize=8)
+        self.plot.ax.legend()
         theme.apply_plot_style(self.plot.ax)
         self.plot.fig.tight_layout()
         self.plot.draw()
@@ -1005,7 +1005,7 @@ class CvRateTool(QWidget):
         self.plot.ax.set_xlabel("√(scan rate) (√(V/s))")
         self.plot.ax.set_ylabel("Peak current (A)")
         self.plot.ax.set_title("Randles-Sevcik diffusion coefficient")
-        self.plot.ax.legend(fontsize=8)
+        self.plot.ax.legend()
         theme.apply_plot_style(self.plot.ax)
         self.plot.fig.tight_layout()
         self.plot.draw()
@@ -1178,7 +1178,7 @@ class GcdRateTool(QWidget):
         self.undo_remove_segment_btn.setEnabled(False)
         self.undo_remove_segment_btn.setToolTip(
             "Restores the segment list to how it was just before the last "
-            "removal. Shortcut: Ctrl+X (while this list has focus)."
+            "removal. Shortcut: Ctrl+Z (while this list has focus)."
         )
         self.undo_remove_segment_btn.clicked.connect(self.on_undo_remove_segment)
         list_layout.addWidget(self.undo_remove_segment_btn)

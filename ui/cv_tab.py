@@ -598,7 +598,7 @@ class CvTab(QWidget):
         self.plot.ax.set_xlabel("Potential (V)")
         self.plot.ax.set_ylabel("Current (A)")
         self.plot.ax.set_title(f"{label} = {value:.3f} {unit},  ΔEp = {sep['delta_ep_v']*1000:.1f} mV")
-        self.plot.ax.legend(fontsize=8)
+        self.plot.ax.legend()
         theme.apply_plot_style(self.plot.ax)
         self.plot.fig.tight_layout()
         self.plot.draw()
