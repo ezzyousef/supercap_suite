@@ -14,3 +14,6 @@ installer/output/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# labkit sync.py keeps previous vendored copies here
+.labkit-backup/
