@@ -71,6 +71,7 @@ Status:
 | Exporting into an existing workbook split the note and the table across two sheets | **fixed**: export notes also carry a timestamp |
 | Appending to a recorded-results sheet with a note corrupted the header | **fixed** |
 | The status bar kept another page's message | **fixed** |
+| (found by the hostile-file tests, 2026-11-15) A CSV whose first data row had more values than the header was read with the extra leading values as row labels: `1,2,3,4,5` became t = 4, v = 5, and the other rows were dropped as blank. The user saw values that are not in the file. A row with one extra value mid-file was refused with a misleading message | **fixed**: such files are refused with the line number and the counts, and nothing is loaded. UTF-16 "Unicode Text" exports now load; an empty file says it is empty. Tests: `tests/test_hostile_files.py` |
 | EIS/DRT result panels needed 840/740 px of height | **not changed**: lowering them to 600 px was tried and squashed the plot to a sliver at 1440×900, so the original heights were restored; the panel scrolls instead |
 | (found by the Windows build) The test run crashed at exit on Windows now and then, already before this review: tests left widgets for Python to destroy after the QApplication | **fixed**: every test now deletes its widgets while the application exists; background workers no longer sit in a reference cycle |
 

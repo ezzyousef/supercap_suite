@@ -162,7 +162,7 @@ def _sniff_csv(path: Path) -> tuple[list[str], str]:
     is far more likely to be the decimal mark."""
     import re
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        with open(path, "r", encoding=_text_encoding(path), errors="replace") as fh:
             lines = [ln.rstrip("\r\n") for _, ln in zip(range(60), fh) if ln.strip()]
     except OSError:
         return [",", "\t", ";"], "."
@@ -185,30 +185,104 @@ def _sniff_csv(path: Path) -> tuple[list[str], str]:
     return order, decimal
 
 
+def _text_encoding(path: Path) -> str:
+    """UTF-16 when the file starts with its byte-order mark (Excel's "Unicode Text" export),
+    otherwise UTF-8 with an optional BOM."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(2)
+    except OSError:
+        return "utf-8-sig"
+    return "utf-16" if head in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"
+
+
 def _load_csv(path: Path) -> pd.DataFrame:
     # EC-Lab / lab instruments frequently export tab-delimited files with a .csv or
     # .txt extension, and European locales write "1,5" with ";" between fields.
+    try:
+        if path.stat().st_size == 0:
+            raise DataLoadError(f"'{path.name}' is empty.")
+    except OSError as e:
+        raise DataLoadError(f"Could not open '{path.name}': {e.strerror or e}") from e
+    encoding = _text_encoding(path)
     order, decimal = _sniff_csv(path)
+    row_problem = None
     for sep in order:
         try:
-            df = pd.read_csv(path, sep=sep, engine="python", decimal=decimal if sep != "," else ".")
+            # index_col=False: when a data row has more values than the header, pandas would
+            # otherwise take the extra LEADING values as row labels and shift the rest into the
+            # columns -- returning numbers that are not in the file. With it, such a row is an
+            # error, which is reported below with its line number.
+            df = pd.read_csv(path, sep=sep, engine="python", decimal=decimal if sep != "," else ".",
+                             index_col=False, encoding=encoding, on_bad_lines="error")
+            if df.shape[1] > 1:
+                widths = _row_widths(path, sep, encoding)
+                if widths:
+                    header_n, bad = widths
+                    if bad:
+                        line, n = bad[0]
+                        raise _RaggedRows(f"line {line} has {n} values but the header has {header_n} "
+                                          f"({len(bad)} such line(s) in total)")
             df = df.dropna(how="all")                  # blank lines and empty logger rows
             if df.shape[1] > 1:
                 if _needs_header_rescan(df):
                     try:
                         raw = pd.read_csv(path, sep=sep, engine="python", header=None,
-                                          decimal=decimal if sep != "," else ".")
+                                          decimal=decimal if sep != "," else ".", encoding=encoding)
                         fixed = _rescan_multirow_header(raw)
                     except Exception:
                         fixed = None
                     if fixed is not None:
                         return fixed
                 return df
+        except _RaggedRows as e:
+            row_problem = row_problem or str(e)
+            continue
+        except pd.errors.ParserError as e:
+            import re
+            m = re.search(r"Expected (\d+) fields in line (\d+), saw (\d+)", str(e))
+            if m and row_problem is None:
+                row_problem = f"line {m.group(2)} has {m.group(3)} values but the header has {m.group(1)}"
+            continue
         except Exception:
             continue
+    if row_problem:
+        raise DataLoadError(
+            f"'{path.name}' has rows with a different number of values than its header: {row_problem}. "
+            "Nothing was loaded, so no value is silently shifted or dropped. Fix or remove those lines "
+            "and load the file again."
+        )
     raise DataLoadError(
         f"Could not parse '{path.name}' as comma-, tab-, or semicolon-delimited text."
     )
+
+
+class _RaggedRows(Exception):
+    pass
+
+
+def _row_widths(path: Path, sep: str, encoding: str) -> tuple[int, list[tuple[int, int]]] | None:
+    """(header width, [(line number, width) of data lines that are WIDER than the header]).
+
+    Only wider rows are reported: a shorter row (a missing trailing value) is read as a missing
+    value, which pandas already does visibly (NaN). A wider row has no column to go to.
+    The header is the first non-blank line; files with a preamble are left to the existing
+    header rescan, so they return None here."""
+    import csv
+    try:
+        with open(path, "r", encoding=encoding, errors="replace", newline="") as fh:
+            rows = [(n, r) for n, r in enumerate(csv.reader(fh, delimiter=sep), start=1)
+                    if any(c.strip() for c in r)]
+    except (OSError, csv.Error):
+        return None
+    if len(rows) < 2:
+        return None
+    header_n = len(rows[0][1])
+    # a preamble (fewer fields on the first line than on most data lines) is not judged here
+    data_widths = [len(r) for _, r in rows[1:]]
+    if header_n < max(set(data_widths), key=data_widths.count):
+        return None
+    return header_n, [(n, len(r)) for n, r in rows[1:] if len(r) > header_n]
 
 
 def _maybe_fix_multirow_header_excel(path: Path, sheet_name, df: pd.DataFrame) -> pd.DataFrame:

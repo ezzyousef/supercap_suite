@@ -24,7 +24,7 @@
 
 #define MyAppName "Supercapacitor & DSC Analysis Suite"
 #ifndef MyAppVersion
-  #define MyAppVersion "2.2.1"
+  #define MyAppVersion "2.3.0"
 #endif
 #define MyAppPublisher "Ezzeldien Yousef"
 #define MyAppURL "mailto:ezzyousef2@aucegypt.edu"
