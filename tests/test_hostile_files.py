@@ -66,6 +66,36 @@ def test_one_extra_value_mid_file_names_the_line(tmp_path):
     assert not ok and "line 3" in str(result).lower(), result
 
 
+def test_all_rows_wider_than_header_are_refused_too(tmp_path):
+    # Codex review: when MOST rows are wider, the old check took that for a preamble and pandas
+    # returned time [99, 99], voltage [0, 1], dropping the real voltage column.
+    f = tmp_path / "wide.csv"
+    f.write_text("Time (s),Voltage (V)\n99,0,1\n99,1,0.9\n", encoding="utf-8")
+    ok, result = load(f)
+    assert not ok and "line 2" in str(result).lower(), result
+
+
+def test_title_line_above_a_wider_header_keeps_every_column(tmp_path):
+    # Codex review: a 2-field title line above a 3-column header truncated the third column.
+    f = tmp_path / "titled.csv"
+    f.write_text("Run,Example\nTime (s),Voltage (V),Current (A)\n0,1,0.1\n1,0.9,0.1\n", encoding="utf-8")
+    ok, df = load(f)
+    assert ok, df
+    assert list(df.columns) == ["Time (s)", "Voltage (V)", "Current (A)"]
+    assert df.shape == (2, 3) and float(df.iloc[1, 2]) == 0.1
+
+
+@pytest.mark.parametrize("body", ["0,1\n1,0.9,\n2,0.8\n", "0,1,\n1,0.9,\n2,0.8,\n"],
+                         ids=["some-trailing", "all-trailing"])
+def test_empty_trailing_fields_are_accepted(tmp_path, body):
+    # Codex review: instruments often end rows with a separator; an empty extra field is not data.
+    f = tmp_path / "trail.csv"
+    f.write_text("Time (s),Voltage (V)\n" + body, encoding="utf-8")
+    ok, df = load(f)
+    assert ok, df
+    assert df.shape == (3, 2) and [float(x) for x in df.iloc[:, 1]] == [1.0, 0.9, 0.8]
+
+
 def test_utf16_unicode_text_export_loads(tmp_path):
     # Excel's "Unicode Text" export: UTF-16 with a byte-order mark, tab-separated
     f = tmp_path / "unicode.txt"

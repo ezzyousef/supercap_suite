@@ -1,6 +1,8 @@
 # Equation regression report
 
-Every formula in `docs/EQUATIONS.md` checked against data generated from known physics, independently of the app's own code. Tests: `tests/test_oracle_equations.py` (24 tests). Run: `py -3 -m pytest -q tests/test_oracle_equations.py`. Last run 2026-11-15: **24 passed**.
+Selected formulas from `docs/EQUATIONS.md`, checked against synthetic data generated from known physics. Tests: `tests/test_oracle_equations.py` (24 tests). Run: `py -3 -m pytest -q tests/test_oracle_equations.py`. Last run 2026-11-15: **24 passed**.
+
+Two kinds of check are mixed below and marked: **recovery** (the app returns a parameter the data was built from, computed without calling the app) and **consistency** (two app functions, or one function under a unit change, agree). An independent read-only review by Codex (2026-11-15) found that an earlier version of two tests was not independent and that this page claimed more coverage than it had; both were corrected.
 
 Each row is also a worked example: the inputs, the value physics says is right, and the value the app returned.
 
@@ -10,7 +12,7 @@ Each row is also a worked example: the inputs, the value physics says is right, 
 | 1a | Excluded IR step | same cell; current reverses, so the step is 2·I·R | 0.100 V | 0.100 V |
 | 1a | Areal, volumetric | same total capacitance ÷ 1.5 cm² or 0.02 cm³ | C/area, C/volume | equal to 12 digits |
 | 1b | GCD capacitance, integral | V(t) = V_min + 1 V·√(1 − t/T), T = 100 s, I = 50 mA; ∫(V − V_min)dt = ⅔·ΔV·T | 6.667 F | within 0.1 %, **identical for V_min = 0, −0.2 and +0.4 V** |
-| 1b | Integral = linear on a linear curve | the RC cell above | I·Δt/ΔV | equal to 1e-6 |
+| 1b | Integral and linear forms, linear curve (recovery) | the RC cell above, segment after the IR step taken from the generator | 2 F | both 2 F (1e-6) |
 | 2 | ESR, current reversal (ΔV/2I) | the RC cell above | 0.5 Ω | 0.500 Ω |
 | 2 | ESR, from rest (ΔV/I) | step I·R from a cell at rest | 0.5 Ω | 0.5 Ω |
 | 3 | Energy density | ½·C·ΔV² in J/g → Wh/kg, C = 200 F/g, ΔV = 1 V | 27.78 Wh/kg | 27.78 Wh/kg |
@@ -39,9 +41,11 @@ Each row is also a worked example: the inputs, the value physics says is right, 
 | 9 | Enthalpy | 0.5 J / 10 mg | 50 J/g | 50 J/g |
 | 9 | Heat-flow units | the same curve as W and as W/g with the mass | identical mW | identical |
 | 9 | Sloping baseline | peak + (0.3 mW + 0.001 mW/s · t), baseline given | 0.5 J | 0.5 J |
-| 8 | Water classification | 0.40 g water, 0.10 g dry, 0.30 g freezable of which 0.10 g below 0 °C | W_t = 4, W_f = 3, W_nb = 1, and the fractions add up | all equal |
+| 8 | Water classification (recovery) | 0.40 g water, 0.10 g dry, 0.30 g freezable of which 0.10 g below 0 °C | W_t = 4, W_f = 3, W_nb = 1, W_fb = 1, W_free = 2, W_b = 2 | all equal |
 
 ## What this does not cover
+
+- No oracle yet for: Bode magnitude/phase (§6c), rate capability and retention (§7), the Ragone plot (§7a), the automated symmetric/total peak split (§9a), the integration-accuracy self-check (§9b) and DCT (§10a). Several of these have ordinary unit tests in the existing suite.
 
 - Real instrument exports: none were supplied, so every test uses synthetic data. Results on real, noisy data still depend on segment choice, baseline choice and the linearity threshold, all of which the app shows to the user.
 - Overlapping DSC peaks and the DCT variant of DRT have their own tests in the existing suite, not oracle tests here.

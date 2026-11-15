@@ -66,12 +66,14 @@ def test_gcd_integral_matches_analytic_integral_and_is_offset_invariant(v_min):
     assert GCD.total_capacitance_gcd_integral(t, v, i_a) == pytest.approx(expected, rel=1e-3)
 
 
-def test_gcd_integral_equals_linear_form_on_a_linear_discharge():
-    t, v = rc_discharge()
-    k = GCD.ir_drop_end_index(t, v)
-    t, v = t[k:], v[k:]
-    lin = GCD.total_capacitance_gcd_normal(0.1, t[-1] - t[0], v.max() - v.min())
-    assert GCD.total_capacitance_gcd_integral(t, v, 0.1) == pytest.approx(lin, rel=1e-6)
+def test_gcd_integral_and_linear_forms_each_recover_the_generator_capacitance():
+    # Independent of the app (Codex review): the segment after the IR step is known from the
+    # generator (index 1 on), and each form is compared with the 2 F the cell was built with.
+    c_f, i_a = 2.0, 0.1
+    t, v = rc_discharge(c_f=c_f, i_a=i_a)
+    t, v = t[1:], v[1:]
+    assert GCD.total_capacitance_gcd_integral(t, v, i_a) == pytest.approx(c_f, rel=1e-6)
+    assert GCD.total_capacitance_gcd_normal(i_a, t[-1] - t[0], v.max() - v.min()) == pytest.approx(c_f, rel=1e-9)
 
 
 # ---- Section 2: ESR from the IR step, both conventions
@@ -254,5 +256,7 @@ def test_water_classification_mass_balance():
     assert res.total_water_content == pytest.approx(m_water / m_dry)
     assert res.freezable_water_content == pytest.approx(freezable_g / m_dry, rel=1e-9)
     assert res.non_freezable_bound_water == pytest.approx((m_water - freezable_g) / m_dry, rel=1e-9)
-    assert res.freezable_bound_water + res.free_water == pytest.approx(res.freezable_water_content, rel=1e-9)
-    assert res.total_bound_water == pytest.approx(res.non_freezable_bound_water + res.freezable_bound_water, rel=1e-9)
+    # each population on its own (Codex review: sums alone would not catch two swapped categories)
+    assert res.freezable_bound_water == pytest.approx(0.10 / m_dry, rel=1e-9)          # melts below 0 degC: 1
+    assert res.free_water == pytest.approx((freezable_g - 0.10) / m_dry, rel=1e-9)      # 2
+    assert res.total_bound_water == pytest.approx((m_water - freezable_g + 0.10) / m_dry, rel=1e-9)   # 2

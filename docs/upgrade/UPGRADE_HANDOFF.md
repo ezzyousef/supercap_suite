@@ -5,7 +5,7 @@
 | Local path | `E:\Lab Apps\supercap_suite\supercap_suite` |
 | Branch | `upgrade/03-supercap`, from `feature/licensing` at `c3ce665` |
 | Version | 2.2.1 → 2.3.0 |
-| Tests | `py -3 -m pytest -q -p no:cacheprovider` (QT_QPA_PLATFORM=offscreen): **307 passed** (260 at baseline without the licence tests, 267 with labkit 1.2.0, +24 oracle, +16 hostile-file) |
+| Tests | `py -3 -m pytest -q -p no:cacheprovider` (QT_QPA_PLATFORM=offscreen): **311 passed** (after the Codex review fixes; 307 before) (260 at baseline without the licence tests, 267 with labkit 1.2.0, +24 oracle, +16 hostile-file) |
 | Installer | Not rebuilt in this round (`build_installer.ps1` / CI workflow unchanged) |
 
 ## Audit summary (prompt milestones against the code)
@@ -22,6 +22,10 @@
 ## Defect fixed
 
 A CSV whose first data row has more values than the header was loaded with the extra leading values as row labels, so `1,2,3,4,5` became t = 4, v = 5 and the other rows vanished as "blank". Values that do not exist in the file reached the analysis without any warning. Now refused with the line number; a mid-file extra value names its line; UTF-16 exports load; an empty file says so. Regression tests failed first, as the project's rule requires.
+
+## Independent review
+
+Codex (read-only, `codex exec -s read-only`) reviewed the diff: 1 high and 5 medium findings, all reproduced as failing tests and fixed (see `docs/REVIEW_LOG.md`). Tests after the fixes: **311 passed**.
 
 ## Not verified
 
