@@ -7,6 +7,8 @@ matplotlib>=3.7
 scipy>=1.10
 galvani>=0.5
 pdfplumber>=0.11
+# Licence verification (labkit/licence.py, Ed25519). Enforcement is off; see core/licensing.py.
+cryptography>=44
 
 # "Send to OriginLab" export (core/origin_export.py) -- optional at
 # runtime (the app checks originpro.is_available() and simply omits the

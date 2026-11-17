@@ -162,7 +162,7 @@ def _sniff_csv(path: Path) -> tuple[list[str], str]:
     is far more likely to be the decimal mark."""
     import re
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        with open(path, "r", encoding=_text_encoding(path), errors="replace") as fh:
             lines = [ln.rstrip("\r\n") for _, ln in zip(range(60), fh) if ln.strip()]
     except OSError:
         return [",", "\t", ";"], "."
@@ -185,19 +185,54 @@ def _sniff_csv(path: Path) -> tuple[list[str], str]:
     return order, decimal
 
 
+def _text_encoding(path: Path) -> str:
+    """UTF-16 when the file starts with its byte-order mark (Excel's "Unicode Text" export),
+    otherwise UTF-8 with an optional BOM."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(2)
+    except OSError:
+        return "utf-8-sig"
+    return "utf-16" if head in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"
+
+
 def _load_csv(path: Path) -> pd.DataFrame:
     # EC-Lab / lab instruments frequently export tab-delimited files with a .csv or
     # .txt extension, and European locales write "1,5" with ";" between fields.
+    try:
+        if path.stat().st_size == 0:
+            raise DataLoadError(f"'{path.name}' is empty.")
+    except OSError as e:
+        raise DataLoadError(f"Could not open '{path.name}': {e.strerror or e}") from e
+    encoding = _text_encoding(path)
     order, decimal = _sniff_csv(path)
+    try:
+        with open(path, "r", encoding=encoding, errors="replace", newline="") as fh:
+            text = fh.read()
+    except OSError as e:
+        raise DataLoadError(f"Could not open '{path.name}': {e.strerror or e}") from e
     for sep in order:
+        dec = decimal if sep != "," else "."
         try:
-            df = pd.read_csv(path, sep=sep, engine="python", decimal=decimal if sep != "," else ".")
+            # Validate and clean the table at the record level BEFORE pandas sees it: pandas
+            # (python engine) takes surplus leading values as row labels, or truncates rows, and
+            # either way returns numbers that are not where they were in the file.
+            cleaned = _clean_table(text, sep, dec)
+        except _RaggedRows as e:
+            raise DataLoadError(
+                f"'{path.name}' has rows with more values than its header: {e}. Nothing was loaded, "
+                "so no value is silently shifted or dropped. Fix or remove those lines and load the "
+                "file again.") from None
+        if cleaned is None:
+            continue
+        try:
+            df = pd.read_csv(io.StringIO(cleaned), sep=sep, engine="python", decimal=dec, index_col=False)
             df = df.dropna(how="all")                  # blank lines and empty logger rows
             if df.shape[1] > 1:
                 if _needs_header_rescan(df):
                     try:
-                        raw = pd.read_csv(path, sep=sep, engine="python", header=None,
-                                          decimal=decimal if sep != "," else ".")
+                        raw = pd.read_csv(io.StringIO(cleaned), sep=sep, engine="python", header=None,
+                                          decimal=dec, index_col=False)
                         fixed = _rescan_multirow_header(raw)
                     except Exception:
                         fixed = None
@@ -209,6 +244,86 @@ def _load_csv(path: Path) -> pd.DataFrame:
     raise DataLoadError(
         f"Could not parse '{path.name}' as comma-, tab-, or semicolon-delimited text."
     )
+
+
+class _RaggedRows(Exception):
+    pass
+
+
+def _is_number(cell: str, decimal: str) -> bool:
+    s = cell.strip()
+    if decimal == ",":
+        s = s.replace(",", ".")
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
+def _clean_table(text: str, sep: str, decimal: str) -> str | None:
+    """The table part of a delimited text file, re-written so pandas can only read it one way.
+
+    - The data starts at the first record (with at least two fields) that is mostly numbers and
+      is followed by another such record. The header is the record just before it, plus any
+      directly preceding records of the same width that are not numbers (a units row, a
+      two-line header). Free-text title lines above that are dropped.
+    - Empty trailing fields ("0,1,") are removed: they are not data.
+    - A data record that still has MORE values than the header raises _RaggedRows with its line
+      number. Shorter records are kept (pandas shows the missing values as NaN).
+    Returns None when this separator does not produce a table (fewer than two columns).
+    """
+    import csv
+    try:
+        records = [(n, row) for n, row in enumerate(csv.reader(io.StringIO(text), delimiter=sep), start=1)
+                   if any(c.strip() for c in row)]
+    except csv.Error:
+        return None
+    if len(records) < 2:
+        return None
+
+    def norm(row):
+        row = list(row)
+        while len(row) > 1 and not row[-1].strip():
+            row.pop()
+        return row
+
+    def numeric(row):
+        cells = [c for c in row if c.strip()]
+        return bool(cells) and sum(_is_number(c, decimal) for c in cells) * 2 >= len(cells)
+
+    rows = [(n, norm(r)) for n, r in records]
+    data_start = None
+    for i, (_, r) in enumerate(rows):
+        if len(r) >= 2 and numeric(r) and (i + 1 == len(rows) or numeric(rows[i + 1][1])):
+            data_start = i
+            break
+    if data_start is None:
+        return None
+    header_idx = data_start - 1 if data_start > 0 and not numeric(rows[data_start - 1][1]) else None
+    data = rows[data_start:]
+    if header_idx is not None:
+        width = len(rows[header_idx][1])
+    else:
+        widths = [len(r) for _, r in data]
+        width = max(set(widths), key=widths.count)
+    if width < 2:
+        return None
+    bad = [(n, len(r)) for n, r in data if len(r) > width]
+    if bad:
+        line, n = bad[0]
+        raise _RaggedRows(f"line {line} has {n} values but the header has {width} ({len(bad)} such line(s) in total)")
+    if header_idx is None:
+        first = data_start      # no header: let pandas take the first data row, as before
+    else:
+        first = header_idx
+        while first - 1 >= 0 and len(rows[first - 1][1]) == width and not numeric(rows[first - 1][1]):
+            first -= 1
+    out = io.StringIO()
+    writer = csv.writer(out, delimiter=sep, lineterminator="\n")
+    for _, r in rows[first:]:
+        writer.writerow(r)
+    return out.getvalue()
 
 
 def _maybe_fix_multirow_header_excel(path: Path, sheet_name, df: pd.DataFrame) -> pd.DataFrame:

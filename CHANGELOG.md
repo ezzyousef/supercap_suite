@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.3.0 (2026-11-15, upgrade/03-supercap)
+
+### Fixed
+- A CSV with a row wider than its header could load values that are not in the file (the extra values were taken as row labels). Such files are now refused with the line number, and nothing is loaded.
+- Excel "Unicode Text" (UTF-16) exports load. An empty file says it is empty.
+
+### Added
+- `tests/test_oracle_equations.py`: 24 independent physics oracles, one or more per equation in `docs/EQUATIONS.md`, and `docs/EQUATION_REGRESSION_REPORT.md` with the worked numbers.
+- `tests/test_hostile_files.py`: 16 tests with malformed and hostile input files.
+- Licence status dialog (enforcement off) and labkit 1.2.0.
+
 ## 2.2.1
 
 - **Cancel long fits:** a Cancel button appears while EIS auto-fit, batch fit, single fits, DRT/DCT and cycling stability run. Auto-fit stops after the current circuit, batch fit after the current file, and λ selection after the current candidate; the others discard their result.

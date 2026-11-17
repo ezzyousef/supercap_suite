@@ -236,6 +236,9 @@ class MainWindow(AppShell):
         self._menu("&File").aboutToShow.connect(self._sync_origin_actions)
 
         self.finalize()
+        # Added after finalize() so Help is the last menu, after Edit and View.
+        self.add_menu_action("&Help", "&Licence…", self.show_licence_dialog)
+        self.add_command("Licence…", "Help", self.show_licence_dialog)
         if self.settings.value("geometry") is None:
             # First launch: most of a typical screen — the tools are wide (settings | results).
             screen = QApplication.primaryScreen()
@@ -271,6 +274,11 @@ class MainWindow(AppShell):
     def _origin_close(self) -> None:
         from .widgets import _run_origin_close
         _run_origin_close(self)
+
+    # ------------------------------------------------------------------ licence
+    def show_licence_dialog(self) -> None:
+        from .licence_dialog import LicenceDialog
+        LicenceDialog(self, notify=self.notify).exec()
 
     def _about_tiles(self):
         from core import circuit_library
